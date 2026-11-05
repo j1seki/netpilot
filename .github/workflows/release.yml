@@ -1,0 +1,134 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to publish (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci || npm install
+          npm run build
+      - name: Build NetPilot
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          go build -trimpath -ldflags "-s -w -H=windowsgui" -o dist/netpilot.exe ./cmd/netpilot
+      - name: Fetch wintun.dll
+        shell: pwsh
+        run: |
+          if (Test-Path scripts/fetch-wintun.ps1) { scripts/fetch-wintun.ps1 dist } else { Write-Host 'no fetch-wintun.ps1' }
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          Copy-Item LICENSE dist/LICENSE -Force
+          Copy-Item THIRD-PARTY-NOTICES.md dist/THIRD-PARTY-NOTICES.md -Force
+          Compress-Archive -Path dist/* -DestinationPath netpilot-windows-amd64.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: netpilot-windows-amd64.zip
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci || npm install
+          npm run build
+      - name: Build universal binary
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w" -o dist/netpilot-$arch ./cmd/netpilot
+          done
+          lipo -create -output dist/netpilot dist/netpilot-amd64 dist/netpilot-arm64
+          rm dist/netpilot-amd64 dist/netpilot-arm64
+          cp LICENSE THIRD-PARTY-NOTICES.md dist/
+          tar -C dist -czf netpilot-macos-universal.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: netpilot-macos-universal.tar.gz
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install webview deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci || npm install
+          npm run build
+      - name: Build NetPilot
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w" -o dist/netpilot ./cmd/netpilot
+          cp LICENSE THIRD-PARTY-NOTICES.md dist/
+          tar -C dist -czf netpilot-linux-amd64.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: netpilot-linux-amd64.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect packages
+        run: |
+          mkdir -p out
+          find artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} out/ \;
+          ls -la out
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          gh release create "$tag" out/* \
+            --title "NetPilot $tag" \
+            --notes "NetPilot $tag — bundles the latest net-merge engine. Assets: Windows portable zip, macOS universal tarball, Linux amd64 tarball." \
+            --latest
