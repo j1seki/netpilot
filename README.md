@@ -1,77 +1,83 @@
 # NetPilot
 
-**Use all your network connections at once — in one download.**
+**Multi-network manager and bandwidth aggregator desktop app.**
 
-NetPilot is a desktop app for **Windows, macOS and Linux** that bundles the
-[net-merge](https://github.com/net-merge/net-merge) connection-balancing engine under a
-polished interface, plus a management console with per-app routing, failover,
-analytics and a TTL / hop-limit manager.
+NetPilot is a cross-platform desktop control center for **Windows, macOS, and Linux**. It provides a polished GUI for combining network connections, per-app routing, failover, live analytics, and a TTL/hop-limit manager.
 
-> You no longer need two repos. Get NetPilot here and it always ships with the latest
-> net-merge engine — releases are synced automatically.
+---
 
-## Features
+## ⚡ Required: net-merge Engine
 
-- **Combine Wi-Fi, Ethernet and phone tethers** — every new connection spreads across your
-  links, so downloads, games and browsers get the speed of every connection added up.
-- **Per-app routing** — send specific apps over specific adapters, with bandwidth limits and
-  data quotas.
-- **Failover** — a link that dies is detected fast and its connections move to the next link.
-- **Analytics** — live throughput per adapter, monthly usage history, per-app stats.
-- **TTL / hop-limit manager** — bump the IPv4/IPv6 TTL of every hop on a path (great for
-  game servers and VPNs), with inspect / apply / restore and an event history.
-- **Deterministic scenarios & platform test suites** — built-in simulation and tests you can
-  run from the CLI or the UI.
-- **Cross-platform** — Windows (installer + portable zip), macOS (universal binary) and
-  Linux (`.deb`, `.rpm`, `.apk`, `.tar.gz`).
+NetPilot uses the high-performance **[net-merge](https://github.com/net-merge/net-merge)** engine to handle network adapter bonding, multi-path routing, and TUN interfaces.
 
-## Download
+1. Download the latest `net-merge` binary for your platform from the official repository:
+   👉 **[Download net-merge from Releases](https://github.com/net-merge/net-merge/releases)**
+2. Place the executable (`net-merge.exe` on Windows, or `net-merge` on macOS/Linux) in the **same folder** as NetPilot (or add it to your system PATH).
+3. Start NetPilot — it will automatically detect and manage the engine.
 
-| OS | Install |
-|---|---|
-| Windows | [`netpilot-setup-*.exe`](https://github.com/j1seki/netpilot/releases) (Inno Setup installer) or `netpilot-*-portable.zip` |
-| macOS | `netpilot-*-macos-universal.tar.gz` (Intel + Apple Silicon) |
-| Linux | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/openSUSE), `.apk` (Alpine), `.pkg.tar.zst` (Arch), or the plain tarball |
+---
 
-The **latest** copies (`netpilot-latest-*`) always point at the newest release.
+## 📥 Downloads
 
-## How the engine stays in sync
+Get the latest release for your platform from the **[Releases](https://github.com/j1seki/netpilot/releases)** page:
 
-NetPilot embeds the net-merge engine. Whenever the
-[net-merge/net-merge](https://github.com/net-merge/net-merge) project publishes a release,
-this repository is updated automatically:
+| OS | Download | Description |
+|---|---|---|
+| **Windows** | `netpilot-setup.exe` | Windows installer (Inno Setup) |
+| **macOS** | `netpilot-macos-universal.dmg` | Universal DMG (Intel & Apple Silicon) |
+| **Linux** | `netpilot-linux-amd64.AppImage` | Standalone Linux AppImage |
 
-1. A **sync** workflow fetches the tagged source of the new net-merge release.
-2. The engine packages (`internal/{engine,icon,logx,nics,platform,state,tray,tun,update}`)
-  are replaced and their imports rewritten from `net-merge/` to `netpilot/`.
-3. A **release** workflow rebuilds NetPilot for every desktop OS and publishes the packages,
-  with the net-merge changelog section folded into the release notes.
+### Linux Requirements
 
-So you always get the newest engine without visiting a second repo.
+NetPilot's UI is built with WebKitGTK. Modern desktop environments (Ubuntu, Mint, Fedora, Arch) usually have this preinstalled. If NetPilot does not start on a minimal distribution, install the WebKit runtime:
 
-## Development
+- **Ubuntu / Debian / Mint**:
+  ```bash
+  sudo apt update && sudo apt install -y libwebkit2gtk-4.1-0
+  ```
+- **Fedora / RHEL**:
+  ```bash
+  sudo dnf install webkit2gtk4.1
+  ```
+- **Arch Linux**:
+  ```bash
+  sudo pacman -S webkit2gtk-4.1
+  ```
 
-```sh
-git clone https://github.com/j1seki/netpilot
+---
+
+## ✨ Features
+
+- **Combine Wi-Fi, Ethernet & phone hotspots**: Spread downloads, games, and browsing across all active adapters.
+- **Per-App Routing**: Direct specific applications to specific network links with bandwidth limits.
+- **Automatic Failover**: Fast detection of disconnected links with automatic rerouting.
+- **Real-Time Analytics**: Monitor per-adapter throughput, active sockets, and monthly usage history.
+- **TTL / Hop-Limit Manager**: Fine-tune IPv4/IPv6 packet hop limits for VPNs and network bypass.
+- **Scenario Simulation**: Deterministic test suites to debug routing decisions.
+
+---
+
+## 🛠️ Development
+
+```bash
+# Clone the repository
+git clone https://github.com/j1seki/netpilot.git
 cd netpilot
 
-# Frontend assets
-cd frontend && npm ci && npm run build && cd ..
+# Build frontend assets
+cd frontend
+npm ci && npm run build
+cd ..
 
-# Build for the current platform
+# Build NetPilot GUI
 go build -o dist/netpilot ./cmd/netpilot
 
-# Run the test suites
+# Run tests
 go test ./tests/common ./tests/scenarios
 ```
 
-### Release flow
-
-- `scripts/sync-net-merge.sh <tag>` — pull a tagged net-merge release into the engine packages.
-- `scripts/build.ps1 <version>` — Windows: exes, wintun, installer, portable zip.
-- `scripts/build-linux.sh <version> dist` — Linux tarball + `.deb`/`.rpm`/`.apk`/Arch packages.
-- Tag a version (`v0.1.0`) to trigger the full cross-platform release.
+---
 
 ## License
 
-MIT. The net-merge engine is MIT; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+MIT License. See [LICENSE](LICENSE) and [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

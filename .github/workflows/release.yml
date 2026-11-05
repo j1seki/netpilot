@@ -29,20 +29,11 @@ jobs:
           npm run build
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
-      - name: Pull official net-merge binaries
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          gh release download --repo net-merge/net-merge --pattern 'net-merge-portable.zip' --dir temp-dl
-          Expand-Archive -Path temp-dl/net-merge-portable.zip -DestinationPath dist -Force
-          Remove-Item -Recurse -Force temp-dl
-          Get-ChildItem dist
       - name: Build NetPilot GUI
         shell: pwsh
         run: |
           $version = '${{ inputs.tag || github.ref_name }}'.TrimStart('v')
+          New-Item -ItemType Directory -Force dist | Out-Null
           go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$version" -o dist/netpilot.exe ./cmd/netpilot
       - name: Build Windows installer (.exe)
         shell: pwsh
@@ -52,14 +43,11 @@ jobs:
           $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path $iscc)) { $iscc = (Get-Command ISCC.exe).Source }
           & $iscc "/DVersion=$version" installer/netpilot.iss
-          Copy-Item "dist/netpilot-setup-$version.exe" "netpilot-setup.exe" -Force
-          Get-ChildItem dist/*.exe, netpilot-setup.exe
+          Get-ChildItem dist/*.exe
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: |
-            dist/netpilot-setup-*.exe
-            netpilot-setup.exe
+          path: dist/netpilot-setup.exe
           if-no-files-found: error
 
   macos:
@@ -77,14 +65,6 @@ jobs:
           cd frontend
           npm ci || npm install
           npm run build
-      - name: Pull official net-merge binary
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p temp-dl
-          gh release download --repo net-merge/net-merge --pattern 'net-merge-macos-universal.tar.gz' --dir temp-dl
-          tar -xzf temp-dl/net-merge-macos-universal.tar.gz -C temp-dl
-          ls -la temp-dl
       - name: Build NetPilot macOS universal
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
@@ -101,8 +81,7 @@ jobs:
           rm -rf "$APP"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp dist/netpilot "$APP/Contents/MacOS/netpilot"
-          cp temp-dl/net-merge "$APP/Contents/MacOS/net-merge"
-          chmod +x "$APP/Contents/MacOS/netpilot" "$APP/Contents/MacOS/net-merge"
+          chmod +x "$APP/Contents/MacOS/netpilot"
 
           mkdir -p AppIcon.iconset
           sips -z 16 16 packaging/icons/hicolor/16x16/apps/net-merge.png --out AppIcon.iconset/icon_16x16.png
@@ -160,7 +139,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -172,7 +151,7 @@ jobs:
       - name: Install webview deps
         run: |
           for i in 1 2 3; do
-            if sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev; then
+            if sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev; then
               exit 0
             fi
             echo "apt attempt $i failed; retrying in 15s"
@@ -183,19 +162,11 @@ jobs:
           cd frontend
           npm ci || npm install
           npm run build
-      - name: Pull official net-merge binary
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p temp-dl
-          gh release download --repo net-merge/net-merge --pattern 'net-merge-linux-x86_64.tar.gz' --dir temp-dl
-          tar -xzf temp-dl/net-merge-linux-x86_64.tar.gz -C temp-dl
-          ls -la temp-dl
       - name: Build NetPilot
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
           mkdir -p dist
-          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -X main.version=$v" -o dist/netpilot ./cmd/netpilot
+          CGO_ENABLED=1 go build -tags gtk3 -trimpath -ldflags "-s -w -X main.version=$v" -o dist/netpilot ./cmd/netpilot
       - name: Build AppImage
         run: |
           set -euo pipefail
@@ -205,8 +176,7 @@ jobs:
                    "$appdir/usr/share/icons/hicolor/512x512/apps" \
                    "$appdir/usr/share/doc/netpilot"
           cp dist/netpilot "$appdir/usr/bin/netpilot"
-          cp temp-dl/net-merge "$appdir/usr/bin/net-merge"
-          chmod +x "$appdir/usr/bin/netpilot" "$appdir/usr/bin/net-merge"
+          chmod +x "$appdir/usr/bin/netpilot"
 
           cp packaging/appimage/netpilot.desktop "$appdir/netpilot.desktop"
           cp packaging/appimage/netpilot.desktop "$appdir/usr/share/applications/netpilot.desktop"
@@ -220,6 +190,13 @@ jobs:
           HERE="$(dirname "$(readlink -f "$0")")"
           export PATH="$HERE/usr/bin:$PATH"
           export LD_LIBRARY_PATH="$HERE/usr/lib:$LD_LIBRARY_PATH"
+
+          # Check for WebKitGTK library presence
+          if ! ldconfig -p 2>/dev/null | grep -qE "libwebkit2gtk-4\.[01]\.so|libwebkitgtk-6\.0\.so"; then
+            echo "Notice: WebKitGTK runtime library not detected in system cache." >&2
+            echo "If the window does not appear, install it via: sudo apt install libwebkit2gtk-4.1-0" >&2
+          fi
+
           exec "$HERE/usr/bin/netpilot" "$@"
           APPRUN
           chmod +x "$appdir/AppRun"
@@ -256,12 +233,14 @@ jobs:
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
           notes=$(cat <<'EOF'
-          NetPilot release — all-in-one desktop package with the latest net-merge engine bundled.
+          NetPilot release — multi-network manager desktop application.
 
-          Includes official pre-compiled net-merge engine binaries:
-          - Linux: netpilot-linux-amd64.AppImage (standalone AppImage with NetPilot + net-merge)
-          - macOS: netpilot-macos-universal.dmg (universal DMG with NetPilot.app + net-merge)
-          - Windows: netpilot-setup.exe (Inno Setup installer bundling NetPilot GUI, net-merge engine, tray, and wintun driver)
+          NetPilot works alongside the official net-merge engine. Download net-merge for your platform from https://github.com/net-merge/net-merge/releases and place it in the same directory.
+
+          Packages:
+          - Linux: netpilot-linux-amd64.AppImage
+          - macOS: netpilot-macos-universal.dmg
+          - Windows: netpilot-setup.exe (installer)
           EOF
           )
 
