@@ -1,0 +1,16 @@
+# Build output
+/dist/
+/netpilot
+/netpilot.exe
+*.exe
+wintun.dll
+*.syso
+result
+
+# Frontend
+/frontend/node_modules/
+/frontend/.vite/
+
+# Editor / OS
+.DS_Store
+*.log
