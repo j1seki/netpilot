@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=NetPilot
+GenericName=Connection merger
+Comment=Use all your network adapters at once
+Exec=netpilot
+Icon=netpilot
+Terminal=false
+Categories=Network;Utility;
+Keywords=network;bandwidth;tethering;wifi;ethernet;load balancing;
+StartupNotify=false
+X-AppImage-Version=1.0

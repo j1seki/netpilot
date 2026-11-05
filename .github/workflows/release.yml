@@ -104,10 +104,43 @@ jobs:
           CGO_ENABLED=1 go build -trimpath -ldflags "-s -w" -o dist/netpilot ./cmd/netpilot
           cp LICENSE THIRD-PARTY-NOTICES.md dist/
           tar -C dist -czf netpilot-linux-amd64.tar.gz .
+      - name: Build AppImage
+        run: |
+          set -euo pipefail
+          # AppDir layout required by the AppImage spec
+          appdir=AppDir
+          rm -rf "$appdir"
+          mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
+                   "$appdir/usr/share/icons/hicolor/512x512/apps" \
+                   "$appdir/usr/share/doc/netpilot"
+          cp dist/netpilot "$appdir/usr/bin/netpilot"
+          cp packaging/appimage/netpilot.desktop "$appdir/netpilot.desktop"
+          cp packaging/appimage/netpilot.desktop "$appdir/usr/share/applications/netpilot.desktop"
+          cp packaging/icons/hicolor/512x512/apps/net-merge.png \
+             "$appdir/usr/share/icons/hicolor/512x512/apps/netpilot.png"
+          cp "$appdir/usr/share/icons/hicolor/512x512/apps/netpilot.png" "$appdir/netpilot.png"
+          cp LICENSE THIRD-PARTY-NOTICES.md "$appdir/usr/share/doc/netpilot/"
+          cat > "$appdir/AppRun" <<'APPRUN'
+          #!/bin/sh
+          HERE=$(dirname "$(readlink -f "$0")")
+          exec "$HERE/usr/bin/netpilot" "$@"
+          APPRUN
+          chmod +x "$appdir/AppRun"
+
+          # appimagetool needs FUSE, which containers lack: extract and run it instead.
+          curl -fsSL -o /tmp/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool
+          ARCH=x86_64 /tmp/appimagetool --appimage-extract-and-run \
+            --no-appstream "$appdir" netpilot-linux-amd64.AppImage
+          chmod +x netpilot-linux-amd64.AppImage
+          ls -lh netpilot-linux-amd64.AppImage
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: netpilot-linux-amd64.tar.gz
+          path: |
+            netpilot-linux-amd64.tar.gz
+            netpilot-linux-amd64.AppImage
           if-no-files-found: error
 
   publish:
@@ -121,7 +154,7 @@ jobs:
       - name: Collect packages
         run: |
           mkdir -p out
-          find artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} out/ \;
+          find artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.AppImage' \) -exec cp {} out/ \;
           ls -la out
       - name: Publish release
         env:
@@ -130,5 +163,5 @@ jobs:
           tag="${{ inputs.tag || github.ref_name }}"
           gh release create "$tag" out/* \
             --title "NetPilot $tag" \
-            --notes "NetPilot $tag — bundles the latest net-merge engine. Assets: Windows portable zip, macOS universal tarball, Linux amd64 tarball." \
+            --notes "NetPilot $tag — bundles the latest net-merge engine. Assets: Windows portable zip, macOS universal tarball, Linux amd64 tarball and AppImage." \
             --latest
