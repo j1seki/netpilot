@@ -27,25 +27,39 @@ jobs:
           cd frontend
           npm ci || npm install
           npm run build
-      - name: Build NetPilot
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Pull official net-merge binaries
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          go build -trimpath -ldflags "-s -w -H=windowsgui" -o dist/netpilot.exe ./cmd/netpilot
-      - name: Fetch wintun.dll
+          gh release download --repo net-merge/net-merge --pattern 'net-merge-portable.zip' --dir temp-dl
+          Expand-Archive -Path temp-dl/net-merge-portable.zip -DestinationPath dist -Force
+          Remove-Item -Recurse -Force temp-dl
+          Get-ChildItem dist
+      - name: Build NetPilot GUI
         shell: pwsh
         run: |
-          if (Test-Path scripts/fetch-wintun.ps1) { scripts/fetch-wintun.ps1 dist } else { Write-Host 'no fetch-wintun.ps1' }
-      - name: Portable zip
+          $version = '${{ inputs.tag || github.ref_name }}'.TrimStart('v')
+          go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$version" -o dist/netpilot.exe ./cmd/netpilot
+      - name: Build Windows installer (.exe)
         shell: pwsh
         run: |
-          Copy-Item LICENSE dist/LICENSE -Force
-          Copy-Item THIRD-PARTY-NOTICES.md dist/THIRD-PARTY-NOTICES.md -Force
-          Compress-Archive -Path dist/* -DestinationPath netpilot-windows-amd64.zip -Force
+          $version = '${{ inputs.tag || github.ref_name }}'.TrimStart('v')
+          Copy-Item packaging/netpilot.ico dist/netpilot.ico -Force
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { $iscc = (Get-Command ISCC.exe).Source }
+          & $iscc "/DVersion=$version" installer/netpilot.iss
+          Copy-Item "dist/netpilot-setup-$version.exe" "netpilot-setup.exe" -Force
+          Get-ChildItem dist/*.exe, netpilot-setup.exe
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: netpilot-windows-amd64.zip
+          path: |
+            dist/netpilot-setup-*.exe
+            netpilot-setup.exe
           if-no-files-found: error
 
   macos:
@@ -63,20 +77,86 @@ jobs:
           cd frontend
           npm ci || npm install
           npm run build
-      - name: Build universal binary
+      - name: Pull official net-merge binary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          mkdir -p temp-dl
+          gh release download --repo net-merge/net-merge --pattern 'net-merge-macos-universal.tar.gz' --dir temp-dl
+          tar -xzf temp-dl/net-merge-macos-universal.tar.gz -C temp-dl
+          ls -la temp-dl
+      - name: Build NetPilot macOS universal
+        run: |
+          v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
           mkdir -p dist
           for arch in amd64 arm64; do
-            CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w" -o dist/netpilot-$arch ./cmd/netpilot
+            CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$v" -o dist/netpilot-$arch ./cmd/netpilot
           done
           lipo -create -output dist/netpilot dist/netpilot-amd64 dist/netpilot-arm64
-          rm dist/netpilot-amd64 dist/netpilot-arm64
-          cp LICENSE THIRD-PARTY-NOTICES.md dist/
-          tar -C dist -czf netpilot-macos-universal.tar.gz .
+          codesign --force --sign - dist/netpilot
+      - name: Build macOS DMG
+        run: |
+          v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
+          APP="NetPilot.app"
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp dist/netpilot "$APP/Contents/MacOS/netpilot"
+          cp temp-dl/net-merge "$APP/Contents/MacOS/net-merge"
+          chmod +x "$APP/Contents/MacOS/netpilot" "$APP/Contents/MacOS/net-merge"
+
+          mkdir -p AppIcon.iconset
+          sips -z 16 16 packaging/icons/hicolor/16x16/apps/net-merge.png --out AppIcon.iconset/icon_16x16.png
+          sips -z 32 32 packaging/icons/hicolor/32x32/apps/net-merge.png --out AppIcon.iconset/icon_16x16@2x.png
+          sips -z 32 32 packaging/icons/hicolor/32x32/apps/net-merge.png --out AppIcon.iconset/icon_32x32.png
+          sips -z 64 64 packaging/icons/hicolor/64x64/apps/net-merge.png --out AppIcon.iconset/icon_32x32@2x.png
+          sips -z 128 128 packaging/icons/hicolor/128x128/apps/net-merge.png --out AppIcon.iconset/icon_128x128.png
+          sips -z 256 256 packaging/icons/hicolor/256x256/apps/net-merge.png --out AppIcon.iconset/icon_128x128@2x.png
+          sips -z 256 256 packaging/icons/hicolor/256x256/apps/net-merge.png --out AppIcon.iconset/icon_256x256.png
+          sips -z 512 512 packaging/icons/hicolor/512x512/apps/net-merge.png --out AppIcon.iconset/icon_256x256@2x.png
+          sips -z 512 512 packaging/icons/hicolor/512x512/apps/net-merge.png --out AppIcon.iconset/icon_512x512.png
+          iconutil -c icns AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
+          rm -rf AppIcon.iconset
+
+          cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>netpilot</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.netpilot.desktop</string>
+              <key>CFBundleName</key>
+              <string>NetPilot</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>$v</string>
+              <key>CFBundleVersion</key>
+              <string>$v</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>10.15</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          PLIST
+
+          codesign --force --deep --sign - "$APP"
+
+          mkdir -p dmg_root
+          cp -R "$APP" dmg_root/
+          ln -s /Applications dmg_root/Applications
+          cp LICENSE THIRD-PARTY-NOTICES.md dmg_root/
+
+          hdiutil create -volname "NetPilot" -srcfolder dmg_root -ov -format UDZO netpilot-macos-universal.dmg
+          ls -lh netpilot-macos-universal.dmg
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: netpilot-macos-universal.tar.gz
+          path: netpilot-macos-universal.dmg
           if-no-files-found: error
 
   linux:
@@ -91,43 +171,59 @@ jobs:
           node-version: '22'
       - name: Install webview deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
+          for i in 1 2 3; do
+            if sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev; then
+              exit 0
+            fi
+            echo "apt attempt $i failed; retrying in 15s"
+            sleep 15
+          done
       - name: Build frontend
         run: |
           cd frontend
           npm ci || npm install
           npm run build
+      - name: Pull official net-merge binary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p temp-dl
+          gh release download --repo net-merge/net-merge --pattern 'net-merge-linux-x86_64.tar.gz' --dir temp-dl
+          tar -xzf temp-dl/net-merge-linux-x86_64.tar.gz -C temp-dl
+          ls -la temp-dl
       - name: Build NetPilot
         run: |
+          v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
           mkdir -p dist
-          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w" -o dist/netpilot ./cmd/netpilot
-          cp LICENSE THIRD-PARTY-NOTICES.md dist/
-          tar -C dist -czf netpilot-linux-amd64.tar.gz .
+          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -X main.version=$v" -o dist/netpilot ./cmd/netpilot
       - name: Build AppImage
         run: |
           set -euo pipefail
-          # AppDir layout required by the AppImage spec
           appdir=AppDir
           rm -rf "$appdir"
           mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
                    "$appdir/usr/share/icons/hicolor/512x512/apps" \
                    "$appdir/usr/share/doc/netpilot"
           cp dist/netpilot "$appdir/usr/bin/netpilot"
+          cp temp-dl/net-merge "$appdir/usr/bin/net-merge"
+          chmod +x "$appdir/usr/bin/netpilot" "$appdir/usr/bin/net-merge"
+
           cp packaging/appimage/netpilot.desktop "$appdir/netpilot.desktop"
           cp packaging/appimage/netpilot.desktop "$appdir/usr/share/applications/netpilot.desktop"
           cp packaging/icons/hicolor/512x512/apps/net-merge.png \
              "$appdir/usr/share/icons/hicolor/512x512/apps/netpilot.png"
           cp "$appdir/usr/share/icons/hicolor/512x512/apps/netpilot.png" "$appdir/netpilot.png"
           cp LICENSE THIRD-PARTY-NOTICES.md "$appdir/usr/share/doc/netpilot/"
+
           cat > "$appdir/AppRun" <<'APPRUN'
           #!/bin/sh
-          HERE=$(dirname "$(readlink -f "$0")")
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export PATH="$HERE/usr/bin:$PATH"
+          export LD_LIBRARY_PATH="$HERE/usr/lib:$LD_LIBRARY_PATH"
           exec "$HERE/usr/bin/netpilot" "$@"
           APPRUN
           chmod +x "$appdir/AppRun"
 
-          # appimagetool needs FUSE, which containers lack: extract and run it instead.
           curl -fsSL -o /tmp/appimagetool \
             https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x /tmp/appimagetool
@@ -138,9 +234,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: |
-            netpilot-linux-amd64.tar.gz
-            netpilot-linux-amd64.AppImage
+          path: netpilot-linux-amd64.AppImage
           if-no-files-found: error
 
   publish:
@@ -154,14 +248,29 @@ jobs:
       - name: Collect packages
         run: |
           mkdir -p out
-          find artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.AppImage' \) -exec cp {} out/ \;
-          ls -la out
+          find artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' \) -exec cp {} out/ \;
+          ls -lh out
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
-          gh release create "$tag" out/* \
-            --title "NetPilot $tag" \
-            --notes "NetPilot $tag — bundles the latest net-merge engine. Assets: Windows portable zip, macOS universal tarball, Linux amd64 tarball and AppImage." \
-            --latest
+          notes=$(cat <<'EOF'
+          NetPilot release — all-in-one desktop package with the latest net-merge engine bundled.
+
+          Includes official pre-compiled net-merge engine binaries:
+          - Linux: netpilot-linux-amd64.AppImage (standalone AppImage with NetPilot + net-merge)
+          - macOS: netpilot-macos-universal.dmg (universal DMG with NetPilot.app + net-merge)
+          - Windows: netpilot-setup.exe (Inno Setup installer bundling NetPilot GUI, net-merge engine, tray, and wintun driver)
+          EOF
+          )
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" out/* --clobber
+            gh release edit "$tag" --title "NetPilot $tag" --notes "$notes"
+          else
+            gh release create "$tag" out/* \
+              --title "NetPilot $tag" \
+              --notes "$notes" \
+              --latest
+          fi
