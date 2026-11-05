@@ -1,6 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { api, BrandingInfo, CapabilityReport } from '../api/wails';
-import { Settings as SettingsIcon, ShieldAlert, Terminal } from 'lucide-react';
+import { api, BrandingInfo, CapabilityReport, NetMergeBinaryInfo } from '../api/wails';
+import {
+  Settings as SettingsIcon,
+  ShieldAlert,
+  Terminal,
+  CheckCircle2,
+  AlertTriangle,
+  RefreshCw,
+  Cpu,
+} from 'lucide-react';
 
 export const Settings: React.FC = () => {
   const [branding, setBranding] = useState<BrandingInfo | null>(null);
@@ -10,18 +18,28 @@ export const Settings: React.FC = () => {
   const [consoleMsg, setConsoleMsg] = useState('');
   const [caps, setCaps] = useState<CapabilityReport | null>(null);
 
+  // net-merge Engine Binary state
+  const [binaryInfo, setBinaryInfo] = useState<NetMergeBinaryInfo | null>(null);
+  const [inputBinaryPath, setInputBinaryPath] = useState<string>('');
+  const [binaryMsg, setBinaryMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [isValidating, setIsValidating] = useState<boolean>(false);
+
+  const loadData = async () => {
+    const [b, m, c, bin] = await Promise.all([
+      api.getBranding(),
+      api.getExecutionMode(),
+      api.getCapabilities(),
+      api.getNetMergeBinaryInfo(),
+    ]);
+    setBranding(b);
+    setTargetMode(m.currentMode);
+    setCaps(c);
+    setBinaryInfo(bin);
+    setInputBinaryPath(bin.customPath || bin.path || '');
+  };
+
   useEffect(() => {
-    const load = async () => {
-      const [b, m, c] = await Promise.all([
-        api.getBranding(),
-        api.getExecutionMode(),
-        api.getCapabilities(),
-      ]);
-      setBranding(b);
-      setTargetMode(m.currentMode);
-      setCaps(c);
-    };
-    load();
+    loadData();
   }, []);
 
   const handleApplyMode = async () => {
@@ -43,8 +61,191 @@ export const Settings: React.FC = () => {
     }
   };
 
+  const handleSaveBinaryPath = async () => {
+    setIsValidating(true);
+    setBinaryMsg(null);
+    try {
+      const updated = await api.setNetMergeBinaryPath(inputBinaryPath);
+      setBinaryInfo(updated);
+      if (updated.isValid) {
+        setBinaryMsg({
+          type: 'success',
+          text: `Verified & Connected: ${updated.version} (Source: ${updated.source})`,
+        });
+      } else {
+        setBinaryMsg({
+          type: 'error',
+          text: updated.error || 'Binary failed validation at specified path.',
+        });
+      }
+    } catch (err: any) {
+      setBinaryMsg({
+        type: 'error',
+        text: err?.message || String(err),
+      });
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  const handleResetBinaryPath = async () => {
+    setIsValidating(true);
+    setBinaryMsg(null);
+    try {
+      const updated = await api.setNetMergeBinaryPath('');
+      setInputBinaryPath(updated.path || '');
+      setBinaryInfo(updated);
+      if (updated.isValid) {
+        setBinaryMsg({
+          type: 'success',
+          text: `Auto-detected from default location: ${updated.path} (${updated.version})`,
+        });
+      } else {
+        setBinaryMsg({
+          type: 'info',
+          text: 'Reset to auto-detect. Place net-merge in the same folder as NetPilot or install it in PATH.',
+        });
+      }
+    } catch (err: any) {
+      setBinaryMsg({
+        type: 'error',
+        text: err?.message || String(err),
+      });
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {/* net-merge Engine Location & Integration Card */}
+      <div className="card" style={{ marginBottom: 0 }}>
+        <div className="card-title">
+          <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Cpu size={16} color="#38bdf8" /> net-merge Engine Executable &amp; Path
+          </span>
+          {binaryInfo?.isValid ? (
+            <span className="status-pill pass" style={{ fontSize: '10.5px' }}>
+              CONNECTED ({binaryInfo.version || 'ACTIVE'})
+            </span>
+          ) : (
+            <span className="status-pill fail" style={{ fontSize: '10.5px' }}>
+              ENGINE NOT FOUND
+            </span>
+          )}
+        </div>
+        <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+          By default, NetPilot checks for <code>net-merge</code> in the <strong>same folder</strong> as the app (or in your system PATH). If you built or placed <code>net-merge</code> in a custom location, paste its full path below.
+        </p>
+
+        {/* Binary Status Details */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: '12px',
+          background: 'var(--bg-tertiary)',
+          padding: '12px 14px',
+          borderRadius: 'var(--radius-sm)',
+          marginBottom: '14px',
+          fontSize: '12px',
+        }}>
+          <div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '10.5px' }}>Detection Status</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
+              {binaryInfo?.isValid ? (
+                <>
+                  <CheckCircle2 size={14} color="#10b981" />
+                  <span style={{ color: '#10b981' }}>Verified</span>
+                </>
+              ) : (
+                <>
+                  <AlertTriangle size={14} color="#f87171" />
+                  <span style={{ color: '#f87171' }}>Not Detected</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '10.5px' }}>Resolution Source</div>
+            <div style={{ fontWeight: 600, textTransform: 'capitalize' }}>
+              {binaryInfo?.source === 'same-folder'
+                ? 'Same Folder (Default)'
+                : binaryInfo?.source === 'custom'
+                ? 'Custom Path'
+                : binaryInfo?.source === 'path'
+                ? 'System PATH'
+                : binaryInfo?.source === 'system'
+                ? 'System Directory'
+                : 'None'}
+            </div>
+          </div>
+
+          <div style={{ gridColumn: 'span 2' }}>
+            <div style={{ color: 'var(--text-muted)', fontSize: '10.5px' }}>Active Executable Path</div>
+            <div className="font-mono" style={{ fontSize: '11.5px', wordBreak: 'break-all', color: binaryInfo?.isValid ? '#38bdf8' : 'var(--text-muted)' }}>
+              {binaryInfo?.path || 'No executable resolved'}
+            </div>
+          </div>
+        </div>
+
+        {/* Input & Action Buttons */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+            Custom net-merge Path (override auto-detection):
+          </label>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              type="text"
+              placeholder="/usr/local/bin/net-merge or C:\path\to\net-merge.exe"
+              value={inputBinaryPath}
+              onChange={(e) => setInputBinaryPath(e.target.value)}
+              className="font-mono"
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-sm)',
+                color: '#f8fafc',
+                fontSize: '12px',
+              }}
+            />
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={handleSaveBinaryPath}
+              disabled={isValidating}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              {isValidating && <RefreshCw size={12} className="spin" />}
+              Save &amp; Verify Path
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleResetBinaryPath}
+              disabled={isValidating}
+              title="Reset custom override and use auto-detection (same folder)"
+            >
+              Reset to Same Folder
+            </button>
+          </div>
+
+          {binaryMsg && (
+            <div style={{
+              marginTop: '4px',
+              fontSize: '11.5px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              color: binaryMsg.type === 'success' ? '#4ade80' : binaryMsg.type === 'error' ? '#f87171' : '#38bdf8',
+            }}>
+              {binaryMsg.type === 'success' ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+              <span>{binaryMsg.text}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Windows Console / Terminal Silent Setting */}
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-title">

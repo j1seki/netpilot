@@ -549,6 +549,20 @@ func (s *NetPilotService) SaveNetMergeConfig(cfg netmerge.Config) error {
 	return s.netmergeCtrl.SaveConfig(cfg)
 }
 
+func (s *NetPilotService) GetNetMergeBinaryInfo() (netmerge.BinaryInfo, error) {
+	if s.netmergeCtrl == nil {
+		return netmerge.BinaryInfo{}, fmt.Errorf("net-merge controller not initialized")
+	}
+	return s.netmergeCtrl.GetBinaryInfo(), nil
+}
+
+func (s *NetPilotService) SetNetMergeBinaryPath(path string) (netmerge.BinaryInfo, error) {
+	if s.netmergeCtrl == nil {
+		return netmerge.BinaryInfo{}, fmt.Errorf("net-merge controller not initialized")
+	}
+	return s.netmergeCtrl.SetCustomBinaryPath(path)
+}
+
 func (s *NetPilotService) SetConsoleWindow(show bool) error {
 	return setConsoleVisible(show)
 }
@@ -879,6 +893,32 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			} else {
 				_ = json.NewEncoder(w).Encode(map[string]string{})
 			}
+		}
+
+	case path == "netmerge/binary":
+		if r.Method == http.MethodPost {
+			var body struct {
+				Path string `json:"path"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			info, err := s.SetNetMergeBinaryPath(body.Path)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":  err.Error(),
+					"binary": info,
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(info)
+		} else {
+			info, err := s.GetNetMergeBinaryInfo()
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(info)
 		}
 
 	case path == "system/console":

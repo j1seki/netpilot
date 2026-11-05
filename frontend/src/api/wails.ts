@@ -152,6 +152,16 @@ export interface NetMergeSlotStats {
   LimitMbps: number;
 }
 
+export interface NetMergeBinaryInfo {
+  path: string;
+  customPath: string;
+  exists: boolean;
+  source: 'custom' | 'same-folder' | 'path' | 'system' | 'none';
+  version: string;
+  isValid: boolean;
+  error?: string;
+}
+
 export interface NetMergeConfig {
   autoPause: boolean;
   autoWeight: boolean;
@@ -163,6 +173,7 @@ export interface NetMergeConfig {
   weights: Record<string, number>;
   showConsole: boolean;
   autostart: boolean;
+  binaryPath?: string;
 }
 
 export interface NetMergeStatus {
@@ -177,6 +188,7 @@ export interface NetMergeStatus {
   config: NetMergeConfig;
   nics: NetMergeSlotStats[];
   limits: Record<string, number>;
+  binary?: NetMergeBinaryInfo;
 }
 
 export interface TTLSetting {
@@ -671,6 +683,30 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cfg),
     });
+  },
+
+  async getNetMergeBinaryInfo(): Promise<NetMergeBinaryInfo> {
+    const res = await fetchApi<NetMergeBinaryInfo>('netmerge/binary');
+    if (res) return res;
+    return {
+      path: '',
+      customPath: '',
+      exists: false,
+      source: 'none',
+      version: '',
+      isValid: false,
+      error: 'Not loaded',
+    };
+  },
+
+  async setNetMergeBinaryPath(path: string): Promise<NetMergeBinaryInfo> {
+    const res = await fetchApi<NetMergeBinaryInfo>('netmerge/binary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    if (res) return res;
+    throw new Error('Failed to set net-merge binary path');
   },
 
   async setConsoleVisible(show: boolean): Promise<void> {

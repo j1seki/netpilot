@@ -1,6 +1,7 @@
 package netmerge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -32,6 +33,7 @@ type Config struct {
 	Weights      map[string]float64 `json:"weights"`
 	ShowConsole  bool               `json:"showConsole"`
 	Autostart    bool               `json:"autostart"`
+	BinaryPath   string             `json:"binaryPath,omitempty"`
 }
 
 // StatusInfo represents the runtime state of net-merge.
@@ -47,6 +49,7 @@ type StatusInfo struct {
 	Config       Config             `json:"config"`
 	NICs         []engine.SlotStats `json:"nics"`
 	Limits       map[string]float64 `json:"limits"`
+	Binary       BinaryInfo         `json:"binary"`
 }
 
 // Controller coordinates all net-merge operations directly inside NetPilot.
@@ -216,6 +219,7 @@ func (c *Controller) GetStatus() (StatusInfo, error) {
 		Config:       c.config,
 		NICs:         snap,
 		Limits:       make(map[string]float64),
+		Binary:       ResolveBinary(c.config.BinaryPath),
 	}
 
 	if lims, err := state.LoadLimits(c.stateDir); err == nil {
@@ -262,6 +266,15 @@ func (c *Controller) SetSystemWide(on bool) error {
 		}
 		c.tunOn = false
 		state.Clear(c.stateDir)
+
+		// Signal external binary if available
+		bin := ResolveBinary(c.config.BinaryPath)
+		if bin.IsValid {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = exec.CommandContext(ctx, bin.Path, "off").Run()
+			cancel()
+		}
+
 		// Also signal any external daemon
 		_ = state.SendMarker(c.stateDir, "off")
 		return nil
@@ -304,23 +317,27 @@ func (c *Controller) SetSystemWide(on bool) error {
 		}
 	}
 
-	// 3. On Windows without admin, or if sibling net-merge-tray.exe / net-merge.exe exists, launch it elevated
-	if runtime.GOOS == "windows" {
-		exe, _ := os.Executable()
-		dir := filepath.Dir(exe)
-		trayBin := filepath.Join(dir, "net-merge-tray.exe")
-		cliBin := filepath.Join(dir, "net-merge.exe")
-		if _, err := os.Stat(trayBin); err == nil {
-			cmd := exec.Command(trayBin)
+	// 3. Launch external net-merge binary if available
+	bin := ResolveBinary(c.config.BinaryPath)
+	if bin.IsValid {
+		if runtime.GOOS == "windows" {
+			dir := filepath.Dir(bin.Path)
+			trayBin := filepath.Join(dir, "net-merge-tray.exe")
+			if _, err := os.Stat(trayBin); err == nil {
+				cmd := exec.Command(trayBin)
+				execx.PrepareCommand(cmd)
+				if err := cmd.Start(); err == nil {
+					_ = state.SendMarker(c.stateDir, "on")
+					return nil
+				}
+			}
+			cmd := exec.Command(bin.Path, "run", "-hidden", "-state-dir", c.stateDir)
 			execx.PrepareCommand(cmd)
 			if err := cmd.Start(); err == nil {
-				_ = state.SendMarker(c.stateDir, "on")
 				return nil
 			}
-		}
-		if _, err := os.Stat(cliBin); err == nil {
-			cmd := exec.Command(cliBin, "run", "-hidden", "-state-dir", c.stateDir)
-			execx.PrepareCommand(cmd)
+		} else {
+			cmd := exec.Command(bin.Path, "run", "-state-dir", c.stateDir)
 			if err := cmd.Start(); err == nil {
 				return nil
 			}

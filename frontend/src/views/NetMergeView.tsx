@@ -148,6 +148,21 @@ export const NetMergeView: React.FC = () => {
               <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '2px' }}>
                 Binds to all physical and virtual interfaces simultaneously, aggregating bandwidth and performing packet-level round-robin balancing.
               </p>
+              {status?.binary && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '11px',
+                  marginTop: '4px',
+                  color: status.binary.isValid ? '#4ade80' : '#f87171',
+                }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Engine binary:</span>
+                  <span className="font-mono" style={{ color: status.binary.isValid ? '#38bdf8' : '#f87171' }}>
+                    {status.binary.isValid ? `${status.binary.version} [${status.binary.source}]` : 'Not found (Place next to app or set path in Settings)'}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
