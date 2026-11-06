@@ -22,8 +22,8 @@ export const Applications: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 3000);
+    loadData().catch((e) => console.error(e));
+    const interval = setInterval(() => loadData().catch((e) => console.error(e)), 3000);
     return () => clearInterval(interval);
   }, []);
 
@@ -59,7 +59,7 @@ export const Applications: React.FC = () => {
       enabled: true,
     });
     setSelectedApp(null);
-    loadData();
+    loadData().catch((e) => console.error(e));
   };
 
   return (

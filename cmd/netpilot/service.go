@@ -394,10 +394,13 @@ func (s *NetPilotService) DiscoverApplications() []apps.ProcessInfo {
 
 // GetAnalyticsSnapshot returns current metrics and time series points.
 func (s *NetPilotService) GetAnalyticsSnapshot() map[string]interface{} {
-	_ = s.analytics.SampleLinuxNetDev()
+	_ = s.analytics.SampleHostNICs()
 	nics, appStats := s.analytics.Snapshot()
-	pt := s.analytics.PushHistoryPoint()
 	history := s.analytics.GetHistory()
+	var pt analytics.TimeSeriesPoint
+	if len(history) > 0 {
+		pt = history[len(history)-1]
+	}
 
 	return map[string]interface{}{
 		"nics":        nics,

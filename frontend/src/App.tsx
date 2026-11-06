@@ -25,7 +25,6 @@ import {
   ShieldCheck,
   Zap,
   ShieldAlert,
-  Power,
 } from 'lucide-react';
 
 export type MainTab =
@@ -42,7 +41,6 @@ export const App: React.FC = () => {
   const [branding, setBranding] = useState<BrandingInfo | null>(null);
   const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
   const [netMergeStatus, setNetMergeStatus] = useState<NetMergeStatus | null>(null);
-  const [toggling, setToggling] = useState<boolean>(false);
   const [visitedTabs, setVisitedTabs] = useState<Record<MainTab, boolean>>({
     dashboard: true,
     netmerge: false,
@@ -81,18 +79,6 @@ export const App: React.FC = () => {
   const switchTab = (tab: MainTab) => {
     setCurrentTab(tab);
     setVisitedTabs(prev => ({ ...prev, [tab]: true }));
-  };
-
-  const handleQuickToggle = async () => {
-    if (toggling) return;
-    setToggling(true);
-    try {
-      const want = !(netMergeStatus?.isRunning ?? false);
-      await api.toggleNetMerge(want);
-      await loadHeaderData();
-    } finally {
-      setToggling(false);
-    }
   };
 
   const totalRx = interfaces.reduce((acc, i) => acc + (i.rxMbps || 0), 0);
@@ -225,29 +211,6 @@ export const App: React.FC = () => {
               </div>
             </div>
           </div>
-
-          <button
-            onClick={handleQuickToggle}
-            disabled={toggling}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '5px 11px',
-              borderRadius: '6px',
-              fontSize: '11.5px',
-              fontWeight: 600,
-              cursor: toggling ? 'wait' : 'pointer',
-              backgroundColor: isMergeRunning ? 'rgba(16, 185, 129, 0.14)' : '#18181b',
-              color: isMergeRunning ? '#34d399' : '#d4d4d8',
-              border: `1px solid ${isMergeRunning ? 'rgba(16, 185, 129, 0.35)' : '#27272a'}`,
-              transition: 'all 0.14s ease',
-            }}
-            title={isMergeRunning ? 'Turn off Net-Merge and return to System Default standby' : 'Activate Net-Merge adapter'}
-          >
-            <Power size={12} />
-            <span>{isMergeRunning ? 'Active' : 'Activate'}</span>
-          </button>
         </div>
 
         {/* Right: Beszel-style Pill Navigation */}

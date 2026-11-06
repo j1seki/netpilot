@@ -37,6 +37,7 @@ export const DashboardView: React.FC = () => {
   const [rules, setRules] = useState<RuleRecord[]>([]);
   const [appSearch, setAppSearch] = useState<string>('');
   const [busyMode, setBusyMode] = useState<boolean>(false);
+  const [errorMsg, setErrorMsg] = useState<string>('');
 
   // Modal for Add / Edit App Rule
   const [showModal, setShowModal] = useState<boolean>(false);
@@ -84,8 +85,8 @@ export const DashboardView: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 2000);
+    loadData().catch((e) => console.error(e));
+    const interval = setInterval(() => loadData().catch((e) => console.error(e)), 2000);
     return () => clearInterval(interval);
   }, []);
 
@@ -97,9 +98,12 @@ export const DashboardView: React.FC = () => {
   const handleToggleMerge = async () => {
     if (busyMode) return;
     setBusyMode(true);
+    setErrorMsg('');
     try {
       await api.toggleNetMerge(!isMergeActive);
-      await loadData();
+      await loadData().catch((e) => console.error(e));
+    } catch (err: any) {
+      setErrorMsg(err?.message || String(err));
     } finally {
       setBusyMode(false);
     }
@@ -114,7 +118,7 @@ export const DashboardView: React.FC = () => {
         pri !== undefined ? pri : primaryAdapter,
         sec !== undefined ? sec : secondaryAdapter,
       );
-      await loadData();
+      await loadData().catch((e) => console.error(e));
     } finally {
       setBusyMode(false);
     }
@@ -167,19 +171,19 @@ export const DashboardView: React.FC = () => {
     };
     await api.saveRule(rule);
     setShowModal(false);
-    await loadData();
+    await loadData().catch((e) => console.error(e));
   };
 
   const handleDeleteRule = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     await api.deleteRule(id);
-    await loadData();
+    await loadData().catch((e) => console.error(e));
   };
 
   const handleToggleRule = async (rule: RuleRecord, e: React.MouseEvent) => {
     e.stopPropagation();
     await api.saveRule({ ...rule, enabled: !rule.enabled });
-    await loadData();
+    await loadData().catch((e) => console.error(e));
   };
 
   const getAppRule = (appName: string): RuleRecord | undefined => {
@@ -220,6 +224,25 @@ export const DashboardView: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {errorMsg && (
+        <div style={{
+          padding: '10px 14px',
+          borderRadius: '8px',
+          background: 'rgba(244, 63, 94, 0.14)',
+          border: '1px solid rgba(244, 63, 94, 0.35)',
+          color: '#fb7185',
+          fontSize: '12px',
+          fontWeight: 600,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}>
+          <span>{errorMsg}</span>
+          <button onClick={() => setErrorMsg('')} style={{ background: 'transparent', border: 'none', color: '#fb7185', cursor: 'pointer' }}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
       {/* Beszel-Style Top Control & Mode Banner */}
       <div className="card" style={{
         marginBottom: 0,
@@ -360,7 +383,7 @@ export const DashboardView: React.FC = () => {
             style={{ padding: '6px 14px' }}
           >
             <Power size={13} />
-            <span>{isMergeActive ? 'Stop Net-Merge' : 'Start Net-Merge'}</span>
+            <span>{busyMode ? (isMergeActive ? 'Stopping...' : 'Starting...') : (isMergeActive ? 'Stop Net-Merge' : 'Start Net-Merge')}</span>
           </button>
         </div>
       </div>

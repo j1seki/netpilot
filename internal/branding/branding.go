@@ -12,8 +12,8 @@ const (
 	// settings directories, DBUS, and Wails registration.
 	AppID = "com.netpilot.desktop"
 
-	// AppVersion is the current semver release.
-	AppVersion = "0.1.0"
+	// AppVersion is declared below as a var so release builds can inject the tag
+	// with -X netpilot/internal/branding.AppVersion=...
 
 	// AppDescription describes the application's core function.
 	AppDescription = "Advanced Multi-Network Management, Application Steering & Failover"
@@ -30,6 +30,10 @@ const (
 	// WindowTitle is the default desktop application window title.
 	WindowTitle = "NetPilot — Multi-Network Manager"
 )
+
+// AppVersion is the current semver release. Kept as a var (not a const) so release
+// builds can inject the tag: -X netpilot/internal/branding.AppVersion=<tag>.
+var AppVersion = "0.3.7"
 
 // Info returns a map of all branding metadata for frontend serialization.
 func Info() map[string]string {

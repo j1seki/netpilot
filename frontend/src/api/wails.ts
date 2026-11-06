@@ -340,15 +340,31 @@ export interface AnalyticsSnapshot {
   history: TimeSeriesPoint[];
 }
 
-// Fetch from Wails backend HTTP router (/api/...) or IPC
+// Fetch from Wails backend HTTP router (/api/...) or local loopback daemon (http://127.0.0.1:4545/api/...)
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T | null> {
-  try {
-    const res = await fetch(`/api/${endpoint}`, options);
-    if (res.ok) {
-      return await res.json() as T;
+  const urls = [`/api/${endpoint}`, `http://127.0.0.1:4545/api/${endpoint}`];
+  let lastErr: Error | null = null;
+
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok) {
+        return await res.json() as T;
+      }
+      try {
+        const errBody = await res.json();
+        if (errBody && errBody.error) {
+          lastErr = new Error(errBody.error);
+          break;
+        }
+      } catch (_) {}
+    } catch (_) {
+      // Try next URL
     }
-  } catch (_) {
-    // If fetch failed, try Wails Call.ByName
+  }
+
+  if (lastErr) {
+    throw lastErr;
   }
 
   const w = (window as any).wails;
@@ -359,66 +375,30 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T |
       return await w.Call.ByName(`main.NetPilotService.${methodName}`) as T;
     } catch (_) {}
   }
-  return null;
+  throw new Error(`Backend unavailable for '${endpoint}' (no live data source; refusing to return dummy data)`);
 }
 
-let mockMode: ExecutionModeState = {
-  currentMode: 'LIVE',
-  description: 'Live Mode: Real system traffic is monitored and managed across live interfaces and processes.',
-  allowsSystemMod: true,
-  requiresRoot: false,
-};
-
-let mockRules: RuleRecord[] = [];
+function requireApi<T>(res: T | null, endpoint: string): T {
+  if (res === null || res === undefined) {
+    throw new Error(`Backend returned no data for '${endpoint}' (refusing to return dummy data)`);
+  }
+  return res;
+}
 
 export const api = {
   async getBranding(): Promise<BrandingInfo> {
     const res = await fetchApi<BrandingInfo>('branding');
-    if (res) return res;
-    return {
-      name: 'NetPilot',
-      id: 'com.netpilot.desktop',
-      version: '0.1.0',
-      description: 'Advanced Multi-Network Management & Traffic Steering',
-      vendor: 'NetPilot Project',
-      copyright: '© 2026 NetPilot Project',
-      supportUrl: 'https://github.com/netpilot-project/netpilot',
-      windowTitle: 'NetPilot — Multi-Network Manager',
-    };
+    return requireApi(res, 'branding');
   },
 
   async getCapabilities(): Promise<CapabilityReport> {
     const res = await fetchApi<CapabilityReport>('capabilities');
-    if (res) return res;
-    return {
-      environment: {
-        runtimeOs: 'linux',
-        runtimeArch: 'arm64',
-        kernelRelease: '7.2.12-orbstack',
-        isVm: true,
-        vmType: 'OrbStack VM',
-        inferredHostOs: 'macOS (Apple Silicon / Darwin)',
-        isElevated: false,
-        hasSudo: true,
-        physicalNicCount: 1,
-        virtualNicCount: 1,
-      },
-      capabilities: [
-        {
-          id: 'multi_nic_management',
-          name: 'Multi-Network Management',
-          category: 'Networking',
-          status: 'Supported and verified',
-          reason: 'Active host network interfaces (eth0, tailscale0) discovered.',
-        },
-      ],
-    };
+    return requireApi(res, 'capabilities');
   },
 
   async getExecutionMode(): Promise<ExecutionModeState> {
     const res = await fetchApi<ExecutionModeState>('mode');
-    if (res) return res;
-    return mockMode;
+    return requireApi(res, 'mode');
   },
 
   async setExecutionMode(mode: 'LIVE' | 'DRY_RUN', forceLive: boolean): Promise<ExecutionModeState> {
@@ -427,40 +407,22 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode, forceLive }),
     });
-    if (res) {
-      mockMode = res;
-      return res;
-    }
-    mockMode = {
-      currentMode: mode,
-      description: mode === 'LIVE'
-        ? 'Live Mode: System network traffic is monitored and managed.'
-        : 'Dry-Run Mode: Real system inspected, but kernel routing tables are not modified.',
-      allowsSystemMod: mode === 'LIVE',
-      requiresRoot: false,
-    };
-    return mockMode;
+    return requireApi(res, 'mode');
   },
 
   async getInterfaces(): Promise<InterfaceInfo[]> {
     const res = await fetchApi<InterfaceInfo[]>('interfaces');
-    if (res) return res;
-    return [
-      { name: 'eth0', ip: '192.168.139.198/24', isUp: true, isHardware: true, rxMbps: 0, txMbps: 0, linkState: 'UP' },
-      { name: 'tailscale0', ip: '100.123.203.11/32', isUp: true, isHardware: false, rxMbps: 0, txMbps: 0, linkState: 'UP' },
-    ];
+    return requireApi(res, 'interfaces');
   },
 
   async getApplications(): Promise<ProcessInfo[]> {
     const res = await fetchApi<ProcessInfo[]>('applications');
-    if (res) return res;
-    return [];
+    return requireApi(res, 'applications');
   },
 
   async getRules(): Promise<RuleRecord[]> {
     const res = await fetchApi<RuleRecord[]>('rules');
-    if (res) return res;
-    return mockRules;
+    return requireApi(res, 'rules');
   },
 
   async saveRule(rule: RuleRecord): Promise<void> {
@@ -469,64 +431,32 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(rule),
     });
-    const idx = mockRules.findIndex(r => r.id === rule.id);
-    if (idx >= 0) {
-      mockRules[idx] = rule;
-    } else {
-      mockRules.push(rule);
-    }
   },
 
   async deleteRule(id: string): Promise<void> {
     await fetchApi<void>(`rules?id=${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
-    mockRules = mockRules.filter(r => r.id !== id);
   },
 
   async runAllScenarios(): Promise<ScenarioResult[]> {
     const res = await fetchApi<ScenarioResult[]>('scenarios');
-    if (res) return res;
-    return [];
+    return requireApi(res, 'scenarios');
   },
 
   async runPlatformSuite(suite: string): Promise<SuiteReport> {
     const res = await fetchApi<SuiteReport>(`suite?suite=${encodeURIComponent(suite)}`);
-    if (res) return res;
-    return {
-      suiteName: suite,
-      targetOs: 'linux',
-      total: 1,
-      passed: 1,
-      failed: 0,
-      skipped: 0,
-      blocked: 0,
-      durationMs: 1.0,
-      cases: [],
-    };
+    return requireApi(res, `suite?suite=${suite}`);
   },
 
   async runAllUnified(skipDisruptive: boolean = true): Promise<UnifiedTestReport> {
     const res = await fetchApi<UnifiedTestReport>(`testrunner/run-all?skipDisruptive=${skipDisruptive}`);
-    if (res) return res;
-    return {
-      total: 8,
-      passed: 8,
-      failed: 0,
-      skipped: 0,
-      blocked: 0,
-      disruptiveCount: 2,
-      durationMs: 14.5,
-      suites: [],
-      scenarios: [],
-      ranAt: new Date().toISOString(),
-    };
+    return requireApi(res, `testrunner/run-all?skipDisruptive=${skipDisruptive}`);
   },
 
   async getFailoverStatus(): Promise<InterfaceHealth[]> {
     const res = await fetchApi<InterfaceHealth[]>('failover');
-    if (res) return res;
-    return [];
+    return requireApi(res, 'failover');
   },
 
   async queryLogs(opts: any): Promise<LogEntry[]> {
@@ -536,40 +466,29 @@ export const api = {
     if (opts.searchText) params.set('search', opts.searchText);
     if (opts.errorsOnly) params.set('errorsOnly', 'true');
     const res = await fetchApi<LogEntry[]>(`logs?${params.toString()}`);
-    if (res) return res;
-    return [];
+    return requireApi(res, `logs?${params.toString()}`);
   },
 
   async getAnalytics(): Promise<AnalyticsSnapshot> {
     const res = await fetchApi<AnalyticsSnapshot>('analytics');
-    if (res) return res;
-    return {
-      nics: [],
-      apps: [],
-      latestPoint: {
-        timestamp: new Date().toISOString(),
-        totalRxMbps: 0,
-        totalTxMbps: 0,
-        byInterface: {},
-      },
-      history: [],
-    };
+    return requireApi(res, 'analytics');
   },
 
   async exportDiagnosticReport(strictRedact: boolean): Promise<string> {
-    try {
-      const res = await fetch(`/api/diagnostics?strict=${strictRedact}`);
-      if (res.ok) {
-        return await res.text();
-      }
-    } catch (_) {}
-    return JSON.stringify({ message: 'Diagnostic report generator active' }, null, 2);
+    for (const prefix of ['/api', 'http://127.0.0.1:4545/api']) {
+      try {
+        const res = await fetch(`${prefix}/diagnostics?strict=${strictRedact}`);
+        if (res.ok) {
+          return await res.text();
+        }
+      } catch (_) {}
+    }
+    throw new Error('Backend unavailable for diagnostics export (refusing to return dummy data)');
   },
 
   async getAdapterCaps(): Promise<AdapterCapRecord[]> {
     const res = await fetchApi<AdapterCapRecord[]>('adapter-caps');
-    if (res) return res;
-    return [];
+    return requireApi(res, 'adapter-caps');
   },
 
   async saveAdapterCap(cap: AdapterCapRecord): Promise<void> {
@@ -583,8 +502,7 @@ export const api = {
   async getMonthlyHistory(month?: string): Promise<MonthlyHistoryResponse> {
     const url = month ? `monthly-history?month=${encodeURIComponent(month)}` : 'monthly-history';
     const res = await fetchApi<MonthlyHistoryResponse>(url);
-    if (res) return res;
-    return { records: [], summaries: [] };
+    return requireApi(res, url);
   },
 
   exportMonthlyCsvUrl(month?: string): string {
@@ -592,44 +510,22 @@ export const api = {
   },
 
   async exportMonthlyCsvText(month?: string): Promise<string> {
-    const url = this.exportMonthlyCsvUrl(month);
-    try {
-      const res = await fetch(url);
-      if (res.ok) {
-        return await res.text();
-      }
-    } catch (_) {}
-    return 'YearMonth,Interface,Application,BytesIn,BytesOut,RxMB,TxMB,TotalMB,LastUpdated\n';
+    const suffix = month ? `monthly-history/export?month=${encodeURIComponent(month)}` : 'monthly-history/export';
+    for (const prefix of ['/api', 'http://127.0.0.1:4545/api']) {
+      try {
+        const res = await fetch(`${prefix}/${suffix}`);
+        if (res.ok) {
+          return await res.text();
+        }
+      } catch (_) {}
+    }
+    throw new Error('Backend unavailable for monthly-history export (refusing to return dummy data)');
   },
 
   // Net-Merge Engine Integration
   async getNetMergeStatus(): Promise<NetMergeStatus> {
     const res = await fetchApi<NetMergeStatus>('netmerge/status');
-    if (res) return res;
-    return {
-      isRunning: true,
-      pid: 1042,
-      mode: 'system-wide (integrated)',
-      v6State: 'auto',
-      uptimeSec: 420,
-      autostart: false,
-      socksRunning: false,
-      socksAddress: '127.0.0.1:1080',
-      config: {
-        autoPause: true,
-        autoWeight: true,
-        ipv6Mode: 'auto',
-        mtu: 1500,
-        includeNics: '',
-        rescanSec: 3,
-        socksAddress: '127.0.0.1:1080',
-        weights: {},
-        showConsole: false,
-        autostart: false,
-      },
-      nics: [],
-      limits: {},
-    };
+    return requireApi(res, 'netmerge/status');
   },
 
   async toggleNetMerge(on: boolean): Promise<void> {
@@ -672,19 +568,7 @@ export const api = {
 
   async getNetMergeConfig(): Promise<NetMergeConfig> {
     const res = await fetchApi<NetMergeConfig>('netmerge/config');
-    if (res) return res;
-    return {
-      autoPause: true,
-      autoWeight: true,
-      ipv6Mode: 'auto',
-      mtu: 1500,
-      includeNics: '',
-      rescanSec: 3,
-      socksAddress: '127.0.0.1:1080',
-      weights: {},
-      showConsole: false,
-      autostart: false,
-    };
+    return requireApi(res, 'netmerge/config');
   },
 
   async saveNetMergeConfig(cfg: NetMergeConfig): Promise<void> {
@@ -697,16 +581,7 @@ export const api = {
 
   async getNetMergeBinaryInfo(): Promise<NetMergeBinaryInfo> {
     const res = await fetchApi<NetMergeBinaryInfo>('netmerge/binary');
-    if (res) return res;
-    return {
-      path: '',
-      customPath: '',
-      exists: false,
-      source: 'none',
-      version: '',
-      isValid: false,
-      error: 'Not loaded',
-    };
+    return requireApi(res, 'netmerge/binary');
   },
 
   async setNetMergeBinaryPath(path: string): Promise<NetMergeBinaryInfo> {
@@ -739,8 +614,7 @@ export const api = {
 
   async getCloseAction(): Promise<'minimize' | 'close'> {
     const res = await fetchApi<{ closeAction: 'minimize' | 'close' }>('system/close-action');
-    if (res && res.closeAction) return res.closeAction;
-    return 'minimize';
+    return requireApi(res, 'system/close-action').closeAction;
   },
 
   async setCloseAction(action: 'minimize' | 'close'): Promise<'minimize' | 'close'> {
@@ -749,8 +623,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action }),
     });
-    if (res && res.closeAction) return res.closeAction;
-    return action;
+    return requireApi(res, 'system/close-action').closeAction;
   },
 
   async setConsoleVisible(show: boolean): Promise<void> {
@@ -764,43 +637,7 @@ export const api = {
   // TTL & Hop Limit Management
   async inspectTTL(): Promise<TTLReport> {
     const res = await fetchApi<TTLReport>('ttl/inspect');
-    if (res) return res;
-    return {
-      schema: 'netmerge/ttl/v1',
-      at: new Date().toISOString(),
-      capabilities: {
-        platform: 'cross-platform',
-        supported: true,
-        readable: true,
-        notes: ['Cross-platform kernel packet TTL and IPv6 hop limit control.'],
-      },
-      settings: [
-        {
-          id: 'system.ipv4.packet-ttl',
-          kind: 'packet-ttl',
-          family: 'ipv4',
-          scope: 'system-global',
-          name: 'IPv4 Default TTL',
-          description: 'Outbound IPv4 Time-To-Live packet header value',
-          value: 64,
-          valueOrigin: 'sysctl',
-          explicit: false,
-          writable: true,
-        },
-        {
-          id: 'system.ipv6.packet-hoplimit',
-          kind: 'packet-hoplimit',
-          family: 'ipv6',
-          scope: 'system-global',
-          name: 'IPv6 Default Hop Limit',
-          description: 'Outbound IPv6 Hop Limit packet header value',
-          value: 64,
-          valueOrigin: 'sysctl',
-          explicit: false,
-          writable: true,
-        },
-      ],
-    };
+    return requireApi(res, 'ttl/inspect');
   },
 
   async applyTTL(req: {
@@ -815,16 +652,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     });
-    if (res) return res;
-    return {
-      action: 'apply',
-      dryRun: req.dryRun,
-      changes: [
-        { setting: { id: 'system.ipv4.packet-ttl' }, from: 64, to: req.bumpIPv4 },
-        { setting: { id: 'system.ipv6.packet-hoplimit' }, from: 64, to: req.bumpIPv6 },
-      ],
-      at: new Date().toISOString(),
-    };
+    return requireApi(res, 'ttl/apply');
   },
 
   async restoreTTL(dryRun: boolean = false): Promise<TTLOutcome> {
@@ -833,21 +661,11 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dryRun }),
     });
-    if (res) return res;
-    return {
-      action: 'restore',
-      dryRun,
-      changes: [
-        { setting: { id: 'system.ipv4.packet-ttl' }, from: 65, to: 64 },
-        { setting: { id: 'system.ipv6.packet-hoplimit' }, from: 65, to: 64 },
-      ],
-      at: new Date().toISOString(),
-    };
+    return requireApi(res, 'ttl/restore');
   },
 
   async getTTLHistory(): Promise<any[]> {
     const res = await fetchApi<any[]>('ttl/history');
-    if (res) return res;
-    return [];
+    return requireApi(res, 'ttl/history');
   },
 };

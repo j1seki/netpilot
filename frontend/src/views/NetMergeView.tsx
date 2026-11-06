@@ -20,6 +20,7 @@ export const NetMergeView: React.FC = () => {
   const [limitInputs, setLimitInputs] = useState<Record<string, string>>({});
   const [socksAddr, setSocksAddr] = useState<string>('127.0.0.1:1080');
   const [feedback, setFeedback] = useState<string>('');
+  const [errorMsg, setErrorMsg] = useState<string>('');
 
   const loadStatus = async () => {
     const st = await api.getNetMergeStatus();
@@ -51,15 +52,18 @@ export const NetMergeView: React.FC = () => {
   const handleToggleSystemWide = async () => {
     if (!status) return;
     setLoading(true);
+    setErrorMsg('');
     try {
       const next = !status.isRunning;
       await api.toggleNetMerge(next);
       showToast(
         next
-          ? 'Net-Merge adapter activated.'
+          ? 'Net-Merge adapter started.'
           : 'Net-Merge stopped. Default adapter returned to System Default (Standby).'
       );
       await loadStatus();
+    } catch (err: any) {
+      setErrorMsg(err?.message || String(err));
     } finally {
       setLoading(false);
     }
@@ -142,6 +146,21 @@ export const NetMergeView: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {errorMsg && (
+        <div
+          style={{
+            padding: '10px 14px',
+            borderRadius: '8px',
+            background: 'rgba(244, 63, 94, 0.14)',
+            border: '1px solid rgba(244, 63, 94, 0.35)',
+            color: '#fb7185',
+            fontSize: '12px',
+            fontWeight: 600,
+          }}
+        >
+          {errorMsg}
+        </div>
+      )}
       {feedback && (
         <div
           style={{
@@ -229,7 +248,7 @@ export const NetMergeView: React.FC = () => {
             disabled={loading}
           >
             <Power size={14} />
-            <span>{isRunning ? 'Deactivate Net-Merge' : 'Activate Net-Merge'}</span>
+            <span>{loading ? (isRunning ? 'Stopping...' : 'Starting...') : (isRunning ? 'Stop Net-Merge' : 'Start Net-Merge')}</span>
           </button>
         </div>
       </div>

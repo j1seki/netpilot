@@ -68,10 +68,20 @@ func (g *Generator) Generate(strictRedact bool) ReportBundle {
 	testRuns, _ := g.database.ListTestRuns(10)
 	rulesList, _ := g.database.ListRules()
 
-	limitations := []string{
-		"OrbStack VM paravirtualizes eth0; host Wi-Fi/LTE interfaces are not visible directly to guest kernel.",
-		"Real hardware route aggregation and WFP/utun drivers require native Windows or macOS host runners.",
-		"Simulation Mode is active to prevent disruption to host development environment.",
+	var limitations []string
+	if capReport.Environment.IsVM {
+		limitations = append(limitations, "Running inside virtualized environment ("+capReport.Environment.VMType+"); host physical Wi-Fi/LTE hardware may be bridged.")
+	}
+	if !capReport.Environment.IsElevated {
+		limitations = append(limitations, "Process is not currently elevated (Administrator/root); system-wide TUN creation will request elevation when started.")
+	}
+	for _, c := range capReport.Capabilities {
+		if c.Status == capability.StatusUnsupported || c.Status == capability.StatusEnvironmentBlocked {
+			limitations = append(limitations, c.Name+": "+c.Reason)
+		}
+	}
+	if len(limitations) == 0 {
+		limitations = []string{"All native host capabilities available."}
 	}
 
 	bundle := ReportBundle{

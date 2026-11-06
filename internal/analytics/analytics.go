@@ -4,6 +4,7 @@ package analytics
 
 import (
 	"bufio"
+	"net"
 	"os"
 	"runtime"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"netpilot/internal/db"
+	"netpilot/internal/nics"
 )
 
 // NICMetric holds current rates and total byte counts for an adapter.
@@ -111,9 +113,11 @@ func (c *Collector) RecordNICSample(name string, totalIn, totalOut int64) {
 	if txMbps > m.PeakTxMbps {
 		m.PeakTxMbps = txMbps
 	}
+	// Record positive byte deltas to SQLite monthly history so Usage & History reflects real traffic
+	if c.database != nil && (deltaIn > 0 || deltaOut > 0) {
+		_ = c.database.RecordMonthlyUsage("", name, "system", deltaIn, deltaOut)
+	}
 }
-
-// RecordAppUsage updates byte usage attributed to an application.
 func (c *Collector) RecordAppUsage(appName string, bytesIn, bytesOut int64, durationSec float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -195,13 +199,26 @@ func (c *Collector) GetHistory() []TimeSeriesPoint {
 	return out
 }
 
-// SampleHostNICs samples interface byte counters using OS-specific mechanisms.
+// SampleHostNICs samples interface byte counters using OS-specific mechanisms across Linux, Windows, and macOS.
 func (c *Collector) SampleHostNICs() error {
 	if runtime.GOOS == "linux" {
 		return c.SampleLinuxNetDev()
 	} else if runtime.GOOS == "windows" {
 		return c.sampleWindowsNet()
 	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return err
+	}
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if in, out, ok := nics.Octets(ifc.Index); ok {
+			c.RecordNICSample(ifc.Name, int64(in), int64(out))
+		}
+	}
+	c.PushHistoryPoint()
 	return nil
 }
 

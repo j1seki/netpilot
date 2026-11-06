@@ -23,8 +23,8 @@ export const Networks: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 2000);
+    loadData().catch((e) => console.error(e));
+    const interval = setInterval(() => loadData().catch((e) => console.error(e)), 2000);
     return () => clearInterval(interval);
   }, []);
 
@@ -39,7 +39,7 @@ export const Networks: React.FC = () => {
       enabled: true,
     });
     setSelectedIface(null);
-    loadData();
+    loadData().catch((e) => console.error(e));
   };
 
   return (

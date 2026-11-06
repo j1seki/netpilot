@@ -11,15 +11,30 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"netpilot/internal/netmerge/embedded"
+	"netpilot/internal/state"
 )
 
-// CheckDriver reports whether the TUN driver can be loaded: wintun.dll must sit next to the exe.
+// CheckDriver reports whether the TUN driver can be loaded: wintun.dll must sit next to the exe
+// (or be extracted from the embedded single-binary payload).
 func CheckDriver() error {
 	exe, _ := os.Executable()
-	if _, err := os.Stat(filepath.Join(filepath.Dir(exe), "wintun.dll")); err != nil {
-		return fmt.Errorf("wintun.dll not found next to %s", exe)
+	dllPath := filepath.Join(filepath.Dir(exe), "wintun.dll")
+	if _, err := os.Stat(dllPath); err == nil {
+		return nil
 	}
-	return nil
+	if extracted := embedded.EnsureWintunDLL(state.DefaultDir()); extracted != "" {
+		if _, err := os.Stat(dllPath); err == nil {
+			return nil
+		}
+		// Add the extracted directory to DLL search path so wireguard-go finds wintun.dll even if exeDir is read-only
+		if dirPtr, err := windows.UTF16PtrFromString(filepath.Dir(extracted)); err == nil {
+			windows.NewLazySystemDLL("kernel32.dll").NewProc("SetDllDirectoryW").Call(uintptr(unsafe.Pointer(dirPtr)))
+			return nil
+		}
+	}
+	return fmt.Errorf("wintun.dll not found next to %s", exe)
 }
 
 // WaitForTray blocks until the shell's taskbar and notification area exist.

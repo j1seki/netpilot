@@ -20,8 +20,15 @@ var (
 
 // ExtractBinaries writes any embedded net-merge and net-merge-tray (plus wintun.dll on Windows)
 // binaries to stateDir/bin if present in the embedded filesystem, returning their paths.
+// On Windows, if wintun.dll is embedded, it is also extracted beside the current executable
+// so WireGuard/Wintun can load it directly from a single-file portable netpilot.exe.
 func ExtractBinaries(stateDir string) (cli string, tray string) {
 	extractOnce.Do(func() {
+		if runtime.GOOS == "windows" {
+			if exe, err := os.Executable(); err == nil {
+				_ = extractOne(filepath.Dir(exe), "wintun.dll")
+			}
+		}
 		if stateDir == "" {
 			return
 		}
@@ -46,6 +53,31 @@ func ExtractBinaries(stateDir string) (cli string, tray string) {
 		}
 	})
 	return cliPath, trayPath
+}
+
+// EnsureWintunDLL ensures wintun.dll is extracted next to the executable (or stateDir/bin) on Windows.
+func EnsureWintunDLL(stateDir string) string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		dllPath := filepath.Join(exeDir, "wintun.dll")
+		if _, err := os.Stat(dllPath); err == nil {
+			return dllPath
+		}
+		if p := extractOne(exeDir, "wintun.dll"); p != "" {
+			return p
+		}
+	}
+	if stateDir != "" {
+		outDir := filepath.Join(stateDir, "bin")
+		_ = os.MkdirAll(outDir, 0o755)
+		if p := extractOne(outDir, "wintun.dll"); p != "" {
+			return p
+		}
+	}
+	return ""
 }
 
 func extractOne(outDir, name string) string {

@@ -7,24 +7,14 @@ VERSION="${VERSION#v}"
 OUT_DIR="$(realpath "${2:-dist}")"
 mkdir -p "$OUT_DIR"
 
-echo "=== Building net-merge, net-merge-tray, and NetPilot macOS Universal Binaries ==="
+echo "=== Building single-binary NetPilot macOS Universal Binary (netpilot = GUI + net-merge CLI + tray) ==="
 mkdir -p /tmp/np-mac-bin internal/netmerge/embedded/bin
-for arch in amd64 arm64; do
-  CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /tmp/np-mac-bin/net-merge-$arch ./cmd/net-merge
-  CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION -X main.defaultCmd=tray" -o /tmp/np-mac-bin/net-merge-tray-$arch ./cmd/net-merge
-done
-lipo -create -output /tmp/np-mac-bin/net-merge /tmp/np-mac-bin/net-merge-amd64 /tmp/np-mac-bin/net-merge-arm64
-lipo -create -output /tmp/np-mac-bin/net-merge-tray /tmp/np-mac-bin/net-merge-tray-amd64 /tmp/np-mac-bin/net-merge-tray-arm64
-chmod +x /tmp/np-mac-bin/net-merge /tmp/np-mac-bin/net-merge-tray
-
-cp /tmp/np-mac-bin/net-merge internal/netmerge/embedded/bin/net-merge
-cp /tmp/np-mac-bin/net-merge-tray internal/netmerge/embedded/bin/net-merge-tray
 
 for arch in amd64 arm64; do
   CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /tmp/np-mac-bin/netpilot-$arch ./cmd/netpilot
 done
 lipo -create -output /tmp/np-mac-bin/netpilot /tmp/np-mac-bin/netpilot-amd64 /tmp/np-mac-bin/netpilot-arm64
-codesign --force --sign - /tmp/np-mac-bin/netpilot /tmp/np-mac-bin/net-merge /tmp/np-mac-bin/net-merge-tray 2>/dev/null || true
+codesign --force --sign - /tmp/np-mac-bin/netpilot 2>/dev/null || true
 
 echo "=== Creating macOS App Bundle ==="
 APP="NetPilot.app"
@@ -32,10 +22,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 
 cp /tmp/np-mac-bin/netpilot "$APP/Contents/MacOS/netpilot"
-cp /tmp/np-mac-bin/net-merge "$APP/Contents/MacOS/net-merge"
-cp /tmp/np-mac-bin/net-merge-tray "$APP/Contents/MacOS/net-merge-tray"
-cp /tmp/np-mac-bin/net-merge "$APP/Contents/Helpers/net-merge"
-chmod +x "$APP/Contents/MacOS/netpilot" "$APP/Contents/MacOS/net-merge" "$APP/Contents/MacOS/net-merge-tray" "$APP/Contents/Helpers/net-merge"
+chmod +x "$APP/Contents/MacOS/netpilot"
 
 # Generate or copy icon
 if [ -f packaging/icons/NetPilot.icns ]; then

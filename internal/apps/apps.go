@@ -3,6 +3,7 @@ package apps
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -50,10 +51,13 @@ func (m *Manager) Discover() []ProcessInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		m.discoverLinux()
-	} else if runtime.GOOS == "windows" {
+	case "windows":
 		m.discoverWindows()
+	default:
+		m.discoverPOSIX()
 	}
 
 	out := make([]ProcessInfo, 0, len(m.processes))
@@ -128,13 +132,56 @@ func (m *Manager) discoverLinux() {
 				CommandLine: cmdLine,
 				IconHint:    inferIconHint(commName),
 				SocketCount: socketCount,
-				AssignedNIC: "eth0", // default live uplink
+				AssignedNIC: "System Default",
 				LastActive:  time.Now(),
 			}
 		}
 	}
 
 	// Purge dead processes
+	for pid := range m.processes {
+		if !seen[pid] {
+			delete(m.processes, pid)
+		}
+	}
+}
+
+func (m *Manager) discoverPOSIX() {
+	out, err := exec.Command("ps", "-axo", "pid=,comm=").Output()
+	if err != nil {
+		return
+	}
+	seen := make(map[int]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || pid <= 1 {
+			continue
+		}
+		exe := strings.Join(fields[1:], " ")
+		name := filepath.Base(exe)
+		seen[pid] = true
+		if p, ok := m.processes[pid]; ok {
+			p.LastActive = time.Now()
+		} else {
+			m.processes[pid] = &ProcessInfo{
+				PID:         pid,
+				Name:        name,
+				Executable:  exe,
+				CommandLine: exe,
+				IconHint:    inferIconHint(name),
+				AssignedNIC: "System Default",
+				LastActive:  time.Now(),
+			}
+		}
+	}
 	for pid := range m.processes {
 		if !seen[pid] {
 			delete(m.processes, pid)

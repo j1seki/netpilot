@@ -199,10 +199,8 @@ func ResolveBinaryWithSource(engineSource, customPath, stateDir string) BinaryIn
 		}
 	}
 
-	binName := "net-merge"
 	trayName := "net-merge-tray"
 	if runtime.GOOS == "windows" {
-		binName = "net-merge.exe"
 		trayName = "net-merge-tray.exe"
 	}
 
@@ -241,57 +239,42 @@ func ResolveBinaryWithSource(engineSource, customPath, stateDir string) BinaryIn
 	}
 
 	// Built-in mode (default):
-	// 1. Check embedded binaries extracted into stateDir/bin
+	// Ensure wintun.dll is extracted on Windows if embedded
+	_ = embedded.EnsureWintunDLL(stateDir)
 	embCLI, embTray := embedded.ExtractBinaries(stateDir)
-	if embCLI != "" && fileExists(embCLI) {
+
+	// The NetPilot binary itself natively supports all net-merge CLI and tray subcommands
+	// (`netpilot run`, `netpilot tray`, `netpilot off`, `netpilot status`, `netpilot version`, etc.),
+	// so built-in mode is always a true single binary.
+	// True single-binary: builtin always means the running netpilot binary itself.
+	// (Embedded net-merge/net-merge-tray are no longer shipped; netpilot handles all subcommands.)
+	exe, err := os.Executable()
+	if err != nil || strings.TrimSpace(exe) == "" {
 		return BinaryInfo{
-			Path:         embCLI,
-			TrayPath:     embTray,
+			Path:         "",
+			TrayPath:     "",
 			CustomPath:   customPath,
 			EngineSource: "builtin",
-			Exists:       true,
+			Exists:       false,
 			Source:       "builtin",
-			Version:      "net-merge " + EmbeddedVersion() + " (built-in + tray)",
-			IsValid:      true,
+			IsValid:      false,
+			Error:        "cannot resolve the running NetPilot executable: " + fmt.Sprint(err),
 		}
 	}
+	resolvedPath := exe
+	resolvedTray := exe
+	_ = embCLI
+	_ = embTray
 
-	// 2. Check bundled binaries in same folder as NetPilot executable / AppImage
-	sameFolderCandidates := getSameFolderCandidates(binName)
-	for _, cand := range sameFolderCandidates {
-		if fileExists(cand) {
-			trayCand := filepath.Join(filepath.Dir(cand), trayName)
-			trayFound := ""
-			if fileExists(trayCand) {
-				trayFound = trayCand
-			}
-			ver, err := ValidateBinary(cand)
-			if err == nil {
-				return BinaryInfo{
-					Path:         cand,
-					TrayPath:     trayFound,
-					CustomPath:   customPath,
-					EngineSource: engineSource,
-					Exists:       true,
-					Source:       "builtin",
-					Version:      ver + " (bundled)",
-					IsValid:      true,
-				}
-			}
-		}
-	}
-
-	// 3. In-process embedded engine is always compiled into NetPilot
-	exe, _ := os.Executable()
 	return BinaryInfo{
-		Path:         exe,
-		TrayPath:     exe,
+		Path:         resolvedPath,
+		TrayPath:     resolvedTray,
 		CustomPath:   customPath,
 		EngineSource: "builtin",
-		Exists:       true,
+		Exists:       fileExists(resolvedPath),
 		Source:       "builtin",
-		Version:      "net-merge " + EmbeddedVersion() + " (embedded in NetPilot)",
-		IsValid:      true,
+		Version:      "net-merge " + EmbeddedVersion() + " (built-in single binary)",
+		IsValid:      fileExists(resolvedPath),
 	}
 }
 

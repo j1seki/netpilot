@@ -23,11 +23,9 @@ Push-Location frontend
 Invoke-Native 'npm build' { cmd /c "npm ci || npm install && npm run build" }
 Pop-Location
 
-# 2. Build net-merge CLI and windowless net-merge-tray
-Write-Host "Building net-merge and net-merge-tray..."
+# 2. True single-binary: netpilot itself implements all net-merge subcommands.
+Write-Host "Building single-binary NetPilot (netpilot = GUI + net-merge CLI + tray)..."
 New-Item -ItemType Directory -Force internal\netmerge\embedded\bin | Out-Null
-Invoke-Native 'build net-merge' { go build -trimpath -ldflags "-s -w -X main.version=$Version" -o dist\net-merge.exe .\cmd\net-merge }
-Invoke-Native 'build net-merge-tray' { go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$Version -X main.defaultCmd=tray" -o dist\net-merge-tray.exe .\cmd\net-merge }
 
 # 3. Pull official wintun.dll from net-merge/net-merge release
 Write-Host "Fetching official Wintun driver from net-merge/net-merge..."
@@ -45,14 +43,12 @@ Copy-Item "$tempDir\extracted\wintun-LICENSE.txt" dist\wintun-LICENSE.txt -Force
 Copy-Item packaging\netpilot.ico dist\netpilot.ico -Force
 Remove-Item $tempDir -Recurse -Force
 
-# Embed net-merge.exe, net-merge-tray.exe, and wintun.dll directly into NetPilot
-Copy-Item dist\net-merge.exe internal\netmerge\embedded\bin\net-merge.exe -Force
-Copy-Item dist\net-merge-tray.exe internal\netmerge\embedded\bin\net-merge-tray.exe -Force
+# Embed ONLY wintun.dll into the single NetPilot binary (auto-extracted next to netpilot.exe)
 Copy-Item dist\wintun.dll internal\netmerge\embedded\bin\wintun.dll -Force
 
 # 4. Build NetPilot GUI (-H=windowsgui)
-Write-Host "Building NetPilot GUI binary with embedded net-merge + tray..."
-Invoke-Native 'build netpilot' { go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$Version" -o dist\netpilot.exe .\cmd\netpilot }
+Write-Host "Building NetPilot single binary (wintun.dll embedded)..."
+Invoke-Native 'build netpilot' { go build -trimpath -ldflags "-s -w -H=windowsgui -X netpilot/internal/branding.AppVersion=$Version" -o dist\netpilot.exe .\cmd\netpilot }
 
 # 4. Inno Setup installer (.exe)
 $iscc = $env:ISCC
@@ -71,6 +67,6 @@ if ($iscc) {
 
 # 5. Portable ZIP
 $portable = "dist\netpilot-$Version-windows-amd64-portable.zip"
-Compress-Archive -Path dist\netpilot.exe, dist\net-merge.exe, dist\net-merge-tray.exe, dist\wintun.dll, dist\wintun-LICENSE.txt, dist\netpilot.ico, LICENSE, THIRD-PARTY-NOTICES.md, README.md -DestinationPath $portable -Force
+Compress-Archive -Path dist\netpilot.exe, dist\wintun.dll, dist\wintun-LICENSE.txt, dist\netpilot.ico, LICENSE, THIRD-PARTY-NOTICES.md, README.md -DestinationPath $portable -Force
 
 Get-ChildItem dist\*.exe, dist\*.zip | ForEach-Object { '{0}  {1:N1} MB' -f $_.Name, ($_.Length / 1MB) }

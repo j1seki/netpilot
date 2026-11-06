@@ -27,18 +27,18 @@ export const RoutingRules: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData();
+    loadData().catch((e) => console.error(e));
   }, []);
 
   const handleToggle = async (r: RuleRecord) => {
     const updated = { ...r, enabled: !r.enabled };
     await api.saveRule(updated);
-    loadData();
+    loadData().catch((e) => console.error(e));
   };
 
   const handleDelete = async (id: string) => {
     await api.deleteRule(id);
-    loadData();
+    loadData().catch((e) => console.error(e));
   };
 
   const handleSave = async () => {
@@ -59,7 +59,7 @@ export const RoutingRules: React.FC = () => {
     await api.saveRule(newRule);
     setIsModalOpen(false);
     resetForm();
-    loadData();
+    loadData().catch((e) => console.error(e));
   };
 
   const resetForm = () => {

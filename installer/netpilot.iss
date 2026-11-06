@@ -41,9 +41,7 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 
 [Files]
 Source: "dist\netpilot.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\net-merge.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\net-merge-tray.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\wintun.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\wintun.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "dist\wintun-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "dist\netpilot.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
@@ -66,8 +64,6 @@ var
   rc: Integer;
 begin
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM netpilot.exe', '', SW_HIDE, ewWaitUntilTerminated, rc);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM net-merge-tray.exe', '', SW_HIDE, ewWaitUntilTerminated, rc);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM net-merge.exe', '', SW_HIDE, ewWaitUntilTerminated, rc);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

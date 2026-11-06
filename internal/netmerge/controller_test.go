@@ -49,18 +49,39 @@ func TestNetMergeController(t *testing.T) {
 		t.Errorf("persisted config did not match: %+v", cfg2)
 	}
 
-	// Test marker sending
-	if err := ctrl.SetSystemWide(true); err != nil {
-		t.Fatalf("SetSystemWide(true) failed: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(tempDir, "ctl", "on")); err != nil {
-		t.Errorf("expected 'on' marker file, got: %v", err)
-	}
-
+	// SetSystemWide(false) always succeeds (clears state + writes ctl/off marker).
 	if err := ctrl.SetSystemWide(false); err != nil {
 		t.Fatalf("SetSystemWide(false) failed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tempDir, "ctl", "off")); err != nil {
 		t.Errorf("expected 'off' marker file, got: %v", err)
+	}
+
+	// SetSystemWide(true) must NOT fake success when no daemon/admin is available.
+	// Use an external config pointing at a nonexistent binary so the failure is fast
+	// and deterministic (no 12s daemon spawn).
+	extCtrl := NewController(tempDir)
+	extCfg := extCtrl.GetConfig()
+	extCfg.EngineSource = "external"
+	extCfg.BinaryPath = filepath.Join(tempDir, "does-not-exist-net-merge")
+	if err := extCtrl.SaveConfig(extCfg); err != nil {
+		t.Fatalf("SaveConfig(external) failed: %v", err)
+	}
+	if err := extCtrl.SetSystemWide(true); err == nil {
+		t.Errorf("expected SetSystemWide(true) to return an error for a missing binary, got nil")
+	}
+	// Ensure the failed attempt left no fake ctl/on marker.
+	if _, err := os.Stat(filepath.Join(tempDir, "ctl", "on")); err == nil {
+		t.Errorf("expected no 'on' marker after failed SetSystemWide(true), but marker file exists")
+	}
+	// The controller must record the external config for later checks
+	// without having faked tunOn.
+	if st, _ := extCtrl.GetStatus(); st.Config.EngineSource != "external" {
+		t.Errorf("expected external engine source, got %v", st.Config.EngineSource)
+	}
+
+	// Turning off again after a failed start must still succeed.
+	if err := extCtrl.SetSystemWide(false); err != nil {
+		t.Fatalf("SetSystemWide(false) after failed start failed: %v", err)
 	}
 }

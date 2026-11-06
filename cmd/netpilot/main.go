@@ -33,6 +33,10 @@ import (
 )
 
 func main() {
+	if maybeRunNetMergeSubcommand(os.Args) {
+		return
+	}
+
 	headless := flag.Bool("headless", false, "run headless without desktop window")
 	runScenarios := flag.Bool("run-scenarios", false, "execute all simulation scenarios and exit")
 	runSuite := flag.String("run-suite", "", "execute platform test suite (common, linux, windows, macos, scenarios) and exit")
@@ -104,25 +108,6 @@ func main() {
 
 	// Wire dynamic lowest-latency interface selection for rules set to "FASTEST"
 	ruleEng.SetFastestNICProvider(failoverSM.GetFastestInterface)
-
-	// Seed baseline monthly data & adapter caps if not yet initialized
-	currentYM := time.Now().Format("2006-01")
-	if hist, _ := database.GetMonthlyHistory(currentYM); len(hist) == 0 {
-		_ = database.RecordMonthlyUsage("2026-10", "eth0", "system-update", 650*1024*1024, 120*1024*1024)
-		_ = database.RecordMonthlyUsage("2026-10", "tailscale0", "orca-ide", 240*1024*1024, 75*1024*1024)
-		_ = database.RecordMonthlyUsage(currentYM, "eth0", "netpilot", 38*1024*1024, 12*1024*1024)
-		_ = database.RecordMonthlyUsage(currentYM, "tailscale0", "tailscaled", 45*1024*1024, 28*1024*1024)
-	}
-	if caps, _ := database.GetAdapterCaps(); len(caps) == 0 {
-		_ = database.SaveAdapterCap(db.AdapterCapRecord{
-			InterfaceName: "eth0",
-			RxLimitMbps:   100.0,
-			TxLimitMbps:   50.0,
-			DataQuotaMB:   50000.0,
-			DataUsedMB:    184.2,
-			Enabled:       true,
-		})
-	}
 
 	// Sample real host network counters in background
 	go func() {
@@ -265,46 +250,151 @@ func main() {
 		}
 	})
 
-	// Initialize System Tray
+	// Initialize System Tray (combining NetPilot controls + all original net-merge tray options)
 	sysTray := app.SystemTray.New()
 	sysTray.SetIcon(icon.PNG(netmergeCtrl.IsActive()))
 	sysTray.SetLabel("NetPilot")
 	sysTray.SetTooltip("NetPilot — Multi-Adapter Network Control Center")
 
 	trayMenu := app.NewMenu()
+
+	// 1. Open NetPilot Dashboard
 	openItem := trayMenu.Add("Open NetPilot")
 	openItem.OnClick(func(_ *application.Context) {
 		showMainWindow()
 	})
-
 	trayMenu.AddSeparator()
-	statusItem := trayMenu.Add("Adapter: System Default (Standby)")
+
+	// 2. Original net-merge Status & Total Speed Header
+	statusItem := trayMenu.Add("Paused · System Default")
 	statusItem.SetEnabled(false)
 
-	toggleItem := trayMenu.AddCheckbox("Enable Net-Merge Adapter", netmergeCtrl.IsActive())
+	// 3. Original net-merge Live Adapter Rows (up to 6 slots) with Speed Limit Submenus
+	const maxTrayAdapters = 6
+	trayAdapterLimits := []float64{0, 1, 2, 5, 10, 20, 50, 100}
+	type trayAdapterSlot struct {
+		sub    *application.MenuItem
+		capOpt []*application.MenuItem
+		name   string
+	}
+	adapterSlots := make([]trayAdapterSlot, maxTrayAdapters)
+	for i := 0; i < maxTrayAdapters; i++ {
+		slotIdx := i
+		lbl := fmt.Sprintf("Adapter %d", i+1)
+		subMenu := trayMenu.AddSubmenu(lbl)
+		subItem := trayMenu.FindByLabel(lbl)
+		headerItem := subMenu.Add("Speed limit")
+		headerItem.SetEnabled(false)
+		subMenu.AddSeparator()
+
+		opts := make([]*application.MenuItem, len(trayAdapterLimits))
+		for j, mbps := range trayAdapterLimits {
+			capVal := mbps
+			lbl := "Unlimited"
+			if capVal > 0 {
+				lbl = fmt.Sprintf("%.0f Mbit/s", capVal)
+			}
+			opt := subMenu.AddRadio(lbl, capVal == 0)
+			opt.OnClick(func(_ *application.Context) {
+				name := adapterSlots[slotIdx].name
+				if name != "" {
+					_ = netmergeCtrl.SetLimit(name, capVal)
+					for k, o := range adapterSlots[slotIdx].capOpt {
+						o.SetChecked(trayAdapterLimits[k] == capVal)
+					}
+					trayMenu.Update()
+				}
+			})
+			opts[j] = opt
+		}
+		if subItem != nil {
+			subItem.SetHidden(true)
+		}
+		adapterSlots[i] = trayAdapterSlot{
+			sub:    subItem,
+			capOpt: opts,
+		}
+	}
+
+	trayMenu.AddSeparator()
+
+	// 4. Start / Stop Merging (original net-merge toggle)
+	toggleItem := trayMenu.Add("Start Net-Merge")
 	toggleItem.OnClick(func(_ *application.Context) {
 		want := !netmergeCtrl.IsActive()
 		_ = service.SetNetMergeMode(want)
-		toggleItem.SetChecked(netmergeCtrl.IsActive())
-		sysTray.SetIcon(icon.PNG(netmergeCtrl.IsActive()))
+		active := netmergeCtrl.IsActive()
+		if active {
+			toggleItem.SetLabel("Stop Net-Merge")
+		} else {
+			toggleItem.SetLabel("Start Net-Merge")
+		}
+		sysTray.SetIcon(icon.PNG(active))
+		trayMenu.Update()
 	})
 
 	trayMenu.AddSeparator()
-	speedModeItem := trayMenu.AddRadio("Mode: Speed (Multi-Link Aggregation)", netmergeCtrl.GetConfig().RoutingMode != "backup")
-	backupModeItem := trayMenu.AddRadio("Mode: Backup (Primary -> Failover)", netmergeCtrl.GetConfig().RoutingMode == "backup")
+
+	// 5. NetPilot Routing Modes: Speed vs Backup
+	initCfg := netmergeCtrl.GetConfig()
+	speedModeItem := trayMenu.AddRadio("Mode: Speed (Multi-Link Aggregation)", initCfg.RoutingMode != "backup")
+	backupModeItem := trayMenu.AddRadio("Mode: Backup (Primary -> Failover)", initCfg.RoutingMode == "backup")
 
 	speedModeItem.OnClick(func(_ *application.Context) {
 		_ = service.SetNetMergeRoutingMode("speed", "", "")
 		speedModeItem.SetChecked(true)
 		backupModeItem.SetChecked(false)
+		trayMenu.Update()
 	})
 	backupModeItem.OnClick(func(_ *application.Context) {
 		_ = service.SetNetMergeRoutingMode("backup", "", "")
 		backupModeItem.SetChecked(true)
 		speedModeItem.SetChecked(false)
+		trayMenu.Update()
 	})
 
 	trayMenu.AddSeparator()
+
+	// 6. Original net-merge checkboxes: Use all adapters (IPv6 auto), Pause on single connection, Start at sign-in
+	useAllItem := trayMenu.AddCheckbox("Use all adapters (IPv6 only if every adapter has it)", initCfg.IPv6Mode != "on")
+	useAllItem.OnClick(func(_ *application.Context) {
+		cur := netmergeCtrl.GetConfig()
+		nextMode := "auto"
+		if cur.IPv6Mode != "on" {
+			nextMode = "on"
+		}
+		_ = netmergeCtrl.SetIPv6Mode(nextMode)
+		useAllItem.SetChecked(nextMode != "on")
+		trayMenu.Update()
+	})
+
+	pauseSingleItem := trayMenu.AddCheckbox("Pause when there is only one connection", initCfg.AutoPause)
+	pauseSingleItem.OnClick(func(_ *application.Context) {
+		cur := netmergeCtrl.GetConfig()
+		next := !cur.AutoPause
+		_ = netmergeCtrl.SetAutoPause(next)
+		pauseSingleItem.SetChecked(next)
+		trayMenu.Update()
+	})
+
+	autostartItem := trayMenu.AddCheckbox("Start at sign-in", initCfg.Autostart)
+	autostartItem.OnClick(func(_ *application.Context) {
+		cur := netmergeCtrl.GetConfig()
+		next := !cur.Autostart
+		if err := netmergeCtrl.SetAutostart(next); err == nil {
+			autostartItem.SetChecked(next)
+		} else {
+			autostartItem.SetChecked(cur.Autostart)
+		}
+		trayMenu.Update()
+	})
+
+	trayMenu.AddSeparator()
+
+	// 7. Version info & Quit
+	verItem := trayMenu.Add(fmt.Sprintf("NetPilot v%s (net-merge %s)", branding.AppVersion, netmerge.EmbeddedVersion()))
+	verItem.SetEnabled(false)
+
 	quitItem := trayMenu.Add("Quit NetPilot")
 	quitItem.OnClick(func(_ *application.Context) {
 		_ = service.SetNetMergeMode(false)
@@ -316,32 +406,86 @@ func main() {
 		showMainWindow()
 	})
 
-	// Background goroutine to keep tray icon & status synchronized with Net-Merge state
+	// Background goroutine to keep tray icon, adapter speeds, and menu options synchronized
 	go func() {
-		lastActive := !netmergeCtrl.IsActive()
-		lastMode := ""
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			active := netmergeCtrl.IsActive()
-			cfg := netmergeCtrl.GetConfig()
-			if active != lastActive || cfg.RoutingMode != lastMode {
-				lastActive = active
-				lastMode = cfg.RoutingMode
-				sysTray.SetIcon(icon.PNG(active))
-				toggleItem.SetChecked(active)
-				speedModeItem.SetChecked(cfg.RoutingMode != "backup")
-				backupModeItem.SetChecked(cfg.RoutingMode == "backup")
-				if active {
-					if cfg.RoutingMode == "backup" {
-						statusItem.SetLabel("Active: net-merge (Backup Mode)")
-					} else {
-						statusItem.SetLabel("Active: net-merge (Speed Mode)")
+			st, err := netmergeCtrl.GetStatus()
+			if err != nil {
+				continue
+			}
+			active := st.IsRunning
+			cfg := st.Config
+
+			sysTray.SetIcon(icon.PNG(active))
+			if active {
+				toggleItem.SetLabel("Stop Net-Merge")
+			} else {
+				toggleItem.SetLabel("Start Net-Merge")
+			}
+			speedModeItem.SetChecked(cfg.RoutingMode != "backup")
+			backupModeItem.SetChecked(cfg.RoutingMode == "backup")
+			useAllItem.SetChecked(cfg.IPv6Mode != "on")
+			pauseSingleItem.SetChecked(cfg.AutoPause)
+			autostartItem.SetChecked(st.Autostart)
+
+			// Update live adapter rows and aggregate speed
+			var totalDown, totalUp float64
+			upCount := 0
+			presentIdx := 0
+			for _, nic := range st.NICs {
+				if !nic.Present {
+					continue
+				}
+				totalDown += nic.LinkIn
+				totalUp += nic.LinkOut
+				if nic.State == "up" {
+					upCount++
+				}
+				if presentIdx < maxTrayAdapters {
+					slot := &adapterSlots[presentIdx]
+					slot.name = nic.Name
+					if slot.sub != nil {
+						stateSym := "✓"
+						if nic.State == "no internet" {
+							stateSym = "✗"
+						} else if nic.State == "checking" {
+							stateSym = "…"
+						}
+						downMbps := nic.LinkIn * 8 / 1e6
+						upMbps := nic.LinkOut * 8 / 1e6
+						limSuffix := ""
+						if nic.LimitMbps > 0 {
+							limSuffix = fmt.Sprintf(" (≤%.0fM)", nic.LimitMbps)
+						}
+						slot.sub.SetLabel(fmt.Sprintf("%s %s: ↓%.1f ↑%.1f Mbps%s", stateSym, nic.Name, downMbps, upMbps, limSuffix))
+						slot.sub.SetHidden(false)
+						for k, opt := range slot.capOpt {
+							opt.SetChecked(trayAdapterLimits[k] == nic.LimitMbps)
+						}
 					}
-				} else {
-					statusItem.SetLabel("Adapter: System Default (Standby)")
+					presentIdx++
 				}
 			}
+			for i := presentIdx; i < maxTrayAdapters; i++ {
+				if adapterSlots[i].sub != nil {
+					adapterSlots[i].sub.SetHidden(true)
+					adapterSlots[i].name = ""
+				}
+			}
+
+			totalMbps := (totalDown + totalUp) * 8 / 1e6
+			if active {
+				modeTag := "Speed"
+				if cfg.RoutingMode == "backup" {
+					modeTag = "Backup"
+				}
+				statusItem.SetLabel(fmt.Sprintf("Merging %d adapters (%s) — %.1f Mbps", upCount, modeTag, totalMbps))
+			} else {
+				statusItem.SetLabel("Paused · System Default (Standby)")
+			}
+			trayMenu.Update()
 		}
 	}()
 

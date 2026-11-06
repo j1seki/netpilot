@@ -393,7 +393,13 @@ export const TestDebug: React.FC = () => {
       )}
 
       {/* VIEW 2: Platform Suites */}
-      {activeTab === 'platforms' && (
+      {activeTab === 'platforms' && (() => {
+        const runtimeOs = (caps?.environment?.runtimeOs || '').toLowerCase();
+        const isWin = runtimeOs === 'windows';
+        const isLinux = runtimeOs === 'linux';
+        const isMac = runtimeOs === 'darwin' || runtimeOs === 'macos';
+        const hostLabel = runtimeOs ? runtimeOs.toUpperCase() : 'Host OS';
+        return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
             {/* Windows Suite */}
@@ -402,12 +408,14 @@ export const TestDebug: React.FC = () => {
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Monitor size={15} color="#38bdf8" /> Windows Suite
                 </span>
-                <span className="status-pill skipped" style={{ fontSize: '10px' }}>Blocked in Linux</span>
+                <span className={`status-pill ${isWin ? 'pass' : 'skipped'}`} style={{ fontSize: '10px' }}>
+                  {isWin ? 'Native Live' : `Blocked in ${hostLabel}`}
+                </span>
               </div>
               <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
                 Toolhelp32 processes, Wintun.dll packet driver, IP Helper route tables.
               </p>
-              <button className="btn btn-secondary btn-sm" style={{ width: '100%' }} onClick={() => handleRunSingleSuite('windows')} disabled={isRunningSingleSuite}>
+              <button className={`btn ${isWin ? 'btn-primary' : 'btn-secondary'} btn-sm`} style={{ width: '100%' }} onClick={() => handleRunSingleSuite('windows')} disabled={isRunningSingleSuite}>
                 <Play size={11} /> Run Windows Suite
               </button>
             </div>
@@ -418,12 +426,14 @@ export const TestDebug: React.FC = () => {
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Server size={15} color="#4ade80" /> Linux Suite
                 </span>
-                <span className="status-pill pass" style={{ fontSize: '10px' }}>Native Live</span>
+                <span className={`status-pill ${isLinux ? 'pass' : 'skipped'}`} style={{ fontSize: '10px' }}>
+                  {isLinux ? 'Native Live' : `Blocked in ${hostLabel}`}
+                </span>
               </div>
               <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
                 /proc process scanning, /proc/net/dev traffic counters, sysfs inspection.
               </p>
-              <button className="btn btn-primary btn-sm" style={{ width: '100%' }} onClick={() => handleRunSingleSuite('linux')} disabled={isRunningSingleSuite}>
+              <button className={`btn ${isLinux ? 'btn-primary' : 'btn-secondary'} btn-sm`} style={{ width: '100%' }} onClick={() => handleRunSingleSuite('linux')} disabled={isRunningSingleSuite}>
                 <Play size={11} /> Run Linux Suite
               </button>
             </div>
@@ -434,12 +444,14 @@ export const TestDebug: React.FC = () => {
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Cpu size={15} color="#c084fc" /> macOS Suite
                 </span>
-                <span className="status-pill skipped" style={{ fontSize: '10px' }}>Blocked in Linux</span>
+                <span className={`status-pill ${isMac ? 'pass' : 'skipped'}`} style={{ fontSize: '10px' }}>
+                  {isMac ? 'Native Live' : `Blocked in ${hostLabel}`}
+                </span>
               </div>
               <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
                 BSD routing sockets, utun devices, PF packet filter anchors.
               </p>
-              <button className="btn btn-secondary btn-sm" style={{ width: '100%' }} onClick={() => handleRunSingleSuite('macos')} disabled={isRunningSingleSuite}>
+              <button className={`btn ${isMac ? 'btn-primary' : 'btn-secondary'} btn-sm`} style={{ width: '100%' }} onClick={() => handleRunSingleSuite('macos')} disabled={isRunningSingleSuite}>
                 <Play size={11} /> Run macOS Suite
               </button>
             </div>
@@ -482,7 +494,8 @@ export const TestDebug: React.FC = () => {
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* VIEW 3: Scenario Explorer */}
       {activeTab === 'scenarios' && (

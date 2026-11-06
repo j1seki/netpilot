@@ -15,6 +15,7 @@ import (
 
 	"netpilot/internal/engine"
 	"netpilot/internal/execx"
+	"netpilot/internal/netmerge/embedded"
 	"netpilot/internal/nics"
 	"netpilot/internal/platform"
 	"netpilot/internal/state"
@@ -438,19 +439,16 @@ func (c *Controller) SetSystemWide(on bool) error {
 		c.tunOn = false
 		state.Clear(c.stateDir)
 
-		// Signal external binary if running
+		// Signal any running background/elevated daemon or external binary
 		_ = state.SendMarker(c.stateDir, "off")
 		if platform.InstanceRunning() {
 			bin := ResolveBinaryWithSource(c.config.EngineSource, c.config.BinaryPath, c.stateDir)
 			if bin.IsValid && bin.Path != "" {
-				exe, _ := os.Executable()
-				if bin.Path != exe {
-					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					cmd := exec.CommandContext(ctx, bin.Path, "off", "-state-dir", c.stateDir)
-					execx.PrepareCommand(cmd)
-					_ = cmd.Run()
-					cancel()
-				}
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				cmd := exec.CommandContext(ctx, bin.Path, "off", "-state-dir", c.stateDir)
+				execx.PrepareCommand(cmd)
+				_ = cmd.Run()
+				cancel()
 			}
 		}
 		return nil
@@ -460,96 +458,140 @@ func (c *Controller) SetSystemWide(on bool) error {
 	if c.tunOn {
 		return nil
 	}
-
-	c.applySchedulerModeLocked()
-
-	// 1. If user explicitly selected an external net-merge binary, or if an external instance is already running:
-	bin := ResolveBinaryWithSource(c.config.EngineSource, c.config.BinaryPath, c.stateDir)
-	exe, _ := os.Executable()
-
-	if platform.InstanceRunning() {
-		_ = state.SendMarker(c.stateDir, "on")
+	if _, ok := state.Read(c.stateDir); ok {
 		return nil
 	}
 
-	// 2. If built-in mode (default) and we have admin/root privileges, start TUN in-process directly!
-	if c.config.EngineSource != "external" && platform.IsAdmin() {
-		if err := platform.CheckDriver(); err == nil {
-			t := tun.New(c.balancer)
-			mtu := c.config.MTU
-			if mtu < 1280 || mtu > 65535 {
-				mtu = tun.DefaultMTU
-			}
-			t.MTU = mtu
-			if err := t.On(); err == nil {
-				c.tunDev = t
-				c.tunOn = true
-				c.tunSince = time.Now()
-				modeDesc := "system-wide (Speed Mode)"
-				if c.config.RoutingMode == "backup" {
-					modeDesc = "system-wide (Backup Mode)"
-				}
-				state.Write(c.stateDir, state.Status{
-					PID:     os.Getpid(),
-					Mode:    modeDesc,
-					V6:      c.balancer.V6State(),
-					Since:   c.tunSince,
-					Updated: time.Now(),
-					NICs:    c.sched.Snapshot(),
-				})
-				return nil
-			}
-		}
-	}
+	c.applySchedulerModeLocked()
+	_ = embedded.EnsureWintunDLL(c.stateDir)
 
-	// 3. Launch external or extracted embedded net-merge binary if available (and distinct from NetPilot GUI exe)
-	if bin.IsValid && bin.Path != "" && bin.Path != exe {
-		args := []string{
-			"run",
-			"-state-dir", c.stateDir,
-			"-mode", c.config.RoutingMode,
+	if platform.InstanceRunning() {
+		if err := state.SendMarker(c.stateDir, "on"); err != nil {
+			return err
 		}
-		if c.config.PrimaryAdapter != "" {
-			args = append(args, "-primary", c.config.PrimaryAdapter)
-		}
-		if c.config.SecondaryAdapter != "" {
-			args = append(args, "-secondary", c.config.SecondaryAdapter)
-		}
-		if runtime.GOOS == "windows" {
-			args = append(args, "-hidden")
-			if bin.TrayPath != "" && fileExists(bin.TrayPath) {
-				cmd := exec.Command(bin.TrayPath, "-state-dir", c.stateDir, "-mode", c.config.RoutingMode, "-primary", c.config.PrimaryAdapter, "-secondary", c.config.SecondaryAdapter)
-				execx.PrepareCommand(cmd)
-				if err := cmd.Start(); err == nil {
-					_ = state.SendMarker(c.stateDir, "on")
-					return nil
-				}
-			}
-		}
-		cmd := exec.Command(bin.Path, args...)
-		execx.PrepareCommand(cmd)
-		if err := cmd.Start(); err == nil {
+		if c.waitForActiveStatus(6 * time.Second) {
 			return nil
 		}
 	}
 
-	// 4. Activate multi-link balancer state in-process so NetPilot's net-merge adapter state is live
-	c.tunOn = true
-	c.tunSince = time.Now()
-	modeDesc := "system-wide (Speed Mode)"
-	if c.config.RoutingMode == "backup" {
-		modeDesc = "system-wide (Backup Mode)"
+	// 1. If built-in mode (default) and we have admin/root/CAP_NET_ADMIN privileges, start TUN in-process directly!
+	if c.config.EngineSource != "external" && platform.IsAdmin() {
+		if err := platform.CheckDriver(); err != nil {
+			return fmt.Errorf("TUN driver check failed: %w", err)
+		}
+		t := tun.New(c.balancer)
+		mtu := c.config.MTU
+		if mtu < 1280 || mtu > 65535 {
+			mtu = tun.DefaultMTU
+		}
+		t.MTU = mtu
+		if err := t.On(); err != nil {
+			return fmt.Errorf("failed to start built-in net-merge TUN adapter: %w", err)
+		}
+		c.tunDev = t
+		c.tunOn = true
+		c.tunSince = time.Now()
+		modeDesc := "system-wide (Speed Mode)"
+		if c.config.RoutingMode == "backup" {
+			modeDesc = "system-wide (Backup Mode)"
+		}
+		state.Write(c.stateDir, state.Status{
+			PID:     os.Getpid(),
+			Mode:    modeDesc,
+			V6:      c.balancer.V6State(),
+			Since:   c.tunSince,
+			Updated: time.Now(),
+			NICs:    c.sched.Snapshot(),
+		})
+		return nil
 	}
-	state.Write(c.stateDir, state.Status{
-		PID:     os.Getpid(),
-		Mode:    modeDesc,
-		V6:      c.balancer.V6State(),
-		Since:   c.tunSince,
-		Updated: time.Now(),
-		NICs:    c.sched.Snapshot(),
-	})
-	_ = state.SendMarker(c.stateDir, "on")
-	return nil
+
+	// 2. Built-in mode without admin privileges, or external binary mode:
+	// Spawn the daemon (`run`) and wait for it to write active status.json.
+	bin := ResolveBinaryWithSource(c.config.EngineSource, c.config.BinaryPath, c.stateDir)
+	if !bin.IsValid || bin.Path == "" {
+		return fmt.Errorf("net-merge binary is not valid: %s", bin.Error)
+	}
+
+	logPath := filepath.Join(c.stateDir, "net-merge.log")
+	args := []string{
+		"run",
+		"-state-dir", c.stateDir,
+		"-log", logPath,
+		"-mode", c.config.RoutingMode,
+		"-mtu", fmt.Sprintf("%d", c.config.MTU),
+		"-ipv6", c.config.IPv6Mode,
+	}
+	if c.config.IncludeNICs != "" {
+		args = append(args, "-include", c.config.IncludeNICs)
+	}
+	if c.config.PrimaryAdapter != "" {
+		args = append(args, "-primary", c.config.PrimaryAdapter)
+	}
+	if c.config.SecondaryAdapter != "" {
+		args = append(args, "-secondary", c.config.SecondaryAdapter)
+	}
+	if runtime.GOOS == "windows" {
+		args = append(args, "-hidden")
+	}
+
+	state.TakeMarker(c.stateDir, "off")
+	_ = state.Prepare(c.stateDir)
+
+	var launchErr error
+	if runtime.GOOS == "windows" && !platform.IsAdmin() && c.config.EngineSource != "external" {
+		// Trigger UAC elevation directly on our single binary (`netpilot.exe run ...`)
+		launchErr = platform.RelaunchElevated(args, true)
+	} else if runtime.GOOS == "linux" && !platform.IsAdmin() {
+		// On Linux when not root/CAP_NET_ADMIN, try non-interactive sudo first, then pkexec
+		if sudoPath, err := exec.LookPath("sudo"); err == nil {
+			checkCmd := exec.Command(sudoPath, "-n", "true")
+			execx.PrepareCommand(checkCmd)
+			if checkCmd.Run() == nil {
+				cmd := exec.Command(sudoPath, append([]string{"-n", bin.Path}, args...)...)
+				execx.PrepareCommand(cmd)
+				launchErr = cmd.Start()
+			} else if pkexecPath, err := exec.LookPath("pkexec"); err == nil {
+				cmd := exec.Command(pkexecPath, append([]string{bin.Path}, args...)...)
+				execx.PrepareCommand(cmd)
+				launchErr = cmd.Start()
+			} else {
+				launchErr = fmt.Errorf("CAP_NET_ADMIN or root required; run `sudo setcap cap_net_admin,cap_net_raw+ep %s` or launch with sudo", bin.Path)
+			}
+		}
+	} else {
+		cmd := exec.Command(bin.Path, args...)
+		execx.PrepareCommand(cmd)
+		launchErr = cmd.Start()
+	}
+
+	if launchErr != nil {
+		return fmt.Errorf("failed to launch net-merge engine: %w", launchErr)
+	}
+
+	if c.waitForActiveStatus(12 * time.Second) {
+		return nil
+	}
+
+	if logBytes, err := os.ReadFile(logPath); err == nil && len(logBytes) > 0 {
+		lines := strings.TrimSpace(string(logBytes))
+		if len(lines) > 300 {
+			lines = lines[len(lines)-300:]
+		}
+		return fmt.Errorf("net-merge engine did not become active: %s", lines)
+	}
+	return fmt.Errorf("net-merge engine did not start within timeout (check admin/UAC permissions or adapter connectivity)")
+}
+
+func (c *Controller) waitForActiveStatus(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, ok := state.Read(c.stateDir); ok {
+			return true
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return false
 }
 
 // SetAutostart enables or disables launch at sign-in.
@@ -658,6 +700,30 @@ func (c *Controller) StopSocks5() error {
 	c.socksLn = nil
 	c.socksRunning = false
 	return err
+}
+
+// SetIPv6Mode updates the IPv6 balancing policy ("auto", "on", "off") immediately.
+func (c *Controller) SetIPv6Mode(mode string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v6, ok := engine.ParseV6Mode(mode)
+	if !ok {
+		v6 = engine.V6Auto
+		mode = "auto"
+	}
+	c.config.IPv6Mode = mode
+	if c.balancer != nil {
+		c.balancer.SetV6Mode(v6)
+	}
+	return c.saveConfigLocked()
+}
+
+// SetAutoPause updates the auto-pause on single connection setting.
+func (c *Controller) SetAutoPause(autoPause bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.config.AutoPause = autoPause
+	return c.saveConfigLocked()
 }
 
 // SaveConfig updates and persists the net-merge configuration.

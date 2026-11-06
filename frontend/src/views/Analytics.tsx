@@ -4,11 +4,12 @@ import { DonutChart, MonthlyBarChart } from '../components/Charts';
 import { ArrowDown, ArrowUp, Calendar, Download, FileSpreadsheet } from 'lucide-react';
 
 export const Analytics: React.FC = () => {
+  const currentYearMonth = new Date().toISOString().slice(0, 7);
   const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
   const [apps, setApps] = useState<ProcessInfo[]>([]);
   const [monthlyRecords, setMonthlyRecords] = useState<MonthlyUsageRecord[]>([]);
   const [monthlySummaries, setMonthlySummaries] = useState<MonthlySummary[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-11');
+  const [selectedMonth, setSelectedMonth] = useState<string>(currentYearMonth);
   const [isExporting, setIsExporting] = useState(false);
 
   const loadData = async () => {
@@ -24,12 +25,15 @@ export const Analytics: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 2500);
+    loadData().catch((e) => console.error(e));
+    const interval = setInterval(() => loadData().catch((e) => console.error(e)), 2500);
     return () => clearInterval(interval);
   }, [selectedMonth]);
 
-  const totalBytes = apps.reduce((acc, a) => acc + a.bytesReceived + a.bytesSent, 0);
+  const totalMonthBytes = monthlyRecords.reduce((acc, r) => acc + r.bytesIn + r.bytesOut, 0);
+  const availableMonths = Array.from(
+    new Set([currentYearMonth, ...monthlySummaries.map(s => s.yearMonth).filter(Boolean)])
+  ).sort().reverse();
 
   const handleExportCsv = async () => {
     setIsExporting(true);
@@ -75,27 +79,27 @@ export const Analytics: React.FC = () => {
       {/* Top 3 Compact KPIs */}
       <div className="metric-grid" style={{ marginBottom: 0 }}>
         <div className="metric-box">
-          <span className="metric-label">Session Data Volume</span>
+          <span className="metric-label">Recorded Volume ({selectedMonth === 'all' ? 'All Time' : selectedMonth})</span>
           <div className="metric-value" style={{ color: '#60a5fa' }}>
-            {(totalBytes / (1024 * 1024)).toFixed(1)} <span style={{ fontSize: '11px' }}>MB</span>
+            {(totalMonthBytes / (1024 * 1024)).toFixed(2)} <span style={{ fontSize: '11px' }}>MB</span>
           </div>
-          <span className="metric-sub">Active session footprint</span>
+          <span className="metric-sub">Real interface byte counters</span>
         </div>
 
         <div className="metric-box">
           <span className="metric-label">Primary Link Load</span>
           <div className="metric-value" style={{ color: '#38bdf8' }}>
-            {interfaces[0]?.rxMbps?.toFixed(2) || '0.00'} <span style={{ fontSize: '11px' }}>Mbps</span>
+            {interfaces[0] ? (interfaces[0].rxMbps + interfaces[0].txMbps).toFixed(2) : '0.00'} <span style={{ fontSize: '11px' }}>Mbps</span>
           </div>
-          <span className="metric-sub">{interfaces[0]?.name || 'eth0'} (Live Dev)</span>
+          <span className="metric-sub">{interfaces[0]?.name || 'No adapter'} {interfaces[0]?.ip ? `(${interfaces[0].ip})` : ''}</span>
         </div>
 
         <div className="metric-box">
           <span className="metric-label">Secondary Link Load</span>
           <div className="metric-value" style={{ color: '#4ade80' }}>
-            {interfaces[1]?.rxMbps?.toFixed(2) || '0.00'} <span style={{ fontSize: '11px' }}>Mbps</span>
+            {interfaces[1] ? (interfaces[1].rxMbps + interfaces[1].txMbps).toFixed(2) : '0.00'} <span style={{ fontSize: '11px' }}>Mbps</span>
           </div>
-          <span className="metric-sub">{interfaces[1]?.name || 'tailscale0'} (Tunnel)</span>
+          <span className="metric-sub">{interfaces[1]?.name || 'Single adapter'} {interfaces[1]?.ip ? `(${interfaces[1].ip})` : ''}</span>
         </div>
       </div>
 
@@ -144,8 +148,11 @@ export const Analytics: React.FC = () => {
                 fontSize: '11.5px',
               }}
             >
-              <option value="2026-11">Nov 2026 (Current)</option>
-              <option value="2026-10">Oct 2026</option>
+              {availableMonths.map(m => (
+                <option key={m} value={m}>
+                  {m === currentYearMonth ? `${m} (Current)` : m}
+                </option>
+              ))}
               <option value="all">All Months</option>
             </select>
 
