@@ -1,9 +1,14 @@
 package netmerge
 
 import (
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"netpilot/internal/engine"
+	"netpilot/internal/nics"
 )
 
 func TestNetMergeController(t *testing.T) {
@@ -83,5 +88,31 @@ func TestNetMergeController(t *testing.T) {
 	// Turning off again after a failed start must still succeed.
 	if err := extCtrl.SetSystemWide(false); err != nil {
 		t.Fatalf("SetSystemWide(false) after failed start failed: %v", err)
+	}
+}
+
+func TestUpdateSchedulerFromDiscoveryDistinguishesEmptyScanFromError(t *testing.T) {
+	adapter := nics.Nic{Name: "Ethernet", Index: 4, IP: net.ParseIP("192.0.2.10"), Weight: 1}
+	sched := engine.NewScheduler([]nics.Nic{adapter})
+	if err := updateSchedulerFromDiscovery(sched, nil, errors.New("temporary enumeration failure")); err == nil {
+		t.Fatal("discovery error should be returned")
+	}
+	if got := sched.Snapshot(); len(got) != 1 || !got[0].Present {
+		t.Fatalf("failed discovery must preserve current adapter: %+v", got)
+	}
+	if err := updateSchedulerFromDiscovery(sched, nil, nil); err != nil {
+		t.Fatalf("successful empty discovery: %v", err)
+	}
+	if got := sched.Snapshot(); len(got) != 0 {
+		t.Fatalf("successful empty scan should remove idle adapters: %+v", got)
+	}
+	if sched.Acquire(nil) != nil {
+		t.Fatal("a vanished adapter must not receive a new flow")
+	}
+	if err := updateSchedulerFromDiscovery(sched, []nics.Nic{adapter}, nil); err != nil {
+		t.Fatalf("rediscovery: %v", err)
+	}
+	if got := sched.Snapshot(); len(got) != 1 || !got[0].Present {
+		t.Fatalf("adapter should be re-added after a later non-empty scan: %+v", got)
 	}
 }
