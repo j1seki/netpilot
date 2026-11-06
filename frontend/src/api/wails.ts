@@ -53,6 +53,10 @@ export interface InterfaceInfo {
   location?: string;
   isUp: boolean;
   isHardware: boolean;
+  isDefault: boolean;
+  isVirtual: boolean;
+  latencyRouterMs: number;
+  latencyWebMs: number;
   rxMbps: number;
   txMbps: number;
   linkState: string;
@@ -132,6 +136,38 @@ export interface MonthlySummary {
 export interface MonthlyHistoryResponse {
   records: MonthlyUsageRecord[];
   summaries: MonthlySummary[];
+}
+
+export type UsagePeriod = 'today' | 'week' | 'month' | 'all';
+
+export interface UsageHistoryRecord {
+  period: string;
+  interfaceName: string;
+  appName: string;
+  bytesIn: number;
+  bytesOut: number;
+  rxMb: number;
+  txMb: number;
+  totalMb: number;
+  updatedAt: string;
+}
+
+export interface UsageHistorySummary {
+  period: string;
+  totalRxMb: number;
+  totalTxMb: number;
+  totalMb: number;
+}
+
+export interface UsageHistoryResponse {
+  period: UsagePeriod;
+  from: string;
+  to: string;
+  records: UsageHistoryRecord[];
+  summaries: UsageHistorySummary[];
+  totalRxMb: number;
+  totalTxMb: number;
+  totalMb: number;
 }
 
 export interface NetMergeSlotStats {
@@ -511,6 +547,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cap),
     });
+  },
+
+  async getUsageHistory(period: UsagePeriod): Promise<UsageHistoryResponse> {
+    const url = `usage-history?period=${encodeURIComponent(period)}`;
+    const res = await fetchApi<UsageHistoryResponse>(url);
+    return requireApi(res, url);
   },
 
   async getMonthlyHistory(month?: string): Promise<MonthlyHistoryResponse> {

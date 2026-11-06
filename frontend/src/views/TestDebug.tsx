@@ -50,18 +50,24 @@ export const TestDebug: React.FC = () => {
   const [logSearch, setLogSearch] = useState('');
   const [logLevel, setLogLevel] = useState('');
   const [isLogPaused, setIsLogPaused] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const loadInitial = async () => {
-    const [c, l] = await Promise.all([
-      api.getCapabilities(),
-      api.queryLogs({}),
-    ]);
-    setCaps(c);
-    setLogs(l);
+    try {
+      const [c, l] = await Promise.all([
+        api.getCapabilities(),
+        api.queryLogs({}),
+      ]);
+      setCaps(c);
+      setLogs(l);
+      setErrorMsg('');
+    } catch (err: any) {
+      setErrorMsg(`Could not load diagnostics: ${err?.message || String(err)}`);
+    }
   };
 
   useEffect(() => {
-    loadInitial();
+    loadInitial().catch((e) => console.error(e));
   }, []);
 
   // Periodic log refresh
@@ -77,10 +83,13 @@ export const TestDebug: React.FC = () => {
   // One-Click Run All Execution
   const handleRunAllUnified = async () => {
     setIsRunningAll(true);
+    setErrorMsg('');
     try {
       const report = await api.runAllUnified(skipDisruptive);
       setUnifiedReport(report);
       setScenarios(report.scenarios || []);
+    } catch (err: any) {
+      setErrorMsg(`Unified test run failed: ${err?.message || String(err)}`);
     } finally {
       setIsRunningAll(false);
     }
@@ -89,17 +98,25 @@ export const TestDebug: React.FC = () => {
   const handleRunSingleSuite = async (suite: 'common' | 'linux' | 'windows' | 'macos') => {
     setIsRunningSingleSuite(true);
     setSelectedSuite(suite);
+    setErrorMsg('');
     try {
       const rep = await api.runPlatformSuite(suite);
       setActiveSuiteReport(rep);
+    } catch (err: any) {
+      setErrorMsg(`Platform suite failed: ${err?.message || String(err)}`);
     } finally {
       setIsRunningSingleSuite(false);
     }
   };
 
   const handleGenerateDiagnostics = async () => {
-    const json = await api.exportDiagnosticReport(true);
-    setDiagJson(json);
+    setErrorMsg('');
+    try {
+      const json = await api.exportDiagnosticReport(true);
+      setDiagJson(json);
+    } catch (err: any) {
+      setErrorMsg(`Could not generate diagnostic bundle: ${err?.message || String(err)}`);
+    }
   };
 
   // Build chart segments for test report
@@ -112,6 +129,19 @@ export const TestDebug: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {errorMsg && (
+        <div style={{
+          padding: '9px 12px',
+          borderRadius: '7px',
+          background: 'rgba(244, 63, 94, 0.12)',
+          border: '1px solid rgba(244, 63, 94, 0.3)',
+          color: '#fb7185',
+          fontSize: '11.5px',
+        }}>
+          {errorMsg}
+        </div>
+      )}
+
       {/* Test & Debug Compact Tab Bar */}
       <div className="tab-bar" style={{ marginBottom: '4px' }}>
         <button className={`tab-btn ${activeTab === 'unified' ? 'active' : ''}`} onClick={() => setActiveTab('unified')}>
@@ -340,6 +370,14 @@ export const TestDebug: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
+                {scenarios.length === 0 && (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: '22px', color: 'var(--text-muted)' }}>
+                      No scenarios have run yet. Click <strong>Run All Tests &amp; Scenarios</strong> to execute
+                      the deterministic checks, or open <strong>Scenario Explorer</strong> to run one at a time.
+                    </td>
+                  </tr>
+                )}
                 {scenarios.map(sc => (
                   <tr key={sc.id}>
                     <td>

@@ -36,19 +36,29 @@ export type MainTab =
   | 'test-suite'
   | 'settings';
 
+const MAIN_TABS: MainTab[] = ['dashboard', 'netmerge', 'ttl', 'rules', 'usage', 'test-suite', 'settings'];
+
+function initialTab(): MainTab {
+  // Deep links are handy for docs and for jumping straight to a page:
+  // index.html?tab=usage#/usage-style URLs from the tray/docs.
+  const requested = new URLSearchParams(window.location.search).get('tab') as MainTab | null;
+  return requested && MAIN_TABS.includes(requested) ? requested : 'dashboard';
+}
+
 export const App: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<MainTab>('dashboard');
+  const startTab = initialTab();
+  const [currentTab, setCurrentTab] = useState<MainTab>(startTab);
   const [branding, setBranding] = useState<BrandingInfo | null>(null);
   const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
   const [netMergeStatus, setNetMergeStatus] = useState<NetMergeStatus | null>(null);
   const [visitedTabs, setVisitedTabs] = useState<Record<MainTab, boolean>>({
-    dashboard: true,
-    netmerge: false,
-    ttl: false,
-    rules: false,
-    usage: false,
-    'test-suite': false,
-    settings: false,
+    dashboard: startTab === 'dashboard',
+    netmerge: startTab === 'netmerge',
+    ttl: startTab === 'ttl',
+    rules: startTab === 'rules',
+    usage: startTab === 'usage',
+    'test-suite': startTab === 'test-suite',
+    settings: startTab === 'settings',
   });
 
   // Real aggregate rolling history for top-bar sparkline

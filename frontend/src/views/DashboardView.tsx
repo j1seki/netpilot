@@ -18,6 +18,10 @@ import {
   Search,
   Activity,
   GitMerge,
+  Eye,
+  EyeOff,
+  Router,
+  Wifi,
 } from 'lucide-react';
 
 interface AdapterWithHistory extends InterfaceInfo {
@@ -36,6 +40,9 @@ export const DashboardView: React.FC = () => {
   const [rules, setRules] = useState<RuleRecord[]>([]);
   const [appSearch, setAppSearch] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string>('');
+  // WAN IPs are hidden by default so a screen share or screenshot cannot leak
+  // the user's public addresses by accident.
+  const [showWan, setShowWan] = useState<boolean>(false);
 
   // Modal for Add / Edit App Rule
   const [showModal, setShowModal] = useState<boolean>(false);
@@ -116,8 +123,23 @@ export const DashboardView: React.FC = () => {
 
   const isMergeActive = nmStatus?.isRunning ?? false;
   const routingMode = nmStatus?.routingMode || nmStatus?.config?.routingMode || 'speed';
-  const primaryAdapter = nmStatus?.config?.primaryAdapter || interfaces[0]?.name || '';
-  const secondaryAdapter = nmStatus?.config?.secondaryAdapter || interfaces[1]?.name || interfaces[0]?.name || '';
+
+  // Primary/secondary only mean something in Backup mode. In Speed mode the
+  // primary link is net-merge itself, and when NetPilot is off the OS owns the
+  // default route. Default to the OS default adapter, never array position.
+  const osDefaultAdapter = interfaces.find(i => i.isDefault);
+  const eligibleAdapters = interfaces.filter(i => !i.isVirtual && i.isUp);
+  const primaryAdapter =
+    nmStatus?.config?.primaryAdapter ||
+    osDefaultAdapter?.name ||
+    eligibleAdapters[0]?.name ||
+    interfaces[0]?.name ||
+    '';
+  const secondaryAdapter =
+    nmStatus?.config?.secondaryAdapter ||
+    eligibleAdapters.find(i => i.name !== primaryAdapter)?.name ||
+    interfaces.find(i => i.name !== primaryAdapter)?.name ||
+    '';
 
   const openModalForRule = (rule?: RuleRecord, defaultAppName?: string, defaultPath?: string) => {
     if (rule) {
@@ -258,24 +280,36 @@ export const DashboardView: React.FC = () => {
             <span>
               Default Route:{' '}
               <strong style={{ color: isMergeActive ? '#10b981' : '#fafafa' }}>
-                {isMergeActive ? 'net-merge' : 'System Default'}
+                {isMergeActive ? 'net-merge' : `System Default${osDefaultAdapter ? ` (${osDefaultAdapter.name})` : ''}`}
               </strong>
             </span>
             <span>
               Active Flows: <strong className="font-mono" style={{ color: '#fafafa' }}>{totalSlotsActive}</strong>
             </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowWan(v => !v)}
+              title={showWan ? 'Hide WAN/public IP addresses' : 'Show WAN/public IP addresses'}
+              aria-label={showWan ? 'Hide WAN IP addresses' : 'Show WAN IP addresses'}
+              style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '3px 8px', fontSize: '10.5px' }}
+            >
+              {showWan ? <EyeOff size={12} /> : <Eye size={12} />}
+              <span>{showWan ? 'Hide WAN' : 'Show WAN'}</span>
+            </button>
           </div>
         </div>
 
         <table className="data-table">
           <thead>
             <tr>
-              <th style={{ width: '18%' }}>Adapter</th>
-              <th style={{ width: '22%' }}>Addresses (LAN / WAN)</th>
-              <th style={{ width: '16%' }}>Role & Weight</th>
-              <th style={{ width: '18%' }}>Download Load</th>
-              <th style={{ width: '14%' }}>Upload Load</th>
-              <th style={{ width: '12%', textAlign: 'right' }}>Trend</th>
+              <th style={{ width: '15%' }}>Adapter</th>
+              <th style={{ width: '20%' }}>Addresses (LAN / WAN)</th>
+              <th style={{ width: '14%' }}>Role & Weight</th>
+              <th style={{ width: '12%' }}>Latency</th>
+              <th style={{ width: '16%' }}>Download Load</th>
+              <th style={{ width: '13%' }}>Upload Load</th>
+              <th style={{ width: '10%', textAlign: 'right' }}>Trend</th>
             </tr>
           </thead>
           <tbody>
@@ -291,11 +325,11 @@ export const DashboardView: React.FC = () => {
               const rxBarPct = Math.min(100, Math.max(rx > 0 ? 4 : 0, (rx / capMbps) * 100));
               const txBarPct = Math.min(100, Math.max(tx > 0 ? 4 : 0, (tx / capMbps) * 100));
 
-              let roleLabel = 'Balanced';
+              let roleLabel = 'Merged Pool';
               let roleColor = '#38bdf8';
               if (!isMergeActive) {
-                roleLabel = 'System Default';
-                roleColor = '#a1a1aa';
+                roleLabel = iface.isDefault ? 'OS Default' : 'Standby';
+                roleColor = iface.isDefault ? '#10b981' : '#71717a';
               } else if (routingMode === 'backup') {
                 if (iface.name === primaryAdapter) {
                   roleLabel = 'Primary Active';
@@ -307,7 +341,20 @@ export const DashboardView: React.FC = () => {
                   roleLabel = 'Backup Pool';
                   roleColor = '#a1a1aa';
                 }
+              } else {
+                // Speed mode has no primary/secondary: every healthy adapter is
+                // used at once. The OS default is still highlighted for context.
+                roleLabel = iface.isDefault ? 'Merged · OS Default' : 'Merged Pool';
+                roleColor = iface.isDefault ? '#38bdf8' : '#a1a1aa';
               }
+
+              const latencyColor = (ms: number) => ms <= 0 ? '#71717a' : ms < 50 ? '#34d399' : ms < 150 ? '#fbbf24' : '#fb7185';
+              const latencyText = (ms: number) => {
+                if (!(ms > 0)) return '—';
+                if (ms < 1) return `${ms.toFixed(2)} ms`;
+                if (ms < 10) return `${ms.toFixed(1)} ms`;
+                return `${ms.toFixed(0)} ms`;
+              };
 
               return (
                 <tr key={iface.name}>
@@ -316,8 +363,18 @@ export const DashboardView: React.FC = () => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
                       <span className={`beszel-dot ${iface.isUp ? 'online' : 'down'}`} />
                       <div>
-                        <div style={{ fontWeight: 600, fontSize: '13px', color: '#fafafa' }}>
-                          {iface.name}
+                        <div style={{ fontWeight: 600, fontSize: '13px', color: '#fafafa', display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                          <span>{iface.name}</span>
+                          {iface.isDefault && (
+                            <span className="status-pill pass" style={{ fontSize: '9px', padding: '1px 5px' }} title="Adapter carrying the OS default route">
+                              OS DEFAULT
+                            </span>
+                          )}
+                          {iface.isVirtual && (
+                            <span className="status-pill warn" style={{ fontSize: '9px', padding: '1px 5px' }} title="VPN, tunnel or software adapter. Never auto-selected as a physical primary.">
+                              VPN/VIRTUAL
+                            </span>
+                          )}
                         </div>
                         <div style={{ fontSize: '10.5px', color: '#71717a' }}>
                           {iface.isUp ? 'Online' : 'Offline'}
@@ -327,13 +384,28 @@ export const DashboardView: React.FC = () => {
                     </div>
                   </td>
 
-                  {/* LAN & WAN IPs */}
+                  {/* LAN & WAN IPs (WAN hidden until the eye toggle is used) */}
                   <td className="font-mono" style={{ fontSize: '11px' }}>
                     <div style={{ color: '#d4d4d8' }}>{iface.ip || 'Unassigned'}</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: iface.wanIp ? '#10b981' : '#71717a', fontSize: '10.5px' }}>
                       <Globe size={10} />
-                      <span>{iface.wanIp || 'Local subnet'}</span>
-                      {iface.location && <span style={{ color: '#71717a' }}>({iface.location})</span>}
+                      <span title={showWan ? (iface.wanIp || 'Local subnet') : 'WAN IP hidden — click Show WAN in the table header'}>
+                        {showWan ? (iface.wanIp || 'Local subnet') : (iface.wanIp ? '••••••••' : 'Local subnet')}
+                      </span>
+                      {showWan && iface.location && <span style={{ color: '#71717a' }}>({iface.location})</span>}
+                      {showWan && iface.isp && <span style={{ color: '#71717a' }}>· {iface.isp}</span>}
+                    </div>
+                  </td>
+
+                  {/* Router / web latency */}
+                  <td className="font-mono" style={{ fontSize: '10.5px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: latencyColor(iface.latencyRouterMs) }} title="ICMP round-trip to this adapter's default gateway">
+                      <Router size={10} />
+                      <span>{latencyText(iface.latencyRouterMs)}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: latencyColor(iface.latencyWebMs), marginTop: '2px' }} title="TCP handshake to a public anycast resolver, bound to this adapter">
+                      <Wifi size={10} />
+                      <span>{latencyText(iface.latencyWebMs)}</span>
                     </div>
                   </td>
 
@@ -703,7 +775,7 @@ export const DashboardView: React.FC = () => {
                   <option value="FASTEST">Fastest Adapter (Lowest Latency)</option>
                   {interfaces.map(i => (
                     <option key={i.name} value={i.name}>
-                      {i.name} ({i.ip || 'No IP'})
+                      {i.name} ({i.ip || 'No IP'}){i.isDefault ? ' · OS default' : ''}{i.isVirtual ? ' · VPN/virtual' : ''}
                     </option>
                   ))}
                 </select>
@@ -721,7 +793,7 @@ export const DashboardView: React.FC = () => {
                   <option value="">net-merge / System Default</option>
                   {interfaces.map(i => (
                     <option key={i.name} value={i.name}>
-                      {i.name}
+                      {i.name}{i.isDefault ? ' · OS default' : ''}{i.isVirtual ? ' · VPN/virtual' : ''}
                     </option>
                   ))}
                 </select>

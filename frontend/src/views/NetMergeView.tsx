@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, NetMergeStatus, NetMergeConfig } from '../api/wails';
+import { api, InterfaceInfo, NetMergeStatus, NetMergeConfig } from '../api/wails';
 import {
   Power,
   RefreshCw,
@@ -15,6 +15,7 @@ import {
 
 export const NetMergeView: React.FC = () => {
   const [status, setStatus] = useState<NetMergeStatus | null>(null);
+  const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
   const [config, setConfig] = useState<NetMergeConfig | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [limitInputs, setLimitInputs] = useState<Record<string, string>>({});
@@ -23,24 +24,39 @@ export const NetMergeView: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string>('');
 
   const loadStatus = async () => {
-    const st = await api.getNetMergeStatus();
-    setStatus(st);
-    if (!config) {
-      setConfig(st.config);
-      setSocksAddr(st.config.socksAddress || '127.0.0.1:1080');
+    try {
+      const st = await api.getNetMergeStatus();
+      setStatus(st);
+      if (!config) {
+        setConfig(st.config);
+        setSocksAddr(st.config.socksAddress || '127.0.0.1:1080');
+      }
+      const lims: Record<string, string> = {};
+      if (st.limits) {
+        Object.entries(st.limits).forEach(([k, v]) => {
+          lims[k] = String(v);
+        });
+      }
+      setLimitInputs(prev => ({ ...lims, ...prev }));
+    } catch (err: any) {
+      setErrorMsg(`Could not read Net-Merge status: ${err?.message || String(err)}`);
     }
-    const lims: Record<string, string> = {};
-    if (st.limits) {
-      Object.entries(st.limits).forEach(([k, v]) => {
-        lims[k] = String(v);
-      });
-    }
-    setLimitInputs(prev => ({ ...lims, ...prev }));
   };
 
   useEffect(() => {
     loadStatus();
     const interval = setInterval(loadStatus, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // The OS default route is the honest default for Backup mode. It also lets the
+  // UI explain why a VPN adapter should not be treated as a physical primary.
+  useEffect(() => {
+    const loadIfaces = () => {
+      api.getInterfaces().then(setInterfaces).catch(() => {});
+    };
+    loadIfaces();
+    const interval = setInterval(loadIfaces, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -50,11 +66,10 @@ export const NetMergeView: React.FC = () => {
   };
 
   const handleToggleSystemWide = async () => {
-    if (!status) return;
     setLoading(true);
     setErrorMsg('');
     try {
-      const next = !status.isRunning;
+      const next = !(status?.isRunning ?? false);
       await api.toggleNetMerge(next);
       showToast(
         next
@@ -69,33 +84,56 @@ export const NetMergeView: React.FC = () => {
     }
   };
 
+  const osDefaultName = interfaces.find(i => i.isDefault)?.name || '';
+  const physicalNames = interfaces.filter(i => i.isUp && !i.isVirtual).map(i => i.name);
+
   const handleSwitchRoutingMode = async (mode: 'speed' | 'backup', primary?: string, secondary?: string) => {
-    if (!status) return;
-    const pri = primary !== undefined ? primary : (config?.primaryAdapter || status.nics?.[0]?.Name || '');
-    const sec = secondary !== undefined ? secondary : (config?.secondaryAdapter || status.nics?.[1]?.Name || status.nics?.[0]?.Name || '');
-    await api.setNetMergeRoutingMode(mode, pri, sec);
-    if (config) {
-      setConfig({
-        ...config,
-        routingMode: mode,
-        primaryAdapter: pri,
-        secondaryAdapter: sec,
-      });
+    const pri = primary !== undefined
+      ? primary
+      : (config?.primaryAdapter || osDefaultName || physicalNames[0] || status?.nics?.[0]?.Name || '');
+    const sec = secondary !== undefined
+      ? secondary
+      : (config?.secondaryAdapter || physicalNames.find(n => n !== pri) || status?.nics?.find(n => n.Name !== pri)?.Name || '');
+    setErrorMsg('');
+    try {
+      await api.setNetMergeRoutingMode(mode, pri, sec);
+      if (config) {
+        setConfig({
+          ...config,
+          routingMode: mode,
+          primaryAdapter: pri,
+          secondaryAdapter: sec,
+        });
+      }
+      showToast(
+        mode === 'backup'
+          ? `Switched to Backup Failover mode (Primary: ${pri || 'OS default'} → Secondary: ${sec || 'auto'}).`
+          : 'Switched to Speed Aggregation mode (all healthy adapters used simultaneously; no primary/secondary).'
+      );
+      await loadStatus();
+    } catch (err: any) {
+      setErrorMsg(`Could not switch routing mode: ${err?.message || String(err)}`);
     }
-    showToast(
-      mode === 'backup'
-        ? `Switched to Backup Failover mode (Primary: ${pri || 'auto'} → Secondary: ${sec || 'auto'}).`
-        : 'Switched to Speed Aggregation mode (all healthy adapters used simultaneously).'
-    );
-    await loadStatus();
   };
 
   const handleToggleAutostart = async () => {
-    if (!status) return;
-    const next = !status.autostart;
-    await api.setNetMergeAutostart(next);
-    showToast(`Sign-in autostart ${next ? 'enabled' : 'disabled'}.`);
-    await loadStatus();
+    // Do not silently return when status has not loaded yet: the endpoint works
+    // independently and a silent no-op is exactly what made this button look dead.
+    const next = !(status?.autostart ?? false);
+    setLoading(true);
+    setErrorMsg('');
+    try {
+      await api.setNetMergeAutostart(next);
+      showToast(`Sign-in autostart ${next ? 'enabled' : 'disabled'}.`);
+      await loadStatus();
+    } catch (err: any) {
+      setErrorMsg(
+        `Could not ${next ? 'enable' : 'disable'} sign-in autostart: ${err?.message || String(err)}. ` +
+        'On Windows this needs administrator rights; on macOS the passwordless sudo rule must be installed once.'
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleApplyLimit = async (adapter: string) => {
@@ -142,7 +180,9 @@ export const NetMergeView: React.FC = () => {
 
   const isRunning = status?.isRunning || false;
   const routingMode = status?.routingMode || config?.routingMode || 'speed';
-  const adapterNames = (status?.nics || []).map(n => n.Name);
+  const adapterNames = interfaces.length > 0
+    ? interfaces.filter(i => i.isUp).map(i => i.name)
+    : (status?.nics || []).map(n => n.Name);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -237,7 +277,8 @@ export const NetMergeView: React.FC = () => {
           <button
             className="btn btn-secondary"
             onClick={handleToggleAutostart}
-            title="Start automatically at sign-in"
+            disabled={loading}
+            title={status?.autostart ? 'Disable starting net-merge at sign-in' : 'Enable starting net-merge at sign-in'}
           >
             <span>Autostart: {status?.autostart ? 'ON' : 'OFF'}</span>
           </button>
@@ -281,6 +322,10 @@ export const NetMergeView: React.FC = () => {
           <p style={{ fontSize: '11.5px', color: '#a1a1aa', lineHeight: 1.5 }}>
             Default behavior of <strong>net-merge</strong>: utilizes all healthy network adapters simultaneously using weighted least-busy-flows scheduling for maximum combined download and upload speed.
           </p>
+          <p style={{ fontSize: '10.5px', color: '#38bdf8', marginTop: '8px', lineHeight: 1.5 }}>
+            Speed Mode has no Primary or Secondary adapter — the merged <strong>net-merge</strong> adapter is the
+            default route and every healthy link is used at once.
+          </p>
         </div>
 
         {/* Backup Mode Card */}
@@ -310,41 +355,63 @@ export const NetMergeView: React.FC = () => {
             Routes 100% of traffic through the <strong>Primary Adapter</strong> while it is online. Automatically switches to the <strong>Secondary Adapter</strong> only when the primary connection fails, and switches back upon recovery.
           </p>
 
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', paddingTop: '6px', borderTop: '1px solid #232329' }}
-          >
-            <div>
-              <label style={{ fontSize: '10.5px', color: '#a1a1aa', display: 'block', marginBottom: '3px' }}>
-                Primary Adapter
-              </label>
-              <select
-                value={config?.primaryAdapter || adapterNames[0] || ''}
-                onChange={e => handleSwitchRoutingMode('backup', e.target.value, config?.secondaryAdapter)}
-                style={{ width: '100%', padding: '4px 8px', fontSize: '11.5px' }}
-              >
-                {adapterNames.length === 0 && <option value="">Auto-detect Primary</option>}
-                {adapterNames.map(name => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-              </select>
+          {routingMode === 'backup' ? (
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', paddingTop: '6px', borderTop: '1px solid #232329' }}
+            >
+              <div>
+                <label style={{ fontSize: '10.5px', color: '#a1a1aa', display: 'block', marginBottom: '3px' }}>
+                  Primary Adapter {osDefaultName ? `(OS default: ${osDefaultName})` : ''}
+                </label>
+                <select
+                  value={config?.primaryAdapter || osDefaultName || adapterNames[0] || ''}
+                  onChange={e => handleSwitchRoutingMode('backup', e.target.value, config?.secondaryAdapter)}
+                  style={{ width: '100%', padding: '4px 8px', fontSize: '11.5px' }}
+                >
+                  {adapterNames.length === 0 && <option value="">Auto-detect Primary</option>}
+                  {adapterNames.map(name => {
+                    const info = interfaces.find(i => i.name === name);
+                    return (
+                      <option key={name} value={name}>
+                        {name}{info?.isDefault ? ' · OS default' : ''}{info?.isVirtual ? ' · VPN/virtual' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: '10.5px', color: '#a1a1aa', display: 'block', marginBottom: '3px' }}>
+                  Secondary / Backup Adapter
+                </label>
+                <select
+                  value={config?.secondaryAdapter || physicalNames.find(n => n !== (config?.primaryAdapter || osDefaultName)) || adapterNames[1] || ''}
+                  onChange={e => handleSwitchRoutingMode('backup', config?.primaryAdapter || osDefaultName, e.target.value)}
+                  style={{ width: '100%', padding: '4px 8px', fontSize: '11.5px' }}
+                >
+                  {adapterNames.length === 0 && <option value="">Auto-detect Secondary</option>}
+                  {adapterNames.map(name => {
+                    const info = interfaces.find(i => i.name === name);
+                    return (
+                      <option key={name} value={name}>
+                        {name}{info?.isDefault ? ' · OS default' : ''}{info?.isVirtual ? ' · VPN/virtual' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <div style={{ gridColumn: '1 / -1', fontSize: '10px', color: '#71717a' }}>
+                Defaults follow the OS default route. Manual choices are only used in Backup mode; Speed mode ignores them.
+              </div>
             </div>
-            <div>
-              <label style={{ fontSize: '10.5px', color: '#a1a1aa', display: 'block', marginBottom: '3px' }}>
-                Secondary / Backup Adapter
-              </label>
-              <select
-                value={config?.secondaryAdapter || adapterNames[1] || adapterNames[0] || ''}
-                onChange={e => handleSwitchRoutingMode('backup', config?.primaryAdapter, e.target.value)}
-                style={{ width: '100%', padding: '4px 8px', fontSize: '11.5px' }}
-              >
-                {adapterNames.length === 0 && <option value="">Auto-detect Secondary</option>}
-                {adapterNames.map(name => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-              </select>
+          ) : (
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{ paddingTop: '8px', borderTop: '1px solid #232329', fontSize: '10.5px', color: '#71717a' }}
+            >
+              Primary/Secondary selectors appear when Backup mode is selected. In Speed mode the merged adapter is the primary link.
             </div>
-          </div>
+          )}
         </div>
       </div>
 

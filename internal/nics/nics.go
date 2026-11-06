@@ -33,6 +33,30 @@ func DiscoverNics(include []string, weights map[string]float64) ([]Nic, error) {
 	return nics, err
 }
 
+// IsVirtualName reports whether an interface name is a well-known VPN, tunnel or
+// software adapter. It is a cheap name-only fallback for callers that only have a
+// net.Interface value; VirtualAdapterMap uses the richer platform metadata.
+func IsVirtualName(name string) bool {
+	return virtualName.MatchString(name)
+}
+
+// VirtualAdapterMap returns the adapters the platform reports as virtual/tunnel
+// interfaces, keyed by interface index. The value is a human-readable reason.
+// A missing index means the adapter looks like real hardware.
+func VirtualAdapterMap() map[int]string {
+	infos, err := adapterInfos()
+	if err != nil || infos == nil {
+		return nil
+	}
+	out := make(map[int]string)
+	for idx, ai := range infos {
+		if ai.virtual != "" {
+			out[idx] = ai.virtual
+		}
+	}
+	return out
+}
+
 func DiscoverNicsDetailed(include []string, weights map[string]float64) ([]Nic, []Skip, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {

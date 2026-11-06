@@ -214,6 +214,13 @@ func (r SettingRef) Compact() string {
 type Setting struct {
 	SettingRef
 
+	// Name is a short human-readable label for tables, e.g. "IPv4 Packet TTL · eth0".
+	// It is populated by the manager so every client (UI, CLI, diagnostics bundle)
+	// renders the same wording instead of guessing from the setting id.
+	Name string `json:"name"`
+	// Description explains what the value controls in one sentence.
+	Description string `json:"description,omitempty"`
+
 	// Value is the effective value, or nil when it is not configured or could not be read.
 	// It is a pointer on purpose: on Windows the relevant registry values are frequently
 	// absent, which means "use the built-in default", and that is NOT the same as zero.
@@ -226,6 +233,40 @@ type Setting struct {
 	// why not when it cannot. Both are always populated so the UI never has to guess.
 	Writable       bool   `json:"writable"`
 	WritableReason string `json:"writableReason,omitempty"`
+}
+
+// WithLabels fills Name and Description from the setting's family, kind and scope.
+// It is idempotent and safe to call on every Setting the manager emits.
+func (s Setting) WithLabels() Setting {
+	family := "IPv4"
+	if s.Family == FamilyIPv6 {
+		family = "IPv6"
+	}
+	kind := "Packet TTL"
+	switch s.Kind {
+	case KindPacketHopLimit:
+		kind = "Hop Limit"
+	case KindDNSRecordTTL:
+		kind = "DNS Record TTL"
+	case KindTracerouteHops:
+		kind = "Traceroute Hop Count"
+	}
+
+	switch s.Scope {
+	case ScopePerInterface:
+		iface := s.Interface
+		if iface == "" {
+			iface = fmt.Sprintf("adapter %d", s.InterfaceIdx)
+		}
+		s.Name = fmt.Sprintf("%s %s · %s", family, kind, iface)
+		s.Description = fmt.Sprintf("Outgoing %s packet header value used on adapter %s.", family, iface)
+	case ScopeSystemGlobal:
+		s.Name = fmt.Sprintf("%s %s (system-global)", family, kind)
+		s.Description = fmt.Sprintf("Outgoing %s packet header value used by every adapter unless overridden.", family)
+	default:
+		s.Name = fmt.Sprintf("%s %s", family, kind)
+	}
+	return s
 }
 
 // Display renders the value for a UI or report, distinguishing "not configured" from a

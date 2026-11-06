@@ -101,6 +101,17 @@ func (d *Database) migrate() error {
 		bytes_out INTEGER NOT NULL DEFAULT 0
 	);
 
+	CREATE TABLE IF NOT EXISTS daily_history (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		day TEXT NOT NULL,
+		interface_name TEXT NOT NULL,
+		app_name TEXT NOT NULL DEFAULT '',
+		bytes_in INTEGER NOT NULL DEFAULT 0,
+		bytes_out INTEGER NOT NULL DEFAULT 0,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(day, interface_name, app_name)
+	);
+
 	CREATE TABLE IF NOT EXISTS operations (
 		id TEXT PRIMARY KEY,
 		correlation_id TEXT NOT NULL,
@@ -134,6 +145,7 @@ func (d *Database) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_operations_correlation ON operations(correlation_id);
 	CREATE INDEX IF NOT EXISTS idx_rules_priority ON rules(priority DESC);
 	CREATE INDEX IF NOT EXISTS idx_monthly_ym ON monthly_history(year_month);
+	CREATE INDEX IF NOT EXISTS idx_daily_day ON daily_history(day);
 	`
 	if _, err := d.db.Exec(schema); err != nil {
 		return err
@@ -426,6 +438,72 @@ func (d *Database) RecordMonthlyUsage(yearMonth, iface, app string, bytesIn, byt
 	return err
 }
 
+// loopbackFilter excludes loopback adapters from usage totals. Loopback bytes are
+// local IPC, not internet traffic; historical rows recorded before loopback was
+// skipped at sampling time would otherwise inflate every "this month" number.
+const loopbackFilter = `LOWER(interface_name) NOT IN ('lo','lo0') AND LOWER(interface_name) NOT LIKE 'loopback%'`
+
+// DailyUsageRecord captures aggregate daily network usage.
+type DailyUsageRecord struct {
+	ID            int64     `json:"id"`
+	Day           string    `json:"day"`
+	InterfaceName string    `json:"interfaceName"`
+	AppName       string    `json:"appName"`
+	BytesIn       int64     `json:"bytesIn"`
+	BytesOut      int64     `json:"bytesOut"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// RecordDailyUsage increments daily accounting counters. Keeping this table
+// separate from monthly_history lets the UI answer "today" and "last 7 days"
+// without rescanning raw packet samples.
+func (d *Database) RecordDailyUsage(day, iface, app string, bytesIn, bytesOut int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if day == "" {
+		day = time.Now().Format("2006-01-02")
+	}
+	query := `
+	INSERT INTO daily_history (day, interface_name, app_name, bytes_in, bytes_out, updated_at)
+	VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	ON CONFLICT(day, interface_name, app_name) DO UPDATE SET
+		bytes_in = bytes_in + excluded.bytes_in,
+		bytes_out = bytes_out + excluded.bytes_out,
+		updated_at = CURRENT_TIMESTAMP;
+	`
+	_, err := d.db.Exec(query, day, iface, app, bytesIn, bytesOut)
+	return err
+}
+
+// GetDailyHistory retrieves daily entries between two YYYY-MM-DD dates (inclusive).
+func (d *Database) GetDailyHistory(fromDay, toDay string) ([]DailyUsageRecord, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	rows, err := d.db.Query(`
+		SELECT id, day, interface_name, app_name, bytes_in, bytes_out, updated_at
+		FROM daily_history
+		WHERE day >= ? AND day <= ?
+		  AND `+loopbackFilter+`
+		ORDER BY day DESC, (bytes_in + bytes_out) DESC
+	`, fromDay, toDay)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := make([]DailyUsageRecord, 0, 16)
+	for rows.Next() {
+		var rec DailyUsageRecord
+		if err := rows.Scan(&rec.ID, &rec.Day, &rec.InterfaceName, &rec.AppName, &rec.BytesIn, &rec.BytesOut, &rec.UpdatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, rec)
+	}
+	return list, nil
+}
+
 // GetMonthlyHistory retrieves historical entries for a month or all months if empty.
 func (d *Database) GetMonthlyHistory(yearMonth string) ([]MonthlyUsageRecord, error) {
 	d.mu.Lock()
@@ -438,12 +516,14 @@ func (d *Database) GetMonthlyHistory(yearMonth string) ([]MonthlyUsageRecord, er
 			SELECT id, year_month, interface_name, app_name, bytes_in, bytes_out, updated_at
 			FROM monthly_history
 			WHERE year_month = ?
+			  AND `+loopbackFilter+`
 			ORDER BY (bytes_in + bytes_out) DESC
 		`, yearMonth)
 	} else {
 		rows, err = d.db.Query(`
 			SELECT id, year_month, interface_name, app_name, bytes_in, bytes_out, updated_at
 			FROM monthly_history
+			WHERE ` + loopbackFilter + `
 			ORDER BY year_month DESC, (bytes_in + bytes_out) DESC
 		`)
 	}
@@ -476,6 +556,7 @@ func (d *Database) GetAllMonthlySummaries() ([]MonthlySummary, error) {
 		       SUM(bytes_in) AS total_in,
 		       SUM(bytes_out) AS total_out
 		FROM monthly_history
+		WHERE ` + loopbackFilter + `
 		GROUP BY year_month
 		ORDER BY year_month DESC
 	`)

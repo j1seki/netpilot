@@ -33,24 +33,29 @@ export const Settings: React.FC = () => {
   const [savingPath, setSavingPath] = useState<boolean>(false);
 
   const loadAll = async () => {
-    const [b, m, c, bin, ca] = await Promise.all([
-      api.getBranding(),
-      api.getExecutionMode(),
-      api.getCapabilities(),
-      api.getNetMergeBinaryInfo(),
-      api.getCloseAction(),
-    ]);
-    setBranding(b);
-    setModeState(m);
-    setCapReport(c);
-    setBinInfo(bin);
-    setEngineSource(bin.engineSource === 'external' ? 'external' : 'builtin');
-    setCustomPath(bin.customPath || '');
-    setCloseAction(ca || 'minimize');
+    try {
+      const [b, m, c, bin, ca] = await Promise.all([
+        api.getBranding(),
+        api.getExecutionMode(),
+        api.getCapabilities(),
+        api.getNetMergeBinaryInfo(),
+        api.getCloseAction(),
+      ]);
+      setBranding(b);
+      setModeState(m);
+      setCapReport(c);
+      setBinInfo(bin);
+      setEngineSource(bin.engineSource === 'external' ? 'external' : 'builtin');
+      setCustomPath(bin.customPath || '');
+      setCloseAction(ca || 'minimize');
+      setErrorMsg('');
+    } catch (err: any) {
+      setErrorMsg(`Could not load settings: ${err?.message || String(err)}`);
+    }
   };
 
   useEffect(() => {
-    loadAll();
+    loadAll().catch((e) => console.error(e));
   }, []);
 
   const flashSuccess = (msg: string) => {
@@ -60,13 +65,19 @@ export const Settings: React.FC = () => {
   };
 
   const handleCloseActionChange = async (action: 'minimize' | 'close') => {
+    const previous = closeAction;
     setCloseAction(action);
-    await api.setCloseAction(action);
-    flashSuccess(
-      action === 'minimize'
-        ? 'Close button set to: Minimize to System Tray (Open NetPilot from tray).'
-        : 'Close button set to: Close Application completely.'
-    );
+    try {
+      await api.setCloseAction(action);
+      flashSuccess(
+        action === 'minimize'
+          ? 'Close button set to: Minimize to System Tray (Open NetPilot from tray).'
+          : 'Close button set to: Close Application completely.'
+      );
+    } catch (err: any) {
+      setCloseAction(previous);
+      setErrorMsg(`Could not save close-button behavior: ${err?.message || String(err)}`);
+    }
   };
 
   const handleEngineSourceChange = async (source: 'builtin' | 'external') => {
@@ -119,8 +130,14 @@ export const Settings: React.FC = () => {
   };
 
   const handleToggleConsole = async (checked: boolean) => {
+    const previous = showConsole;
     setShowConsole(checked);
-    await api.setConsoleVisible(checked);
+    try {
+      await api.setConsoleVisible(checked);
+    } catch (err: any) {
+      setShowConsole(previous);
+      setErrorMsg(`Could not change console visibility: ${err?.message || String(err)}`);
+    }
   };
 
   return (

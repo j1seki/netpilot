@@ -113,9 +113,11 @@ func (c *Collector) RecordNICSample(name string, totalIn, totalOut int64) {
 	if txMbps > m.PeakTxMbps {
 		m.PeakTxMbps = txMbps
 	}
-	// Record positive byte deltas to SQLite monthly history so Usage & History reflects real traffic
+	// Record positive byte deltas to SQLite monthly and daily history so Usage &
+	// History can show this month, last week and today from real counters.
 	if c.database != nil && (deltaIn > 0 || deltaOut > 0) {
 		_ = c.database.RecordMonthlyUsage("", name, "system", deltaIn, deltaOut)
+		_ = c.database.RecordDailyUsage("", name, "system", deltaIn, deltaOut)
 	}
 }
 func (c *Collector) RecordAppUsage(appName string, bytesIn, bytesOut int64, durationSec float64) {
@@ -243,6 +245,9 @@ func (c *Collector) SampleLinuxNetDev() error {
 			continue
 		}
 		iface := strings.TrimSpace(parts[0])
+		if iface == "lo" {
+			continue // loopback traffic is local, not internet usage
+		}
 		fields := strings.Fields(parts[1])
 		if len(fields) < 9 {
 			continue

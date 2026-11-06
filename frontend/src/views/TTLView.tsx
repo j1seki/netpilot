@@ -386,7 +386,9 @@ export const TTLView: React.FC = () => {
           <tbody>
             {report?.settings.map(s => (
               <tr key={s.id}>
-                <td style={{ fontWeight: 600 }}>{s.name}</td>
+                <td style={{ fontWeight: 600 }} title={s.description || s.id}>
+                  {s.name || s.id}
+                </td>
                 <td>
                   <span className="font-mono" style={{ fontSize: '10.5px', color: '#38bdf8' }}>
                     {s.family.toUpperCase()}

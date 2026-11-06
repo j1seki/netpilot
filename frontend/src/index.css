@@ -5,6 +5,14 @@
   --bg-card: #121215;
   --bg-card-hover: #18181c;
   --bg-elevated: #1c1c21;
+  /* Legacy aliases used by several views. Keeping them defined fixes transparent
+     select/input backgrounds and missing borders on Analytics, Rules, TTL and
+     Diagnostics instead of relying on invalid inline var() fallbacks. */
+  --bg-tertiary: #18181b;
+  --border: #232329;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
   --border-color: #232329;
   --border-subtle: #1c1c21;
   --border-highlight: #3f3f46;
@@ -28,6 +36,13 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* Tell WebKitGTK/WKWebView to render native form controls (especially the
+   <select> popup) with dark chrome. Without this, options paint white text on a
+   white popup until the pointer hovers them. */
+:root {
+  color-scheme: dark;
 }
 
 body {
@@ -168,6 +183,12 @@ body {
   border: 1px solid rgba(161, 161, 170, 0.2);
 }
 
+.status-pill.skipped {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.28);
+}
+
 /* Buttons */
 .btn {
   display: inline-flex;
@@ -279,10 +300,47 @@ input, select {
   outline: none;
   font-family: var(--font-sans);
   transition: border-color 0.14s ease;
+  color-scheme: dark;
 }
 
 input:focus, select:focus {
   border-color: #52525b;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.18);
+}
+
+input:disabled, select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Native <select> popups are rendered by the OS/WebKit, not by our CSS box.
+   These rules keep option text readable in WebKitGTK (Linux) and WKWebView
+   (macOS), where the popup otherwise uses a light background. */
+select option,
+select optgroup {
+  background-color: #121215;
+  color: #fafafa;
+}
+
+select option:checked,
+select option:hover {
+  background-color: #27272a;
+  color: #ffffff;
+}
+
+input::placeholder {
+  color: #71717a;
+}
+
+input[type="checkbox"] {
+  accent-color: #10b981;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.7);
+  outline-offset: 1px;
 }
 
 .font-mono {

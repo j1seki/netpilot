@@ -141,7 +141,7 @@ func (m *Manager) Inspect(ctx context.Context, ifaces []IfaceInfo) (Report, erro
 				SettingRef:     ref,
 				Writable:       false,
 				WritableReason: reason,
-			})
+			}.WithLabels())
 		}
 		return rep, nil
 	}
@@ -156,7 +156,7 @@ func (m *Manager) Inspect(ctx context.Context, ifaces []IfaceInfo) (Report, erro
 		if err != nil {
 			rep.ReadErrors = append(rep.ReadErrors, failure(ref, err))
 			setting.WritableReason = "The current value could not be read, so it is not shown."
-			rep.Settings = append(rep.Settings, setting)
+			rep.Settings = append(rep.Settings, setting.WithLabels())
 			continue
 		}
 		setting.Value = obs.Value
@@ -165,12 +165,11 @@ func (m *Manager) Inspect(ctx context.Context, ifaces []IfaceInfo) (Report, erro
 		if !rep.Capabilities.Supported {
 			setting.WritableReason = readOnlyReason(rep.Capabilities.Platform)
 		} else if ref.Scope == ScopePerInterface && !capabilitiesAllowPerInterface(rep.Capabilities) {
-			setting.WritableReason = "Set-NetIPInterface -CurrentHopLimit is not available on this Windows build, " +
-				"so a per-interface value cannot be set through a supported mechanism."
+			setting.WritableReason = perInterfaceReadOnlyReason(rep.Capabilities.Platform)
 		} else {
 			setting.Writable = true
 		}
-		rep.Settings = append(rep.Settings, setting)
+		rep.Settings = append(rep.Settings, setting.WithLabels())
 	}
 	return rep, nil
 }
@@ -188,6 +187,25 @@ func readOnlyReason(platform string) string {
 			"hop limit is a Windows feature in this build; no change was attempted."
 	default:
 		return "The current value is readable, but this host has no supported write mechanism."
+	}
+}
+
+// perInterfaceReadOnlyReason explains, per platform, why a per-adapter value cannot be
+// written even though the system-global value can. Naming the platform keeps a Linux host
+// from showing a Windows PowerShell message it can never act on.
+func perInterfaceReadOnlyReason(platform string) string {
+	switch platform {
+	case "windows":
+		return "Set-NetIPInterface -CurrentHopLimit is not available on this Windows build, " +
+			"so a per-interface value cannot be set through a supported mechanism."
+	case "linux":
+		return "The system-global value is writable, but this build has no supported per-adapter " +
+			"setter. Use the system-global value or an nftables/iptables mangle rule for one adapter."
+	case "darwin":
+		return "The system-global value is writable, but macOS exposes no supported per-adapter " +
+			"hop-limit setter."
+	default:
+		return "This host has no supported per-adapter setter for this value."
 	}
 }
 

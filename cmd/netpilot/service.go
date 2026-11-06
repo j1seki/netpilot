@@ -7,6 +7,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os/exec"
+	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +39,12 @@ type cachedWAN struct {
 	at  time.Time
 }
 
+type cachedLatency struct {
+	routerMs float64
+	webMs    float64
+	at       time.Time
+}
+
 // NetPilotService is the backend RPC service exposed to the Wails 3 React frontend.
 type NetPilotService struct {
 	mu           sync.RWMutex
@@ -53,6 +63,9 @@ type NetPilotService struct {
 	ttlManager   *ttlmgr.Manager
 	wanMu        sync.RWMutex
 	wanCache     map[string]cachedWAN
+	latencyMu    sync.RWMutex
+	latencyCache map[string]cachedLatency
+	latencyOnce  sync.Once
 }
 
 // NewNetPilotService constructs the centralized backend service.
@@ -86,6 +99,7 @@ func NewNetPilotService(
 		netmergeCtrl: netmergeCtrl,
 		ttlManager:   ttlManager,
 		wanCache:     make(map[string]cachedWAN),
+		latencyCache: make(map[string]cachedLatency),
 	}
 }
 
@@ -169,16 +183,20 @@ type InterfaceInfo struct {
 	WanIP       string    `json:"wanIp"`
 	ISP         string    `json:"isp,omitempty"`
 	Location    string    `json:"location,omitempty"`
-	IsUp        bool      `json:"isUp"`
-	IsHardware  bool      `json:"isHardware"`
-	RxMbps      float64   `json:"rxMbps"`
-	TxMbps      float64   `json:"txMbps"`
-	LinkState   string    `json:"linkState"`
-	LastProbeAt time.Time `json:"lastProbeAt"`
-	RxLimitMbps float64   `json:"rxLimitMbps"`
-	TxLimitMbps float64   `json:"txLimitMbps"`
-	DataQuotaMB float64   `json:"dataQuotaMb"`
-	DataUsedMB  float64   `json:"dataUsedMb"`
+	IsUp            bool      `json:"isUp"`
+	IsHardware      bool      `json:"isHardware"`
+	IsDefault       bool      `json:"isDefault"`  // carries the OS default route
+	IsVirtual       bool      `json:"isVirtual"`  // VPN / tunnel / software adapter
+	LatencyRouterMs float64   `json:"latencyRouterMs"`
+	LatencyWebMs    float64   `json:"latencyWebMs"`
+	RxMbps          float64   `json:"rxMbps"`
+	TxMbps          float64   `json:"txMbps"`
+	LinkState       string    `json:"linkState"`
+	LastProbeAt     time.Time `json:"lastProbeAt"`
+	RxLimitMbps     float64   `json:"rxLimitMbps"`
+	TxLimitMbps     float64   `json:"txLimitMbps"`
+	DataQuotaMB     float64   `json:"dataQuotaMb"`
+	DataUsedMB      float64   `json:"dataUsedMb"`
 }
 
 func (s *NetPilotService) lookupWanIP(ifaceName string, ifaceIdx int, localIP net.IP) (string, string, string) {
@@ -266,6 +284,199 @@ func (s *NetPilotService) lookupWanIP(ifaceName string, ifaceIdx int, localIP ne
 	return c.ip, c.isp, c.loc
 }
 
+var pingTimeRe = regexp.MustCompile(`(?i)time[=<]\s*([0-9]+(?:\.[0-9]+)?)\s*ms`)
+
+// defaultRouteLocalIP asks the OS which source address it would use for a remote
+// connection. A UDP dial does not send a packet; it only resolves the route, so
+// this is a cheap cross-platform way to identify the current default adapter.
+func defaultRouteLocalIP() net.IP {
+	for _, target := range []string{"1.1.1.1:443", "[2606:4700:4700::1111]:443"} {
+		conn, err := net.DialTimeout("udp", target, 500*time.Millisecond)
+		if err != nil {
+			continue
+		}
+		var ip net.IP
+		if ua, ok := conn.LocalAddr().(*net.UDPAddr); ok && ua.IP != nil && !ua.IP.IsUnspecified() {
+			ip = ua.IP
+		}
+		_ = conn.Close()
+		if ip != nil {
+			return ip
+		}
+	}
+	return nil
+}
+
+// probeWebLatency measures a TCP handshake to a well-known anycast resolver,
+// bound to one adapter, so each row can show its own internet latency.
+func probeWebLatency(idx int, ip net.IP) (float64, bool) {
+	if ip == nil {
+		return 0, false
+	}
+	v6 := ip.To4() == nil
+	network, target := "tcp4", "1.1.1.1:443"
+	if v6 {
+		network, target = "tcp6", "[2606:4700:4700::1111]:443"
+	}
+	d := net.Dialer{
+		LocalAddr: &net.TCPAddr{IP: ip},
+		Control:   nics.ForceEgress(idx, v6),
+		Timeout:   1500 * time.Millisecond,
+	}
+	start := time.Now()
+	conn, err := d.Dial(network, target)
+	if err != nil {
+		return 0, false
+	}
+	_ = conn.Close()
+	return float64(time.Since(start).Microseconds()) / 1000.0, true
+}
+
+// pingLatency measures round-trip time to the adapter's own gateway. ICMP is used
+// because routers rarely expose a TCP listener on a predictable port.
+func pingLatency(gw, src net.IP, _ string) (float64, bool) {
+	if gw == nil {
+		return 0, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	defer cancel()
+
+	cmdName := "ping"
+	var args []string
+	v6 := gw.To4() == nil
+	switch runtime.GOOS {
+	case "windows":
+		args = []string{"-n", "1", "-w", "1000"}
+		if v6 {
+			args = append([]string{"-6"}, args...)
+		} else {
+			args = append([]string{"-4"}, args...)
+		}
+		if src != nil && (src.To4() == nil) == v6 {
+			args = append(args, "-S", src.String())
+		}
+	case "darwin":
+		if v6 {
+			cmdName = "ping6"
+			args = []string{"-n", "-c", "1", "-W", "1000"}
+		} else {
+			args = []string{"-n", "-c", "1", "-W", "1000"}
+		}
+		if src != nil && (src.To4() == nil) == v6 {
+			args = append(args, "-S", src.String())
+		}
+	default:
+		if v6 {
+			args = []string{"-6", "-n", "-c", "1", "-W", "1"}
+		} else {
+			args = []string{"-n", "-c", "1", "-W", "1"}
+		}
+		if src != nil && (src.To4() == nil) == v6 {
+			args = append(args, "-I", src.String())
+		}
+	}
+	args = append(args, gw.String())
+
+	out, err := exec.CommandContext(ctx, cmdName, args...).CombinedOutput()
+	if err != nil && len(out) == 0 {
+		return 0, false
+	}
+	m := pingTimeRe.FindSubmatch(out)
+	if m == nil {
+		return 0, false
+	}
+	ms, err := strconv.ParseFloat(string(m[1]), 64)
+	if err != nil {
+		return 0, false
+	}
+	return ms, true
+}
+
+func (s *NetPilotService) lookupLatency(name string) (routerMs, webMs float64) {
+	s.latencyMu.RLock()
+	defer s.latencyMu.RUnlock()
+	c, ok := s.latencyCache[name]
+	if !ok || time.Since(c.at) > 2*time.Minute {
+		return 0, 0
+	}
+	return c.routerMs, c.webMs
+}
+
+// sampleLatencies refreshes the per-adapter router/web latency cache and feeds the
+// failover state machine so "FASTEST" rules finally have live RTT data.
+func (s *NetPilotService) sampleLatencies() {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return
+	}
+	virtualMap := nics.VirtualAdapterMap()
+	var wg sync.WaitGroup
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagLoopback != 0 || ifc.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, _ := ifc.Addrs()
+		var ip net.IP
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok || ipn.IP.IsLinkLocalUnicast() {
+				continue
+			}
+			if v4 := ipn.IP.To4(); v4 != nil {
+				ip = v4
+				break
+			}
+			if ip == nil && ipn.IP.To16() != nil {
+				ip = ipn.IP
+			}
+		}
+		if ip == nil {
+			continue
+		}
+		_, virtualByPlatform := virtualMap[ifc.Index]
+		isVirtual := virtualByPlatform || nics.IsVirtualName(ifc.Name) || len(ifc.HardwareAddr) == 0
+		idx, name, localIP := ifc.Index, ifc.Name, ip
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			webMs, webOK := probeWebLatency(idx, localIP)
+			routerMs := 0.0
+			if gw := nics.GatewayIP(idx); gw != nil {
+				if ms, ok := pingLatency(gw, localIP, name); ok {
+					routerMs = ms
+				}
+			}
+			s.latencyMu.Lock()
+			s.latencyCache[name] = cachedLatency{routerMs: routerMs, webMs: webMs, at: time.Now()}
+			s.latencyMu.Unlock()
+
+			// Feed the FASTEST rule selector, but never let a VPN/tunnel adapter
+			// become the "lowest latency" physical link.
+			if s.failoverSM != nil && !isVirtual {
+				if webOK {
+					_ = s.failoverSM.RecordProbe(name, true, time.Duration(webMs*float64(time.Millisecond)), "")
+				} else {
+					_ = s.failoverSM.RecordProbe(name, false, 0, "web latency probe failed")
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func (s *NetPilotService) startLatencyProbes() {
+	s.latencyOnce.Do(func() {
+		go func() {
+			s.sampleLatencies()
+			ticker := time.NewTicker(12 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				s.sampleLatencies()
+			}
+		}()
+	})
+}
+
 // GetInterfaces returns real system interfaces and live throughput.
 func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 	// Always return a non-nil slice: the frontend treats a JSON null as "backend has no
@@ -273,13 +484,16 @@ func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 	// the dashboard loads its data in one batch, every process too) on a host whose
 	// adapters were all filtered out.
 	out := make([]InterfaceInfo, 0, 8)
+	s.startLatencyProbes()
+	defaultIP := defaultRouteLocalIP()
+	virtualMap := nics.VirtualAdapterMap()
 
 	// Read real host network counters first
 	_ = s.analytics.SampleHostNICs()
 
-	nics, _ := s.analytics.Snapshot()
+	nicSnap, _ := s.analytics.Snapshot()
 	nicMetrics := make(map[string]analytics.NICMetric)
-	for _, m := range nics {
+	for _, m := range nicSnap {
 		nicMetrics[m.Name] = m
 	}
 
@@ -307,7 +521,7 @@ func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 		}
 		addrs, _ := ifc.Addrs()
 		ipStr := ""
-		var localV4 net.IP
+		var localV4, localV6 net.IP
 		// Prefer a routable IPv4 address for the WAN probe, but fall back to an IPv6
 		// address so IPv6-only adapters (common on Windows/macOS tethering and some
 		// VPN setups) are still listed instead of silently disappearing.
@@ -323,6 +537,7 @@ func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 					ipStr = ipn.String()
 				}
 			} else if ipv6Str == "" && ipn.IP.To16() != nil {
+				localV6 = ipn.IP
 				ipv6Str = ipn.String()
 			}
 		}
@@ -368,21 +583,34 @@ func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 			usedMb = capRec.DataUsedMB
 		}
 
+		_, virtualByPlatform := virtualMap[ifc.Index]
+		isVirtual := virtualByPlatform || nics.IsVirtualName(ifc.Name) || len(ifc.HardwareAddr) == 0
+		isDefault := false
+		if defaultIP != nil {
+			isDefault = (localV4 != nil && localV4.Equal(defaultIP)) ||
+				(localV6 != nil && localV6.Equal(defaultIP))
+		}
+		routerMs, webMs := s.lookupLatency(ifc.Name)
+
 		out = append(out, InterfaceInfo{
-			Name:        ifc.Name,
-			IP:          ipStr,
-			WanIP:       wanIP,
-			ISP:         isp,
-			Location:    loc,
-			IsUp:        isUp,
-			IsHardware:  len(ifc.HardwareAddr) > 0,
-			RxMbps:      rxMbps,
-			TxMbps:      txMbps,
-			LinkState:   linkSt,
-			RxLimitMbps: rxLimit,
-			TxLimitMbps: txLimit,
-			DataQuotaMB: quotaMb,
-			DataUsedMB:  usedMb,
+			Name:            ifc.Name,
+			IP:              ipStr,
+			WanIP:           wanIP,
+			ISP:             isp,
+			Location:        loc,
+			IsUp:            isUp,
+			IsHardware:      len(ifc.HardwareAddr) > 0 && !isVirtual,
+			IsDefault:       isDefault,
+			IsVirtual:       isVirtual,
+			LatencyRouterMs: routerMs,
+			LatencyWebMs:    webMs,
+			RxMbps:          rxMbps,
+			TxMbps:          txMbps,
+			LinkState:       linkSt,
+			RxLimitMbps:     rxLimit,
+			TxLimitMbps:     txLimit,
+			DataQuotaMB:     quotaMb,
+			DataUsedMB:      usedMb,
 		})
 	}
 	return out
@@ -546,6 +774,143 @@ func (s *NetPilotService) GetMonthlySummaries() ([]db.MonthlySummary, error) {
 		summaries = []db.MonthlySummary{}
 	}
 	return summaries, err
+}
+
+// UsageHistoryRecord is one period/adapter/application row in the usage view.
+type UsageHistoryRecord struct {
+	Period        string    `json:"period"`
+	InterfaceName string    `json:"interfaceName"`
+	AppName       string    `json:"appName"`
+	BytesIn       int64     `json:"bytesIn"`
+	BytesOut      int64     `json:"bytesOut"`
+	RxMB          float64   `json:"rxMb"`
+	TxMB          float64   `json:"txMb"`
+	TotalMB       float64   `json:"totalMb"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// UsageHistorySummary aggregates one bucket (a day or a month).
+type UsageHistorySummary struct {
+	Period    string  `json:"period"`
+	TotalRxMB float64 `json:"totalRxMb"`
+	TotalTxMB float64 `json:"totalTxMb"`
+	TotalMB   float64 `json:"totalMb"`
+}
+
+// UsageHistoryResponse powers the Today / Last 7 Days / This Month / All Months
+// toggles. Daily buckets come from daily_history; month/all come from the
+// existing monthly_history so existing installs keep their history.
+type UsageHistoryResponse struct {
+	Period    string                `json:"period"`
+	From      string                `json:"from"`
+	To        string                `json:"to"`
+	Records   []UsageHistoryRecord  `json:"records"`
+	Summaries []UsageHistorySummary `json:"summaries"`
+	TotalRxMB float64               `json:"totalRxMb"`
+	TotalTxMB float64               `json:"totalTxMb"`
+	TotalMB   float64               `json:"totalMb"`
+}
+
+func usageRecord(period, iface, app string, bytesIn, bytesOut int64, updated time.Time) UsageHistoryRecord {
+	rx := float64(bytesIn) / (1024 * 1024)
+	tx := float64(bytesOut) / (1024 * 1024)
+	return UsageHistoryRecord{
+		Period:        period,
+		InterfaceName: iface,
+		AppName:       app,
+		BytesIn:       bytesIn,
+		BytesOut:      bytesOut,
+		RxMB:          rx,
+		TxMB:          tx,
+		TotalMB:       rx + tx,
+		UpdatedAt:     updated,
+	}
+}
+
+// GetUsageHistory returns usage rows for a human time range.
+func (s *NetPilotService) GetUsageHistory(period string) UsageHistoryResponse {
+	period = strings.ToLower(strings.TrimSpace(period))
+	now := time.Now()
+	resp := UsageHistoryResponse{
+		Period:    period,
+		Records:   []UsageHistoryRecord{},
+		Summaries: []UsageHistorySummary{},
+	}
+
+	addRecord := func(r UsageHistoryRecord) {
+		resp.Records = append(resp.Records, r)
+		resp.TotalRxMB += r.RxMB
+		resp.TotalTxMB += r.TxMB
+		resp.TotalMB += r.TotalMB
+	}
+
+	switch period {
+	case "today":
+		day := now.Format("2006-01-02")
+		resp.From, resp.To = day, day
+		recs, _ := s.database.GetDailyHistory(day, day)
+		for _, r := range recs {
+			addRecord(usageRecord(day, r.InterfaceName, r.AppName, r.BytesIn, r.BytesOut, r.UpdatedAt))
+		}
+		resp.Summaries = append(resp.Summaries, UsageHistorySummary{
+			Period: day, TotalRxMB: resp.TotalRxMB, TotalTxMB: resp.TotalTxMB, TotalMB: resp.TotalMB,
+		})
+
+	case "week":
+		from := now.AddDate(0, 0, -6).Format("2006-01-02")
+		to := now.Format("2006-01-02")
+		resp.From, resp.To = from, to
+		recs, _ := s.database.GetDailyHistory(from, to)
+		byDay := make(map[string]*UsageHistorySummary)
+		for _, r := range recs {
+			rec := usageRecord(r.Day, r.InterfaceName, r.AppName, r.BytesIn, r.BytesOut, r.UpdatedAt)
+			addRecord(rec)
+			sum := byDay[r.Day]
+			if sum == nil {
+				sum = &UsageHistorySummary{Period: r.Day}
+				byDay[r.Day] = sum
+			}
+			sum.TotalRxMB += rec.RxMB
+			sum.TotalTxMB += rec.TxMB
+			sum.TotalMB += rec.TotalMB
+		}
+		for day := to; day >= from; {
+			if sum, ok := byDay[day]; ok {
+				resp.Summaries = append(resp.Summaries, *sum)
+			}
+			t, err := time.Parse("2006-01-02", day)
+			if err != nil {
+				break
+			}
+			day = t.AddDate(0, 0, -1).Format("2006-01-02")
+		}
+
+	case "month":
+		ym := now.Format("2006-01")
+		resp.From, resp.To = ym, ym
+		recs, _ := s.database.GetMonthlyHistory(ym)
+		for _, r := range recs {
+			addRecord(usageRecord(r.YearMonth, r.InterfaceName, r.AppName, r.BytesIn, r.BytesOut, r.UpdatedAt))
+		}
+		resp.Summaries = append(resp.Summaries, UsageHistorySummary{
+			Period: ym, TotalRxMB: resp.TotalRxMB, TotalTxMB: resp.TotalTxMB, TotalMB: resp.TotalMB,
+		})
+
+	default: // "all"
+		resp.Period = "all"
+		resp.From, resp.To = "all", "all"
+		recs, _ := s.database.GetMonthlyHistory("all")
+		for _, r := range recs {
+			addRecord(usageRecord(r.YearMonth, r.InterfaceName, r.AppName, r.BytesIn, r.BytesOut, r.UpdatedAt))
+		}
+		sums, _ := s.database.GetAllMonthlySummaries()
+		for _, sum := range sums {
+			resp.Summaries = append(resp.Summaries, UsageHistorySummary{
+				Period: sum.YearMonth, TotalRxMB: sum.TotalRxMB, TotalTxMB: sum.TotalTxMB, TotalMB: sum.TotalMB,
+			})
+		}
+	}
+	return resp
 }
 
 // NetMerge Control RPC methods
@@ -880,6 +1245,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			_ = json.NewEncoder(w).Encode(caps)
 		}
+
+	case path == "usage-history":
+		_ = json.NewEncoder(w).Encode(s.GetUsageHistory(r.URL.Query().Get("period")))
 
 	case path == "monthly-history":
 		ym := r.URL.Query().Get("month")

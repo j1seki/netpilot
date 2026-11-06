@@ -5,6 +5,41 @@ entry here before pushing a version tag.
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-11-06
+
+### Added
+- **Usage history has real time ranges.** Analytics now offers *Today*, *Last 7 Days*, *This Month* and
+  *All Months*, backed by a new daily-usage table rather than an array position. Loopback traffic is
+  excluded, so the totals reflect internet usage instead of local IPC.
+- **Per-adapter latency on the Dashboard.** Each adapter shows its round-trip time to its own gateway
+  (ICMP) and to a public resolver (TCP handshake), colour-coded so a slow link is obvious.
+- **WAN addresses are hidden by default.** A *Show WAN* eye toggle in the adapter table header reveals
+  public IPs, ISP and location only when you ask for them, so screenshots and screen shares cannot leak
+  them by accident.
+- **Example routing policies.** The Rules page ships three ready-made templates (video calls, streaming,
+  large downloads). They are not active: *Add as disabled* copies one into your policy list for review.
+- **Adapter roles are explicit.** Adapters carrying the OS default route are labelled *OS Default*, and
+  VPN/tunnel/software adapters are labelled *VPN/VIRTUAL* and never auto-selected as a physical primary.
+
+### Changed
+- **Primary/Secondary now mean what they say.** When net-merge is off, the OS default route wins. In
+  Speed mode there is no primary or secondary because the merged adapter is the primary link; the manual
+  selectors appear only in Backup mode and default to the OS default route.
+- **Routing rules can be edited** instead of deleted and recreated, with inline validation and notices.
+- **Deep links** such as `?tab=usage` or `?tab=rules` open the requested page directly.
+
+### Fixed
+- **The Net-Merge Autostart button works.** It no longer silently does nothing before status has loaded;
+  it always attempts the change, reports the real error (including the admin-rights requirement), and
+  disables itself while in flight.
+- **Dropdowns are readable everywhere.** Missing CSS variables left some selects transparent, and native
+  option popups could paint white text on a white background. Dark `color-scheme`, explicit option
+  colours, focus rings and disabled states fix Analytics, Rules and the rest of the app.
+- **TTL settings have names.** The *Inspected Kernel Settings* table no longer shows a blank *Setting*
+  column, and a Linux host no longer displays a Windows-only PowerShell explanation.
+- **Pages fail visibly instead of silently.** Analytics, Settings, Diagnostics and Net-Merge now show an
+  error banner when a backend call fails; Settings reverts optimistic toggles on failure.
+
 ## [0.3.6] - 2026-10-28
 
 ### Added
