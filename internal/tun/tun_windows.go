@@ -228,20 +228,23 @@ func syncStrongHost(stop chan struct{}) {
 		if len(f) != 4 {
 			if strings.TrimSpace(line) != "" {
 				logx.Printf("warning: unexpected weak-host query output %q; retrying adapter sync\n", line)
+				markWeakHostIndexesFailed(failed, idx)
 			}
 			continue
 		}
 		fam := strings.ToLower(f[0])
 		if fam != "ipv4" && fam != "ipv6" {
+			markWeakHostIndexesFailed(failed, idx)
 			continue
 		}
 		index, parseErr := strconv.Atoi(f[1])
 		if parseErr != nil {
+			markWeakHostIndexesFailed(failed, idx)
 			continue
 		}
 		restoreLine := fmt.Sprintf("%s %s weakhostsend=%s forwarding=%s",
 			fam, f[1], strings.ToLower(f[2]), strings.ToLower(f[3]))
-		if !containsRestoreEntry(strongHost.restore, restoreLine) {
+		if !containsRestoreInterface(strongHost.restore, fam, f[1]) {
 			strongHost.restore = append(strongHost.restore, restoreLine)
 			if err := persistStrongHostRestoreLocked(); err != nil {
 				// Do not modify networking until the original settings are safely recorded.
@@ -265,16 +268,24 @@ func syncStrongHost(stop chan struct{}) {
 	}
 }
 
-// containsRestoreEntry prevents a retry or a multi-family query from recording the same
-// original interface settings more than once.
-func containsRestoreEntry(entries []string, entry string) bool {
+// containsRestoreInterface preserves the first observed settings for each family/index.
+// A retry may observe partially applied settings, but must never replace the true originals.
+func containsRestoreInterface(entries []string, family, index string) bool {
 	for _, existing := range entries {
-		if existing == entry {
+		fields := strings.Fields(existing)
+		if len(fields) == 4 && fields[0] == family && fields[1] == index {
 			return true
 		}
 	}
 	return false
 }
+
+func markWeakHostIndexesFailed(failed map[int]bool, indexes []string) {
+	for _, value := range indexes {
+		if index, err := strconv.Atoi(value); err == nil {
+			failed[index] = true
+		}
+	}
 
 // persistStrongHostRestoreLocked writes the recovery journal while strongHost.mu is held.
 func persistStrongHostRestoreLocked() error {
