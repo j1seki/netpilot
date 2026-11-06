@@ -522,3 +522,29 @@ func TestBackupModeFailoverAndRecovery(t *testing.T) {
 	}
 }
 
+
+func TestUpdateRefreshesInterfaceIndexAndResetsLinkSampling(t *testing.T) {
+	s := NewScheduler([]nics.Nic{{Name: "Ethernet", Index: 4, IP: net.ParseIP("192.0.2.10"), Weight: 1}})
+	s.SetAuto(true)
+	sl := s.slots[0]
+	sl.linkPrimed = true
+	sl.linkIn, sl.linkOut = 1000, 2000
+	sl.linkRateIn, sl.linkRateOut = 100, 200
+	sl.peak[Fam4], sl.peak[Fam6] = 1e6, 2e6
+	sl.state[Fam4], sl.state[Fam6] = stateDown, stateDown
+	sl.lastProbe[Fam4], sl.lastProbe[Fam6] = time.Now(), time.Now()
+	sl.downUntil[Fam4], sl.downUntil[Fam6] = time.Now().Add(time.Hour), time.Now().Add(time.Hour)
+
+	s.Update([]nics.Nic{{Name: "Ethernet", Index: 19, IP: net.ParseIP("192.0.2.10"), Weight: 1}})
+	if sl.Index != 19 {
+		t.Fatalf("index = %d, want refreshed index 19", sl.Index)
+	}
+	if sl.linkPrimed || sl.linkRateIn != 0 || sl.linkRateOut != 0 {
+		t.Fatal("OS link counter baseline must be reset after interface re-enumeration")
+	}
+	for _, f := range []Family{Fam4, Fam6} {
+		if sl.state[f] != stateUnknown || !sl.lastProbe[f].IsZero() || !sl.downUntil[f].IsZero() || sl.peak[f] != 0 || sl.weight[f] != 1 {
+			t.Fatalf("family %d retained stale interface health/measurement state", f)
+		}
+	}
+}

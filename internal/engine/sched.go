@@ -276,6 +276,21 @@ func (s *Scheduler) Update(nics []nics.Nic) {
 			continue
 		}
 		found.present = true
+		if found.Index != n.Index {
+			// The OS may reuse an interface name after recreating an adapter. Treat a
+			// changed index as a new link for probe and OS-counter sampling purposes.
+			found.Index = n.Index
+			found.linkPrimed = false
+			found.linkRateIn, found.linkRateOut = 0, 0
+			for _, f := range []Family{Fam4, Fam6} {
+				found.state[f] = stateUnknown
+				found.lastProbe[f], found.downUntil[f] = time.Time{}, time.Time{}
+				found.peak[f] = 0
+				if s.auto {
+					found.weight[f] = 1
+				}
+			}
+		}
 		if !s.auto {
 			found.weight = [2]float64{n.Weight, n.Weight}
 		}
