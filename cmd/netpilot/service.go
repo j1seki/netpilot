@@ -438,7 +438,11 @@ func (s *NetPilotService) GetAnalyticsSnapshot() map[string]interface{} {
 
 // QueryLogs searches memory ring logs with filtering.
 func (s *NetPilotService) QueryLogs(opts logger.FilterOptions) []logger.LogEntry {
-	return s.ringLog.Query(opts)
+	entries := s.ringLog.Query(opts)
+	if entries == nil {
+		entries = []logger.LogEntry{}
+	}
+	return entries
 }
 
 // ExportDiagnosticReport creates a comprehensive diagnostic bundle JSON string.
