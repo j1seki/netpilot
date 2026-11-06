@@ -628,7 +628,7 @@ func (d *Database) ExportMonthlyCSV(yearMonth string) (string, error) {
 // while leaving ordinary names unchanged. csv.Writer handles delimiters, quotes,
 // and embedded newlines separately.
 func spreadsheetSafeCell(value string) string {
-	trimmed := strings.TrimLeft(value, " \\t\\r\\n")
+	trimmed := strings.TrimLeft(value, " \t\r\n")
 	if trimmed == "" {
 		return value
 	}
