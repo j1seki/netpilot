@@ -218,7 +218,7 @@ func (c *Controller) applySchedulerModeLocked() {
 func (c *Controller) initScheduler() {
 	initial, err := c.discover()
 	if err != nil {
-		logx.Printf("warning: initial adapter discovery failed: %v\\n", err)
+		logx.Printf("warning: initial adapter discovery failed: %v\n", err)
 		initial = nil
 	}
 	c.sched = engine.NewScheduler(initial)
@@ -252,7 +252,7 @@ func (c *Controller) initScheduler() {
 			case <-rescanTicker.C:
 				found, err := c.discover()
 				if err := updateSchedulerFromDiscovery(c.sched, found, err); err != nil {
-					logx.Printf("warning: adapter rescan failed: %v\\n", err)
+					logx.Printf("warning: adapter rescan failed: %v\n", err)
 				}
 			case now := <-tickTicker.C:
 				c.sched.Tick(now.Sub(last))
