@@ -294,7 +294,7 @@ func TestSocksRejectsNonzeroReservedByte(t *testing.T) {
 	}
 }
 
-func TestUnsupportedSocksCommandDoesNotWaitForDestination(t *testing.T) {
+func TestUnsupportedSocksCommandDoesNotDialDestination(t *testing.T) {
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +314,7 @@ func TestUnsupportedSocksCommandDoesNotWaitForDestination(t *testing.T) {
 	if _, err := io.ReadFull(c, make([]byte, 2)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Write([]byte{5, 3, 0, 1}); err != nil {
+	if _, err := c.Write([]byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
 		t.Fatal(err)
 	}
 	reply := make([]byte, 10)
