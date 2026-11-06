@@ -17,17 +17,16 @@ import {
   Edit3,
   Search,
   Activity,
-  Zap,
-  ShieldAlert,
   GitMerge,
-  Power,
-  CheckCircle2,
-  PauseCircle,
 } from 'lucide-react';
 
 interface AdapterWithHistory extends InterfaceInfo {
   rxHistory: number[];
   txHistory: number[];
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 export const DashboardView: React.FC = () => {
@@ -36,7 +35,6 @@ export const DashboardView: React.FC = () => {
   const [apps, setApps] = useState<ProcessInfo[]>([]);
   const [rules, setRules] = useState<RuleRecord[]>([]);
   const [appSearch, setAppSearch] = useState<string>('');
-  const [busyMode, setBusyMode] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
 
   // Modal for Add / Edit App Rule
@@ -51,37 +49,63 @@ export const DashboardView: React.FC = () => {
   const [modalQuota, setModalQuota] = useState<string>('');
 
   const loadData = async () => {
-    const [ifaces, appList, ruleList, nm] = await Promise.all([
+    // Load each section independently. A single failing endpoint (for example net-merge
+    // status on a host where the daemon is not installed) must never blank out the
+    // adapter and process tables the way a Promise.all rejection used to.
+    const [ifacesRes, appsRes, rulesRes, nmRes] = await Promise.allSettled([
       api.getInterfaces(),
       api.getApplications(),
       api.getRules(),
       api.getNetMergeStatus(),
     ]);
 
-    setRules(ruleList);
-    setApps(appList);
-    setNmStatus(nm);
+    const problems: string[] = [];
 
-    setInterfaces(prev => {
-      return ifaces.map((cur) => {
-        const existing = prev.find(p => p.name === cur.name);
-        const rx = cur.rxMbps || 0;
-        const tx = cur.txMbps || 0;
+    if (ifacesRes.status === 'fulfilled') {
+      const ifaces = ifacesRes.value;
+      setInterfaces(prev => {
+        return ifaces.map((cur) => {
+          const existing = prev.find(p => p.name === cur.name);
+          const rx = cur.rxMbps || 0;
+          const tx = cur.txMbps || 0;
 
-        const rxHist = existing
-          ? [...existing.rxHistory.slice(1), rx]
-          : [0, 0, 0, 0, 0, 0, 0, 0, rx];
-        const txHist = existing
-          ? [...existing.txHistory.slice(1), tx]
-          : [0, 0, 0, 0, 0, 0, 0, 0, tx];
+          const rxHist = existing
+            ? [...existing.rxHistory.slice(1), rx]
+            : [0, 0, 0, 0, 0, 0, 0, 0, rx];
+          const txHist = existing
+            ? [...existing.txHistory.slice(1), tx]
+            : [0, 0, 0, 0, 0, 0, 0, 0, tx];
 
-        return {
-          ...cur,
-          rxHistory: rxHist,
-          txHistory: txHist,
-        };
+          return {
+            ...cur,
+            rxHistory: rxHist,
+            txHistory: txHist,
+          };
+        });
       });
-    });
+    } else {
+      problems.push(`adapters: ${errorText(ifacesRes.reason)}`);
+    }
+
+    if (appsRes.status === 'fulfilled') {
+      setApps(appsRes.value);
+    } else {
+      problems.push(`processes: ${errorText(appsRes.reason)}`);
+    }
+
+    if (rulesRes.status === 'fulfilled') {
+      setRules(rulesRes.value);
+    } else {
+      problems.push(`rules: ${errorText(rulesRes.reason)}`);
+    }
+
+    if (nmRes.status === 'fulfilled') {
+      setNmStatus(nmRes.value);
+    } else {
+      problems.push(`net-merge: ${errorText(nmRes.reason)}`);
+    }
+
+    setErrorMsg(problems.length > 0 ? `Some live data could not be loaded — ${problems.join('; ')}` : '');
   };
 
   useEffect(() => {
@@ -94,35 +118,6 @@ export const DashboardView: React.FC = () => {
   const routingMode = nmStatus?.routingMode || nmStatus?.config?.routingMode || 'speed';
   const primaryAdapter = nmStatus?.config?.primaryAdapter || interfaces[0]?.name || '';
   const secondaryAdapter = nmStatus?.config?.secondaryAdapter || interfaces[1]?.name || interfaces[0]?.name || '';
-
-  const handleToggleMerge = async () => {
-    if (busyMode) return;
-    setBusyMode(true);
-    setErrorMsg('');
-    try {
-      await api.toggleNetMerge(!isMergeActive);
-      await loadData().catch((e) => console.error(e));
-    } catch (err: any) {
-      setErrorMsg(err?.message || String(err));
-    } finally {
-      setBusyMode(false);
-    }
-  };
-
-  const handleSwitchRoutingMode = async (mode: 'speed' | 'backup', pri?: string, sec?: string) => {
-    if (busyMode) return;
-    setBusyMode(true);
-    try {
-      await api.setNetMergeRoutingMode(
-        mode,
-        pri !== undefined ? pri : primaryAdapter,
-        sec !== undefined ? sec : secondaryAdapter,
-      );
-      await loadData().catch((e) => console.error(e));
-    } finally {
-      setBusyMode(false);
-    }
-  };
 
   const openModalForRule = (rule?: RuleRecord, defaultAppName?: string, defaultPath?: string) => {
     if (rule) {
@@ -243,151 +238,6 @@ export const DashboardView: React.FC = () => {
           </button>
         </div>
       )}
-      {/* Beszel-Style Top Control & Mode Banner */}
-      <div className="card" style={{
-        marginBottom: 0,
-        padding: '14px 18px',
-        background: '#121215',
-        border: `1px solid ${isMergeActive ? 'rgba(16, 185, 129, 0.3)' : '#232329'}`,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '14px',
-      }}>
-        {/* Left: Adapter Status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{
-            width: '40px',
-            height: '40px',
-            borderRadius: '8px',
-            background: isMergeActive ? 'rgba(16, 185, 129, 0.14)' : '#18181b',
-            border: `1px solid ${isMergeActive ? 'rgba(16, 185, 129, 0.35)' : '#27272a'}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}>
-            {isMergeActive ? (
-              <CheckCircle2 size={20} color="#10b981" />
-            ) : (
-              <PauseCircle size={20} color="#a1a1aa" />
-            )}
-          </div>
-
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '14px', fontWeight: 700, color: '#fafafa' }}>
-                {isMergeActive
-                  ? 'Active Adapter: net-merge'
-                  : 'Default Adapter: System Default (Standby)'}
-              </span>
-              <span className={`status-pill ${isMergeActive ? 'pass' : 'blocked'}`}>
-                {isMergeActive ? 'ACTIVE' : 'INACTIVE · DO NOTHING'}
-              </span>
-            </div>
-            <div style={{ fontSize: '11.5px', color: '#a1a1aa', marginTop: '2px' }}>
-              {isMergeActive
-                ? routingMode === 'backup'
-                  ? `Backup Failover Mode: Traffic uses Primary (${primaryAdapter || 'auto'}) and switches to Secondary (${secondaryAdapter || 'auto'}) only on failure.`
-                  : 'Speed Mode: Utilizing all healthy network adapters simultaneously for maximum combined bandwidth.'
-                : 'Net-Merge is off. Your OS uses its unmodified System Default adapter; NetPilot is standing by without altering any routes.'}
-            </div>
-          </div>
-        </div>
-
-        {/* Right: Mode Selector (Speed vs Backup) + Master Power Toggle */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          {/* Speed vs Backup Mode Segmented Control */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            backgroundColor: '#09090b',
-            border: '1px solid #27272a',
-            borderRadius: '7px',
-            padding: '3px',
-            gap: '3px',
-          }}>
-            <button
-              onClick={() => handleSwitchRoutingMode('speed')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                padding: '5px 11px',
-                borderRadius: '5px',
-                fontSize: '11.5px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                border: 'none',
-                backgroundColor: routingMode !== 'backup' ? '#27272a' : 'transparent',
-                color: routingMode !== 'backup' ? '#38bdf8' : '#a1a1aa',
-              }}
-              title="Speed Mode: Use all adapters simultaneously for higher combined speed"
-            >
-              <Zap size={12} />
-              <span>Speed Mode</span>
-            </button>
-
-            <button
-              onClick={() => handleSwitchRoutingMode('backup')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                padding: '5px 11px',
-                borderRadius: '5px',
-                fontSize: '11.5px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                border: 'none',
-                backgroundColor: routingMode === 'backup' ? '#27272a' : 'transparent',
-                color: routingMode === 'backup' ? '#fbbf24' : '#a1a1aa',
-              }}
-              title="Backup Mode: Use primary adapter, switch to secondary only if primary fails"
-            >
-              <ShieldAlert size={12} />
-              <span>Backup Mode</span>
-            </button>
-          </div>
-
-          {/* Primary / Secondary Adapter Selector when in Backup Mode */}
-          {routingMode === 'backup' && interfaces.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
-              <span style={{ color: '#a1a1aa' }}>Primary:</span>
-              <select
-                value={primaryAdapter}
-                onChange={e => handleSwitchRoutingMode('backup', e.target.value, secondaryAdapter)}
-                style={{ padding: '4px 8px', fontSize: '11px' }}
-              >
-                {interfaces.map(i => (
-                  <option key={i.name} value={i.name}>{i.name}</option>
-                ))}
-              </select>
-              <span style={{ color: '#a1a1aa' }}>Backup:</span>
-              <select
-                value={secondaryAdapter}
-                onChange={e => handleSwitchRoutingMode('backup', primaryAdapter, e.target.value)}
-                style={{ padding: '4px 8px', fontSize: '11px' }}
-              >
-                {interfaces.map(i => (
-                  <option key={i.name} value={i.name}>{i.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          <button
-            onClick={handleToggleMerge}
-            disabled={busyMode}
-            className={`btn ${isMergeActive ? 'btn-danger' : 'btn-emerald'}`}
-            style={{ padding: '6px 14px' }}
-          >
-            <Power size={13} />
-            <span>{busyMode ? (isMergeActive ? 'Stopping...' : 'Starting...') : (isMergeActive ? 'Stop Net-Merge' : 'Start Net-Merge')}</span>
-          </button>
-        </div>
-      </div>
-
       {/* Beszel-Style "All Systems / Network Adapters" Table Card */}
       <div className="card" style={{ marginBottom: 0, padding: '0', overflow: 'hidden' }}>
         <div style={{

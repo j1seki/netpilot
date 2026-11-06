@@ -148,10 +148,20 @@ func main() {
 		_ = service.GetInterfaces()
 	}()
 
-	// Start local loopback HTTP API listener for live inspection & testing
+	// Start local loopback HTTP API listener for live inspection & testing.
+	// It is also the fallback transport for the desktop webview: Wails serves /api/*
+	// directly, but WebView2/WKWebView can block the cross-origin loopback fetch, so the
+	// CORS headers below keep that fallback usable instead of leaving the UI empty.
 	go func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api")
 			service.ServeHTTP(w, r)
 		})

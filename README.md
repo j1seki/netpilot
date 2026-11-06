@@ -62,17 +62,23 @@ Grab the latest prebuilt package for your operating system from the **[Releases 
 
 | Operating System | Package | Notes |
 | :--- | :--- | :--- |
-| **🪟 Windows (10 / 11)** | **`netpilot-setup.exe`** / **`netpilot-windows-amd64-portable.zip`** | Includes NetPilot GUI, embedded `net-merge.exe`, `net-merge-tray.exe`, and `wintun.dll`. |
-| **🍎 macOS (Universal)** | **`netpilot-macos-universal.dmg`** | Native Universal binary for Apple Silicon (`M1/M2/M3/M4`) & Intel Macs with embedded `net-merge`. |
-| **🐧 Linux (All Distros)** | **`netpilot-linux-amd64.AppImage`** | Portable single-file AppImage working across Ubuntu, Debian, Fedora, Arch, Mint, and all desktop environments. |
+| **🪟 Windows (10 / 11)** | **`netpilot-setup.exe`** / **`netpilot-windows-amd64-portable.zip`** | Single-binary NetPilot GUI + net-merge engine (auto-extracts `wintun.dll`). |
+| **🍎 macOS (Universal)** | **`netpilot-macos-universal.dmg`** | Native Universal binary for Apple Silicon (`M1/M2/M3/M4`) & Intel Macs. |
+| **🐧 Linux x86-64** | **`netpilot-linux-amd64.AppImage`** | Portable single-file AppImage for Ubuntu, Debian, Fedora, Arch, Mint, etc. |
+| **🐧 Linux ARM64** | **`netpilot-linux-arm64.AppImage`** | Native aarch64 AppImage for ARM servers, Apple Silicon VMs (OrbStack/UTM), and Raspberry Pi-class devices. |
 
 ### Running the Linux AppImage
 
 Make the AppImage executable and run it directly — no installation required:
 
 ```bash
+# x86-64
 chmod +x netpilot-linux-amd64.AppImage
 ./netpilot-linux-amd64.AppImage
+
+# ARM64 (aarch64)
+chmod +x netpilot-linux-arm64.AppImage
+./netpilot-linux-arm64.AppImage
 ```
 
 > **Linux WebKitGTK Note:** Most desktop Linux distributions include WebKit2GTK preinstalled. On minimal installations, install the WebKit2GTK 4.1 runtime if needed:

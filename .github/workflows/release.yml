@@ -251,8 +251,94 @@ jobs:
           path: netpilot-linux-amd64.AppImage
           if-no-files-found: error
 
+  linux-arm64:
+    # Native arm64 runner: Wails needs cgo + arm64 GTK/WebKit, so cross-compiling the
+    # AppImage on the amd64 runner is not possible without a full sysroot.
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install webview deps
+        run: |
+          for i in 1 2 3; do
+            if sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev; then
+              exit 0
+            fi
+            echo "apt attempt $i failed; retrying in 15s"
+            sleep 15
+          done
+      - name: Build frontend with typescript-go (tsgo)
+        run: |
+          cd frontend
+          npm ci || npm install
+          npm run build
+      - name: Build single-binary NetPilot (Linux arm64)
+        run: |
+          v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
+          mkdir -p dist internal/netmerge/embedded/bin
+          CGO_ENABLED=1 GOARCH=arm64 go build -tags gtk3 -trimpath -ldflags "-s -w -X netpilot/internal/branding.AppVersion=$v" -o dist/netpilot ./cmd/netpilot
+      - name: Build arm64 Portable AppImage
+        run: |
+          set -euo pipefail
+          appdir=AppDir-arm64
+          rm -rf "$appdir"
+          mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
+                   "$appdir/usr/share/icons/hicolor/32x32/apps" \
+                   "$appdir/usr/share/icons/hicolor/128x128/apps" \
+                   "$appdir/usr/share/icons/hicolor/256x256/apps" \
+                   "$appdir/usr/share/icons/hicolor/512x512/apps" \
+                   "$appdir/usr/share/doc/netpilot"
+          cp dist/netpilot "$appdir/usr/bin/netpilot"
+          chmod +x "$appdir/usr/bin/netpilot"
+
+          cp packaging/appimage/netpilot.desktop "$appdir/netpilot.desktop"
+          cp packaging/appimage/netpilot.desktop "$appdir/usr/share/applications/netpilot.desktop"
+          for sz in 32x32 128x128 256x256 512x512; do
+            cp "packaging/icons/hicolor/$sz/apps/net-merge.png" \
+               "$appdir/usr/share/icons/hicolor/$sz/apps/netpilot.png"
+          done
+          cp "$appdir/usr/share/icons/hicolor/512x512/apps/netpilot.png" "$appdir/netpilot.png"
+          ln -sf netpilot.png "$appdir/.DirIcon"
+          cp LICENSE THIRD-PARTY-NOTICES.md "$appdir/usr/share/doc/netpilot/"
+
+          cat > "$appdir/AppRun" <<'APPRUN'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export APPDIR="$HERE"
+          export PATH="$HERE/usr/bin:$PATH"
+          export LD_LIBRARY_PATH="$HERE/usr/lib:${LD_LIBRARY_PATH:-}"
+          export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+          ICON_DST="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/32x32/apps"
+          mkdir -p "$ICON_DST" 2>/dev/null || true
+          cp -f "$HERE/usr/share/icons/hicolor/32x32/apps/netpilot.png" "$ICON_DST/netpilot.png" 2>/dev/null || true
+
+          export WEBKIT_DISABLE_DMABUF_RENDERER="${WEBKIT_DISABLE_DMABUF_RENDERER:-1}"
+
+          exec "$HERE/usr/bin/netpilot" "$@"
+          APPRUN
+          chmod +x "$appdir/AppRun"
+
+          curl -fsSL -o /tmp/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage
+          chmod +x /tmp/appimagetool
+          ARCH=aarch64 /tmp/appimagetool --appimage-extract-and-run \
+            --no-appstream "$appdir" netpilot-linux-arm64.AppImage
+          chmod +x netpilot-linux-arm64.AppImage
+          ls -lh netpilot-linux-arm64.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: netpilot-linux-arm64.AppImage
+          if-no-files-found: error
+
   publish:
-    needs: [windows, macos, linux]
+    needs: [windows, macos, linux, linux-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -280,7 +366,7 @@ jobs:
           - Silent Windows execution (no console popups) & minimize-to-tray support across Windows, macOS, and Linux Desktop Environments
 
           Packages:
-          - Linux: netpilot-linux-amd64.AppImage (portable across all Linux desktop environments)
+          - Linux: netpilot-linux-amd64.AppImage & netpilot-linux-arm64.AppImage (portable across all Linux desktop environments)
           - macOS: netpilot-macos-universal.dmg (Intel & Apple Silicon)
           - Windows: netpilot-setup.exe (installer) & netpilot-windows-amd64-portable.zip
           EOF

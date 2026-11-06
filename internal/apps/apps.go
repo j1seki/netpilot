@@ -147,7 +147,7 @@ func (m *Manager) discoverLinux() {
 }
 
 func (m *Manager) discoverPOSIX() {
-	out, err := exec.Command("ps", "-axo", "pid=,comm=").Output()
+	out, err := posixProcessList()
 	if err != nil {
 		return
 	}
@@ -187,6 +187,21 @@ func (m *Manager) discoverPOSIX() {
 			delete(m.processes, pid)
 		}
 	}
+}
+
+// posixProcessList asks ps for every process. GUI apps launched from Finder/LaunchServices
+// get a minimal PATH, so try the absolute locations macOS and the BSDs use instead of relying
+// on exec.LookPath finding ps.
+func posixProcessList() ([]byte, error) {
+	var lastErr error
+	for _, name := range []string{"ps", "/bin/ps", "/usr/bin/ps"} {
+		out, err := exec.Command(name, "-axo", "pid=,comm=").Output()
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 // GetSocketCount returns the total number of network sockets opened by tracked processes.

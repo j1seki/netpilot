@@ -220,6 +220,7 @@ export interface TTLSetting {
 export interface TTLReport {
   schema: string;
   at: string;
+  appVersion?: string;
   capabilities: {
     platform: string;
     supported: boolean;
@@ -227,18 +228,31 @@ export interface TTLReport {
     notes: string[];
   };
   settings: TTLSetting[];
+  elevated: boolean;
+  elevationNote?: string;
+  warnings?: string[];
 }
 
 export interface TTLOutcome {
+  schema?: string;
   action: string;
   dryRun: boolean;
+  applied?: number;
+  failed?: number;
   changes: Array<{
     setting: any;
     from: number | null;
     to: number;
+    outcome?: string;
+    detail?: string;
+    verified?: boolean;
     reverted?: boolean;
     error?: string;
   }>;
+  rolledBack?: boolean;
+  rollbackIncomplete?: boolean;
+  rollbackDetail?: string[];
+  notes?: string[];
   at: string;
 }
 

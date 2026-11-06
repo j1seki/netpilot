@@ -54,7 +54,11 @@ export const TTLView: React.FC = () => {
         dryRun,
       });
       setOutcome(out);
-      await loadData();
+      // A preview must not disturb the values the user is editing; only a real apply
+      // changed the system, so only then re-read the live settings.
+      if (!dryRun) {
+        await loadData();
+      }
     } catch (err: any) {
       setErrorMsg(err?.message || String(err));
     } finally {
@@ -126,6 +130,30 @@ export const TTLView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Elevation state is reported by the backend, so the user learns whether a live
+          apply can work before clicking it instead of discovering it from a failed write. */}
+      {report && (
+        <div style={{
+          padding: '9px 12px',
+          borderRadius: '7px',
+          fontSize: '11.5px',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '8px',
+          background: report.elevated ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+          border: `1px solid ${report.elevated ? 'rgba(16, 185, 129, 0.28)' : 'rgba(245, 158, 11, 0.3)'}`,
+          color: report.elevated ? '#34d399' : '#fbbf24',
+        }}>
+          <ShieldCheck size={14} style={{ marginTop: '1px', flexShrink: 0 }} />
+          <span>
+            <strong>{report.elevated ? 'Administrator rights available.' : 'Not elevated.'}</strong>{' '}
+            {report.elevationNote || (report.elevated
+              ? 'Preview and live changes are both available.'
+              : 'Preview (dry run) works normally; applying changes needs administrator/root privileges.')}
+          </span>
+        </div>
+      )}
 
       {/* Grid: Configuration & Hotspot Presets */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '12px' }}>
@@ -250,8 +278,34 @@ export const TTLView: React.FC = () => {
           )}
 
           {outcome && (
-            <div style={{ marginTop: '10px', padding: '6px 10px', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', fontSize: '11px' }}>
-              {outcome.dryRun ? '✓ Dry-run plan calculated:' : '✓ Successfully applied:'} {outcome.changes.length} setting(s) updated.
+            <div style={{
+              marginTop: '10px',
+              padding: '7px 10px',
+              borderRadius: '4px',
+              background: outcome.dryRun ? 'rgba(56, 189, 248, 0.13)' : (outcome.failed ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)'),
+              color: outcome.dryRun ? '#7dd3fc' : (outcome.failed ? '#f87171' : '#34d399'),
+              fontSize: '11px',
+            }}>
+              <div style={{ fontWeight: 600 }}>
+                {outcome.dryRun
+                  ? `Dry-run plan calculated: ${outcome.changes.length} setting(s) would change (nothing was written).`
+                  : outcome.failed
+                    ? `Applied ${outcome.applied ?? 0}, failed ${outcome.failed}.`
+                    : `Successfully applied ${outcome.applied ?? outcome.changes.length} setting(s).`}
+              </div>
+              {outcome.changes.length > 0 && (
+                <div style={{ marginTop: '5px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  {outcome.changes.slice(0, 8).map((c, i) => (
+                    <div key={i} className="font-mono" style={{ fontSize: '10.5px' }}>
+                      {c.setting?.name || c.setting?.id}: {c.from ?? 'unreadable'} → {c.to}
+                      {c.error ? ` (${c.error})` : ''}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {outcome.notes && outcome.notes.length > 0 && (
+                <div style={{ marginTop: '5px', fontSize: '10.5px' }}>{outcome.notes.join(' ')}</div>
+              )}
             </div>
           )}
 
@@ -274,7 +328,7 @@ export const TTLView: React.FC = () => {
               style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, fontSize: '11.5px' }}
             >
               <Play size={12} />
-              <span>{applying ? 'Applying...' : 'Apply TTL Changes'}</span>
+              <span>{applying ? 'Applying...' : (report?.elevated ? 'Apply TTL Changes' : 'Apply TTL Changes (needs admin)')}</span>
             </button>
           </div>
         </div>

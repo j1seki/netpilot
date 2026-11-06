@@ -29,10 +29,10 @@ import (
 )
 
 type cachedWAN struct {
-	ip   string
-	isp  string
-	loc  string
-	at   time.Time
+	ip  string
+	isp string
+	loc string
+	at  time.Time
 }
 
 // NetPilotService is the backend RPC service exposed to the Wails 3 React frontend.
@@ -121,7 +121,13 @@ func (s *NetPilotService) SetExecutionMode(targetMode string, forceLive bool) (m
 
 // ListRules returns all configured routing rules.
 func (s *NetPilotService) ListRules() ([]db.RuleRecord, error) {
-	return s.database.ListRules()
+	rules, err := s.database.ListRules()
+	if rules == nil {
+		// An empty table must serialize as [] rather than null: the frontend treats null
+		// as "no backend data" and refuses to render the whole dashboard batch.
+		rules = []db.RuleRecord{}
+	}
+	return rules, err
 }
 
 // SaveRule inserts or updates a routing rule.
@@ -262,7 +268,11 @@ func (s *NetPilotService) lookupWanIP(ifaceName string, ifaceIdx int, localIP ne
 
 // GetInterfaces returns real system interfaces and live throughput.
 func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
-	var out []InterfaceInfo
+	// Always return a non-nil slice: the frontend treats a JSON null as "backend has no
+	// data" and would refuse to render, which previously hid every adapter (and, because
+	// the dashboard loads its data in one batch, every process too) on a host whose
+	// adapters were all filtered out.
+	out := make([]InterfaceInfo, 0, 8)
 
 	// Read real host network counters first
 	_ = s.analytics.SampleHostNICs()
@@ -298,17 +308,33 @@ func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 		addrs, _ := ifc.Addrs()
 		ipStr := ""
 		var localV4 net.IP
+		// Prefer a routable IPv4 address for the WAN probe, but fall back to an IPv6
+		// address so IPv6-only adapters (common on Windows/macOS tethering and some
+		// VPN setups) are still listed instead of silently disappearing.
+		var ipv6Str string
 		for _, a := range addrs {
-			if ipn, ok := a.(*net.IPNet); ok && ipn.IP.To4() != nil {
-				ipStr = ipn.String()
-				localV4 = ipn.IP.To4()
-				break
+			ipn, ok := a.(*net.IPNet)
+			if !ok || ipn.IP.IsLinkLocalUnicast() {
+				continue
+			}
+			if v4 := ipn.IP.To4(); v4 != nil {
+				if localV4 == nil {
+					localV4 = v4
+					ipStr = ipn.String()
+				}
+			} else if ipv6Str == "" && ipn.IP.To16() != nil {
+				ipv6Str = ipn.String()
 			}
 		}
+		if ipStr == "" {
+			ipStr = ipv6Str
+		}
 
-		isUp := ifc.Flags&net.FlagUp != 0 && ipStr != ""
+		// Keep every adapter the OS says is up. An adapter can be up before it has an
+		// address (DHCP in progress, VPN connecting), and hiding it makes the UI look
+		// broken; only discard interfaces that are both down and unaddressed.
+		isUp := ifc.Flags&net.FlagUp != 0
 		if !isUp && ipStr == "" {
-			// Skip completely disconnected / unconfigured ghost adapters
 			continue
 		}
 
@@ -481,7 +507,11 @@ func (s *NetPilotService) EvaluateRoute(appName, path, destination string) rules
 
 // GetAdapterCaps returns configured adapter caps.
 func (s *NetPilotService) GetAdapterCaps() ([]db.AdapterCapRecord, error) {
-	return s.database.GetAdapterCaps()
+	caps, err := s.database.GetAdapterCaps()
+	if caps == nil {
+		caps = []db.AdapterCapRecord{}
+	}
+	return caps, err
 }
 
 // SaveAdapterCap persists speed limits and quotas for an interface.
@@ -498,12 +528,20 @@ func (s *NetPilotService) SaveAdapterCap(ac db.AdapterCapRecord) error {
 
 // GetMonthlyHistory retrieves historical bandwidth records.
 func (s *NetPilotService) GetMonthlyHistory(yearMonth string) ([]db.MonthlyUsageRecord, error) {
-	return s.database.GetMonthlyHistory(yearMonth)
+	hist, err := s.database.GetMonthlyHistory(yearMonth)
+	if hist == nil {
+		hist = []db.MonthlyUsageRecord{}
+	}
+	return hist, err
 }
 
 // GetMonthlySummaries returns high-level monthly summaries.
 func (s *NetPilotService) GetMonthlySummaries() ([]db.MonthlySummary, error) {
-	return s.database.GetAllMonthlySummaries()
+	summaries, err := s.database.GetAllMonthlySummaries()
+	if summaries == nil {
+		summaries = []db.MonthlySummary{}
+	}
+	return summaries, err
 }
 
 // NetMerge Control RPC methods
@@ -662,14 +700,13 @@ func (s *NetPilotService) ApplyTTL(ctx context.Context, bumpIPv4, bumpIPv6 int, 
 		pol = ttlmgr.PolicyInterfaceAllExcept
 	}
 
-	cfg := ttlmgr.Config{
-		Enabled:       true,
-		BumpIPv4:      bumpIPv4,
-		BumpIPv6:      bumpIPv6,
-		Policy:        pol,
-		IncludeIfaces: ifaceList,
-		Updated:       time.Now(),
-	}
+	cfg := ttlmgr.DefaultConfig()
+	cfg.Enabled = true
+	cfg.BumpIPv4 = bumpIPv4
+	cfg.BumpIPv6 = bumpIPv6
+	cfg.Policy = pol
+	cfg.IncludeIfaces = ifaceList
+	cfg.Updated = time.Now()
 
 	return s.ttlManager.Apply(ctx, ttlmgr.ApplyRequest{
 		Ifaces:   ifaces,
@@ -704,7 +741,11 @@ func (s *NetPilotService) GetTTLHistory() ([]ttlmgr.Event, error) {
 	if s.ttlManager == nil {
 		return []ttlmgr.Event{}, fmt.Errorf("TTL manager not initialized")
 	}
-	return s.ttlManager.Store().History(100)
+	hist, err := s.ttlManager.Store().History(100)
+	if hist == nil {
+		hist = []ttlmgr.Event{}
+	}
+	return hist, err
 }
 
 // ExportMonthlyCSV returns CSV string representation of monthly network usage.
