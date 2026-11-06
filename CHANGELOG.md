@@ -5,6 +5,19 @@ entry here before pushing a version tag.
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-11-06
+
+### Fixed
+- **Linux AppImage now starts Net-Merge with administrator permission.** The old activation path handed
+  Polkit the temporary FUSE-mounted executable inside the AppImage. Root cannot reliably access that
+  user mount, so the start request returned HTTP 400 and never made the TUN adapter. NetPilot now asks
+  Polkit to rerun the original AppImage with `--appimage-extract-and-run`, which creates a root-owned
+  temporary extraction before starting the system-wide engine. `chmod +x` remains necessary to launch an
+  AppImage but cannot grant `CAP_NET_ADMIN`; the Polkit prompt is expected.
+- **One tray icon on Linux.** NetPilot no longer manually registers Wails' already-registered
+  StatusNotifierItem with both KDE and freedesktop watcher interfaces, which created two icons on
+  desktops exposing both interfaces.
+
 ## [0.3.10] - 2026-11-06
 
 ### Added

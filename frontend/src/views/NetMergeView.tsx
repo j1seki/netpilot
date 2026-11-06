@@ -78,7 +78,13 @@ export const NetMergeView: React.FC = () => {
       );
       await loadStatus();
     } catch (err: any) {
-      setErrorMsg(err?.message || String(err));
+      const detail = err?.message || String(err);
+      setErrorMsg(
+        `Could not start Net-Merge: ${detail}` +
+        (detail.toLowerCase().includes('appimage')
+          ? ' AppImages cannot keep CAP_NET_ADMIN, so NetPilot will ask Polkit (pkexec) for permission each time it starts the system-wide adapter.'
+          : '')
+      );
     } finally {
       setLoading(false);
     }

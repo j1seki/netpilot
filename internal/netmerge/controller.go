@@ -34,7 +34,7 @@ type Config struct {
 	Weights          map[string]float64 `json:"weights"`
 	ShowConsole      bool               `json:"showConsole"`
 	Autostart        bool               `json:"autostart"`
-	EngineSource     string             `json:"engineSource"`     // "builtin" (default) or "external"
+	EngineSource     string             `json:"engineSource"` // "builtin" (default) or "external"
 	BinaryPath       string             `json:"binaryPath,omitempty"`
 	RoutingMode      string             `json:"routingMode"`      // "speed" (default) or "backup"
 	PrimaryAdapter   string             `json:"primaryAdapter"`   // primary NIC name in backup mode
@@ -44,21 +44,21 @@ type Config struct {
 
 // StatusInfo represents the runtime state of net-merge.
 type StatusInfo struct {
-	IsRunning        bool               `json:"isRunning"`
-	PID              int                `json:"pid"`
-	Mode             string             `json:"mode"`
-	RoutingMode      string             `json:"routingMode"`      // "speed" or "backup"
-	DefaultAdapter   string             `json:"defaultAdapter"`   // "net-merge" when active, "System Default" when inactive
-	ActiveAdapter    string             `json:"activeAdapter"`    // currently active primary/failover adapter or "net-merge"
-	V6State          string             `json:"v6State"`
-	UptimeSec        int64              `json:"uptimeSec"`
-	Autostart        bool               `json:"autostart"`
-	SocksRunning     bool               `json:"socksRunning"`
-	SocksAddress     string             `json:"socksAddress"`
-	Config           Config             `json:"config"`
-	NICs             []engine.SlotStats `json:"nics"`
-	Limits           map[string]float64 `json:"limits"`
-	Binary           BinaryInfo         `json:"binary"`
+	IsRunning      bool               `json:"isRunning"`
+	PID            int                `json:"pid"`
+	Mode           string             `json:"mode"`
+	RoutingMode    string             `json:"routingMode"`    // "speed" or "backup"
+	DefaultAdapter string             `json:"defaultAdapter"` // "net-merge" when active, "System Default" when inactive
+	ActiveAdapter  string             `json:"activeAdapter"`  // currently active primary/failover adapter or "net-merge"
+	V6State        string             `json:"v6State"`
+	UptimeSec      int64              `json:"uptimeSec"`
+	Autostart      bool               `json:"autostart"`
+	SocksRunning   bool               `json:"socksRunning"`
+	SocksAddress   string             `json:"socksAddress"`
+	Config         Config             `json:"config"`
+	NICs           []engine.SlotStats `json:"nics"`
+	Limits         map[string]float64 `json:"limits"`
+	Binary         BinaryInfo         `json:"binary"`
 }
 
 // Controller coordinates all net-merge operations directly inside NetPilot.
@@ -543,22 +543,7 @@ func (c *Controller) SetSystemWide(on bool) error {
 		// Trigger UAC elevation directly on our single binary (`netpilot.exe run ...`)
 		launchErr = platform.RelaunchElevated(args, true)
 	} else if runtime.GOOS == "linux" && !platform.IsAdmin() {
-		// On Linux when not root/CAP_NET_ADMIN, try non-interactive sudo first, then pkexec
-		if sudoPath, err := exec.LookPath("sudo"); err == nil {
-			checkCmd := exec.Command(sudoPath, "-n", "true")
-			execx.PrepareCommand(checkCmd)
-			if checkCmd.Run() == nil {
-				cmd := exec.Command(sudoPath, append([]string{"-n", bin.Path}, args...)...)
-				execx.PrepareCommand(cmd)
-				launchErr = cmd.Start()
-			} else if pkexecPath, err := exec.LookPath("pkexec"); err == nil {
-				cmd := exec.Command(pkexecPath, append([]string{bin.Path}, args...)...)
-				execx.PrepareCommand(cmd)
-				launchErr = cmd.Start()
-			} else {
-				launchErr = fmt.Errorf("CAP_NET_ADMIN or root required; run `sudo setcap cap_net_admin,cap_net_raw+ep %s` or launch with sudo", bin.Path)
-			}
-		}
+		launchErr = startElevatedLinux(bin.Path, args)
 	} else {
 		cmd := exec.Command(bin.Path, args...)
 		execx.PrepareCommand(cmd)

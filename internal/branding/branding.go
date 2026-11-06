@@ -33,7 +33,7 @@ const (
 
 // AppVersion is the current semver release. Kept as a var (not a const) so release
 // builds can inject the tag: -X netpilot/internal/branding.AppVersion=<tag>.
-var AppVersion = "0.3.10"
+var AppVersion = "0.3.11"
 
 // Info returns a map of all branding metadata for frontend serialization.
 func Info() map[string]string {

@@ -3,10 +3,8 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/godbus/dbus/v5"
 
@@ -15,9 +13,9 @@ import (
 )
 
 // prepareLinuxTrayEnvironment ensures that icon files exist in both ~/.local/share/icons
-// and the NetPilot state directory, and continually ensures NetPilot's StatusNotifierItem
-// is registered with both org.kde.StatusNotifierWatcher and org.freedesktop.StatusNotifierWatcher
-// across all Linux desktop environments (KDE, GNOME, XFCE, Cinnamon, MATE, Sway/Hyprland/Waybar, i3).
+// and the NetPilot state directory. Wails itself owns and registers the StatusNotifierItem;
+// registering it again here produced two icons on desktops which proxy both KDE and
+// freedesktop watcher interfaces (notably AppImage hosts running AppIndicator).
 func prepareLinuxTrayEnvironment() {
 	iconDir := filepath.Join(state.DefaultDir(), "icons")
 	_ = os.MkdirAll(iconDir, 0o755)
@@ -31,39 +29,6 @@ func prepareLinuxTrayEnvironment() {
 		}
 	}
 
-	go func() {
-		// Wait briefly for Wails to export /StatusNotifierItem on the session bus
-		time.Sleep(800 * time.Millisecond)
-		conn, err := dbus.SessionBus()
-		if err != nil {
-			return
-		}
-		serviceName := fmt.Sprintf("org.kde.StatusNotifierItem-%d-1", os.Getpid())
-		_, _ = conn.RequestName(serviceName, dbus.NameFlagDoNotQueue)
-
-		registerBoth := func() {
-			for _, watcher := range []string{
-				"org.kde.StatusNotifierWatcher",
-				"org.freedesktop.StatusNotifierWatcher",
-			} {
-				obj := conn.Object(watcher, "/StatusNotifierWatcher")
-				// Register by well-known service name (preferred by KDE, XFCE, Waybar, GNOME AppIndicator)
-				c := obj.Call(watcher+".RegisterStatusNotifierItem", 0, serviceName)
-				if c.Err != nil {
-					// Fallback: register by object path
-					_ = obj.Call(watcher+".RegisterStatusNotifierItem", 0, "/StatusNotifierItem").Err
-				}
-			}
-		}
-
-		registerBoth()
-		// Retry registration periodically in case the DE tray applet starts after NetPilot
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			registerBoth()
-		}
-	}()
 }
 
 // isLinuxTrayHostAvailable checks whether any StatusNotifierWatcher or system tray host is active on DBus.
