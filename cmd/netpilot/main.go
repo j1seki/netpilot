@@ -43,6 +43,7 @@ func main() {
 	reqMode := flag.String("mode", "", "initial execution mode (simulation, dry-run, live)")
 	dbPath := flag.String("db", "", "path to SQLite database (default: ~/.config/netpilot/netpilot.db)")
 	showConsole := flag.Bool("console", false, "Show Windows console/terminal window (hidden by default)")
+	startHidden := flag.Bool("start-hidden", false, "start with the main window hidden (tray only)")
 	flag.Parse()
 
 	if *showConsole {
@@ -227,6 +228,7 @@ func main() {
 		Height:    860,
 		MinWidth:  1024,
 		MinHeight: 650,
+		Hidden:    *startHidden,
 	})
 
 	showMainWindow := func() {
