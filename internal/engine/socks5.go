@@ -49,11 +49,9 @@ func (b *Balancer) handleSocks5(c net.Conn) {
 		c.Close()
 		return
 	}
-	if req[1] != 0x01 { // CONNECT only; UDP ASSOCIATE comes with the TUN front-end
-		socksReply(c, repCmdUnsupported)
-		c.Close()
-		return
-	}
+	// Every SOCKS5 command carries an address and port after the request header.
+	// Consume the complete request before rejecting unsupported commands; closing a
+	// TCP connection with unread request bytes can send a reset and discard the reply.
 	var host string
 	switch req[3] {
 	case 0x01:
@@ -93,6 +91,12 @@ func (b *Balancer) handleSocks5(c net.Conn) {
 		return
 	}
 	port := int(binary.BigEndian.Uint16(p[:]))
+
+	if req[1] != 0x01 { // CONNECT only; UDP ASSOCIATE comes with the TUN front-end
+		socksReply(c, repCmdUnsupported)
+		c.Close()
+		return
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
