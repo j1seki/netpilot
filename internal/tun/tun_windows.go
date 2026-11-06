@@ -176,7 +176,7 @@ func startStrongHost(tunIdx int) {
 func syncStrongHost(stop chan struct{}) {
 	found, err := nics.DiscoverNics(nil, nil)
 	if err != nil {
-		logx.Printf("warning: could not discover adapters for weak-host configuration: %v\\n", err)
+		logx.Printf("warning: could not discover adapters for weak-host configuration: %v\n", err)
 		return
 	}
 
@@ -209,7 +209,7 @@ func syncStrongHost(stop chan struct{}) {
 	}
 	out, err := ps.Output()
 	if err != nil {
-		logx.Printf("warning: could not check the adapters' weak host setting: %v\\n", err)
+		logx.Printf("warning: could not check the adapters' weak host setting: %v\n", err)
 		return
 	}
 
@@ -223,11 +223,11 @@ func syncStrongHost(stop chan struct{}) {
 		}
 	}
 	failed := make(map[int]bool)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\\n") {
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Fields(line) // IPv4 14 Enabled Disabled
 		if len(f) != 4 {
 			if strings.TrimSpace(line) != "" {
-				logx.Printf("warning: unexpected weak-host query output %q; retrying adapter sync\\n", line)
+				logx.Printf("warning: unexpected weak-host query output %q; retrying adapter sync\n", line)
 			}
 			continue
 		}
@@ -247,18 +247,18 @@ func syncStrongHost(stop chan struct{}) {
 				// Do not modify networking until the original settings are safely recorded.
 				strongHost.restore = strongHost.restore[:len(strongHost.restore)-1]
 				failed[index] = true
-				logx.Printf("warning: could not persist weak-host restoration state: %v\\n", err)
+				logx.Printf("warning: could not persist weak-host restoration state: %v\n", err)
 				continue
 			}
 		}
 		if err := run("netsh", "interface", fam, "set", "interface", "interface="+f[1],
 			"weakhostsend=disabled", "forwarding=disabled", "store=active"); err != nil {
 				failed[index] = true
-				logx.Printf("warning: %v\\n", err)
+				logx.Printf("warning: %v\n", err)
 				continue
 		}
 		logx.Printf("note: turned off weak host send and forwarding on adapter %s (%s) while merging; "+
-			"Windows ignores pinned connections there. Sharing its connection (Mobile Hotspot) pauses until net-merge is off.\\n", f[1], f[0])
+			"Windows ignores pinned connections there. Sharing its connection (Mobile Hotspot) pauses until net-merge is off.\n", f[1], f[0])
 	}
 	for index := range failed {
 		delete(strongHost.checked, index)
@@ -278,7 +278,7 @@ func containsRestoreEntry(entries []string, entry string) bool {
 
 // persistStrongHostRestoreLocked writes the recovery journal while strongHost.mu is held.
 func persistStrongHostRestoreLocked() error {
-	return os.WriteFile(strongHostFile, []byte(strings.Join(strongHost.restore, "\\n")), 0o600)
+	return os.WriteFile(strongHostFile, []byte(strings.Join(strongHost.restore, "\n")), 0o600)
 }
 
 func stopStrongHost() {
