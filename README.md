@@ -1,83 +1,129 @@
+<div align="center">
+
+<img src="docs/icon.png" alt="NetPilot Logo" width="84" />
+
 # NetPilot
 
-**Multi-network manager and bandwidth aggregator desktop app.**
+**The Modern Multi-Adapter Network Control Center & Bandwidth Aggregator**
 
-NetPilot is a cross-platform desktop control center for **Windows, macOS, and Linux**. It provides a polished GUI for combining network connections, per-app routing, failover, live analytics, and a TTL/hop-limit manager.
+Combine Wi-Fi, Ethernet, 5G Tethering, and VPNs into a single fast connection — or set up instant automatic failover when your primary link drops.
 
----
+[![Latest Release](https://img.shields.io/github/v/release/j1seki/netpilot?style=flat-square&color=10b981&label=Download)](https://github.com/j1seki/netpilot/releases/latest)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-38bdf8?style=flat-square)](#%EF%B8%8F-downloads--installation)
+[![Engine](https://img.shields.io/badge/Embedded%20Engine-net--merge%20%2B%20tray-10b981?style=flat-square)](https://github.com/net-merge/net-merge)
+[![License: MIT](https://img.shields.io/badge/License-MIT-zinc?style=flat-square)](LICENSE)
 
-## ⚡ Required: net-merge Engine
-
-NetPilot uses the high-performance **[net-merge](https://github.com/net-merge/net-merge)** engine to handle network adapter bonding, multi-path routing, and TUN interfaces.
-
-1. Download the latest `net-merge` binary for your platform from the official repository:
-   👉 **[Download net-merge from Releases](https://github.com/net-merge/net-merge/releases)**
-2. Place the executable (`net-merge.exe` on Windows, or `net-merge` on macOS/Linux) in the **same folder** as NetPilot (or add it to your system PATH).
-3. Start NetPilot — it will automatically detect and manage the engine.
+</div>
 
 ---
 
-## 📥 Downloads
+## 🖥️ Interface Overview
 
-Get the latest release for your platform from the **[Releases](https://github.com/j1seki/netpilot/releases)** page:
+Redesigned with an ultra-clean, dark telemetry aesthetic inspired by **[Beszel](https://beszel.dev/)**, NetPilot gives you real-time visibility and one-click control over every network adapter on your machine.
 
-| OS | Download | Description |
-|---|---|---|
-| **Windows** | `netpilot-setup.exe` | Windows installer (Inno Setup) |
-| **macOS** | `netpilot-macos-universal.dmg` | Universal DMG (Intel & Apple Silicon) |
-| **Linux** | `netpilot-linux-amd64.AppImage` | Standalone Linux AppImage |
+### Systems & Adapter Telemetry
+Monitor live download/upload load meters, WAN/LAN addresses, per-application routing policies, and active processes at a glance:
+![NetPilot Systems Dashboard](docs/screenshots/dashboard.png)
 
-### Linux Requirements
+### Net-Merge Engine · Speed Mode vs. Backup Mode
+Switch effortlessly between **Speed Mode** (simultaneous multi-link aggregation) and **Backup Mode** (active-passive failover), tune per-adapter speed caps, or run a zero-privilege SOCKS5 multi-link balancer:
+![NetPilot Net-Merge Engine](docs/screenshots/netmerge.png)
 
-NetPilot's UI is built with WebKitGTK. Modern desktop environments (Ubuntu, Mint, Fedora, Arch) usually have this preinstalled. If NetPilot does not start on a minimal distribution, install the WebKit runtime:
-
-- **Ubuntu / Debian / Mint**:
-  ```bash
-  sudo apt update && sudo apt install -y libwebkit2gtk-4.1-0
-  ```
-- **Fedora / RHEL**:
-  ```bash
-  sudo dnf install webkit2gtk4.1
-  ```
-- **Arch Linux**:
-  ```bash
-  sudo pacman -S webkit2gtk-4.1
-  ```
+### System Tray, Engine Source & Silent Execution Settings
+Customize window close behavior (**Minimize to System Tray** by default vs. **Quit Application**), toggle between the **Built-in Embedded `net-merge` + `net-merge-tray`** or an **External Binary**, and run completely silently on Windows without console popups:
+![NetPilot Settings](docs/screenshots/settings.png)
 
 ---
 
-## ✨ Features
+## ✨ What's New & Key Features
 
-- **Combine Wi-Fi, Ethernet & phone hotspots**: Spread downloads, games, and browsing across all active adapters.
-- **Per-App Routing**: Direct specific applications to specific network links with bandwidth limits.
-- **Automatic Failover**: Fast detection of disconnected links with automatic rerouting.
-- **Real-Time Analytics**: Monitor per-adapter throughput, active sockets, and monthly usage history.
-- **TTL / Hop-Limit Manager**: Fine-tune IPv4/IPv6 packet hop limits for VPNs and network bypass.
-- **Scenario Simulation**: Deterministic test suites to debug routing decisions.
+- 📦 **Zero Setup — `net-merge` & `net-merge-tray` Built Right In**
+  Both `net-merge` and `net-merge-tray` (plus `wintun.dll` on Windows) are embedded directly inside NetPilot out of the box. You don't need to download anything extra. Want to test a custom build? Switch between **Built-in** and **External (Full Path)** anytime in **Settings**.
+- ⚡ **Two Intelligent Routing Modes**
+  - **Speed Mode (Default):** Combines all healthy adapters simultaneously using weighted least-busy-flows scheduling for maximum aggregate download and upload throughput.
+  - **Backup Mode (Failover Only):** Routes 100% of traffic through your **Primary Adapter** (e.g., Ethernet) and switches to your **Secondary Adapter** (e.g., Wi-Fi or Phone Hotspot) *only* when the primary connection fails, automatically switching back when it recovers.
+- 🛡️ **Zero-Interference Standby (`System Default`)**
+  - When **Net-Merge is Active**, your default adapter is `net-merge`.
+  - When **Net-Merge is Inactive**, your default adapter is `System Default` and NetPilot stands by cleanly without touching your OS routing table.
+- 📥 **System Tray First (Windows, macOS & All Linux Desktop Environments)**
+  - Clicking the window close (`X`) button **minimizes NetPilot to the system tray** by default (configurable in Settings to either minimize or quit).
+  - Reopen NetPilot, toggle the `net-merge` adapter on/off, or switch between **Speed** and **Backup** modes directly from the tray icon.
+  - Full StatusNotifierItem / AppIndicator support across **KDE Plasma, GNOME, XFCE, Cinnamon, MATE, Hyprland, Sway, and i3**.
+- 🔇 **100% Silent on Windows**
+  All background health probes, PowerShell/netsh queries, and `net-merge` operations run with `CREATE_NO_WINDOW` — no flashing CMD windows ever.
+- 🎯 **Per-App Routing, TTL Manager & Monthly Analytics**
+  Pin specific apps or games to specific adapters, customize IPv4/IPv6 Hop Limits (TTL) for hotspot carrier bypass, and track historical bandwidth usage per adapter and application.
 
 ---
 
-## 🛠️ Development
+## ⬇️ Downloads & Installation
+
+Grab the latest prebuilt package for your operating system from the **[Releases Page](https://github.com/j1seki/netpilot/releases/latest)**:
+
+| Operating System | Package | Notes |
+| :--- | :--- | :--- |
+| **🪟 Windows (10 / 11)** | **`netpilot-setup.exe`** / **`netpilot-windows-amd64-portable.zip`** | Includes NetPilot GUI, embedded `net-merge.exe`, `net-merge-tray.exe`, and `wintun.dll`. |
+| **🍎 macOS (Universal)** | **`netpilot-macos-universal.dmg`** | Native Universal binary for Apple Silicon (`M1/M2/M3/M4`) & Intel Macs with embedded `net-merge`. |
+| **🐧 Linux (All Distros)** | **`netpilot-linux-amd64.AppImage`** | Portable single-file AppImage working across Ubuntu, Debian, Fedora, Arch, Mint, and all desktop environments. |
+
+### Running the Linux AppImage
+
+Make the AppImage executable and run it directly — no installation required:
 
 ```bash
-# Clone the repository
+chmod +x netpilot-linux-amd64.AppImage
+./netpilot-linux-amd64.AppImage
+```
+
+> **Linux WebKitGTK Note:** Most desktop Linux distributions include WebKit2GTK preinstalled. On minimal installations, install the WebKit2GTK 4.1 runtime if needed:
+> - **Ubuntu / Debian / Mint:** `sudo apt update && sudo apt install -y libwebkit2gtk-4.1-0`
+> - **Fedora / RHEL:** `sudo dnf install webkit2gtk4.1`
+> - **Arch Linux:** `sudo pacman -S webkit2gtk-4.1`
+
+---
+
+## 🔄 Automated `net-merge` Sync & Release Pipeline
+
+NetPilot stays automatically synchronized with upstream **[net-merge/net-merge](https://github.com/net-merge/net-merge)**:
+- A scheduled GitHub Actions workflow (`.github/workflows/sync-net-merge.yml`) checks for new `net-merge` releases every 6 hours.
+- Whenever a new `net-merge` version is published, GitHub Actions automatically syncs the engine, embeds both `net-merge` and `net-merge-tray`, and builds a fresh NetPilot release for Windows, macOS, and Linux.
+
+---
+
+## 🛠️ Building from Source
+
+NetPilot uses **Go** for the backend/engine and **React + Vite + `typescript-go` (`tsgo`)** for the frontend.
+
+```bash
+# 1. Clone the repository
 git clone https://github.com/j1seki/netpilot.git
 cd netpilot
 
-# Build frontend assets
+# 2. Sync the latest upstream net-merge source (optional, already synced in repo)
+bash scripts/sync-net-merge.sh
+
+# 3. Build frontend assets (typechecked with typescript-go / tsgo)
 cd frontend
-npm ci && npm run build
+npm ci
+npm run build
 cd ..
 
-# Build NetPilot GUI
-go build -o dist/netpilot ./cmd/netpilot
+# 4. Build and embed net-merge + net-merge-tray
+mkdir -p dist internal/netmerge/embedded/bin
+go build -trimpath -ldflags "-s -w" -o dist/net-merge ./cmd/net-merge
+go build -trimpath -ldflags "-s -w -X main.defaultCmd=tray" -o dist/net-merge-tray ./cmd/net-merge
+cp dist/net-merge internal/netmerge/embedded/bin/
+cp dist/net-merge-tray internal/netmerge/embedded/bin/
 
-# Run tests
-go test ./tests/common ./tests/scenarios
+# 5. Build NetPilot Desktop
+go build -tags gtk3 -trimpath -ldflags "-s -w" -o dist/netpilot ./cmd/netpilot
+
+# 6. Run the test suite
+go test ./internal/... ./tests/common ./tests/scenarios
 ```
 
 ---
 
-## License
+## 📄 License
 
-MIT License. See [LICENSE](LICENSE) and [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Licensed under the [MIT License](LICENSE). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for third-party attributions including [net-merge](https://github.com/net-merge/net-merge) and Wintun.
