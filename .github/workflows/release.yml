@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Version tag to publish (e.g. v0.1.0)'
+        description: 'Version tag to publish (e.g. v0.3.6)'
         required: true
 
 permissions:
@@ -22,20 +22,44 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Build frontend
+      - name: Build frontend with typescript-go (tsgo)
         run: |
           cd frontend
           npm ci || npm install
           npm run build
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
-      - name: Build NetPilot GUI
+      - name: Build and Embed net-merge + net-merge-tray + Wintun
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
           $version = '${{ inputs.tag || github.ref_name }}'.TrimStart('v')
           New-Item -ItemType Directory -Force dist | Out-Null
+          New-Item -ItemType Directory -Force internal/netmerge/embedded/bin | Out-Null
+
+          # Build net-merge CLI and windowless net-merge-tray
+          go build -trimpath -ldflags "-s -w -X main.version=$version" -o dist/net-merge.exe ./cmd/net-merge
+          go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$version -X main.defaultCmd=tray" -o dist/net-merge-tray.exe ./cmd/net-merge
+
+          # Fetch wintun.dll from latest net-merge release
+          $dl = Join-Path $env:TEMP "nm-win"
+          New-Item -ItemType Directory -Force $dl | Out-Null
+          gh release download --repo net-merge/net-merge --pattern 'net-merge-portable.zip' --dir $dl --clobber
+          Expand-Archive -Path "$dl/net-merge-portable.zip" -DestinationPath "$dl/extracted" -Force
+          Copy-Item "$dl/extracted/wintun.dll" dist/wintun.dll -Force
+          if (Test-Path "$dl/extracted/wintun-LICENSE.txt") {
+            Copy-Item "$dl/extracted/wintun-LICENSE.txt" dist/wintun-LICENSE.txt -Force
+          }
+
+          # Embed both net-merge.exe, net-merge-tray.exe, and wintun.dll directly into NetPilot binary
+          Copy-Item dist/net-merge.exe internal/netmerge/embedded/bin/net-merge.exe -Force
+          Copy-Item dist/net-merge-tray.exe internal/netmerge/embedded/bin/net-merge-tray.exe -Force
+          Copy-Item dist/wintun.dll internal/netmerge/embedded/bin/wintun.dll -Force
+
+          # Build NetPilot GUI (-H=windowsgui so no console window ever pops up)
           go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$version" -o dist/netpilot.exe ./cmd/netpilot
-      - name: Build Windows installer (.exe)
+      - name: Build Windows installer (.exe) and Portable ZIP
         shell: pwsh
         run: |
           $version = '${{ inputs.tag || github.ref_name }}'.TrimStart('v')
@@ -43,11 +67,14 @@ jobs:
           $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path $iscc)) { $iscc = (Get-Command ISCC.exe).Source }
           & $iscc "/DVersion=$version" installer/netpilot.iss
-          Get-ChildItem dist/*.exe
+          Compress-Archive -Path dist/netpilot.exe, dist/net-merge.exe, dist/net-merge-tray.exe, dist/wintun.dll, dist/netpilot.ico, LICENSE, THIRD-PARTY-NOTICES.md, README.md -DestinationPath dist/netpilot-windows-amd64-portable.zip -Force
+          Get-ChildItem dist/*.exe, dist/*.zip
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/netpilot-setup.exe
+          path: |
+            dist/netpilot-setup.exe
+            dist/netpilot-windows-amd64-portable.zip
           if-no-files-found: error
 
   macos:
@@ -60,20 +87,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Build frontend
+      - name: Build frontend with typescript-go (tsgo)
         run: |
           cd frontend
           npm ci || npm install
           npm run build
-      - name: Build NetPilot macOS universal
+      - name: Build and Embed net-merge + net-merge-tray + NetPilot macOS Universal
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
-          mkdir -p dist
+          mkdir -p dist internal/netmerge/embedded/bin
+          for arch in amd64 arm64; do
+            CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$v" -o dist/net-merge-$arch ./cmd/net-merge
+            CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$v -X main.defaultCmd=tray" -o dist/net-merge-tray-$arch ./cmd/net-merge
+          done
+          lipo -create -output dist/net-merge dist/net-merge-amd64 dist/net-merge-arm64
+          lipo -create -output dist/net-merge-tray dist/net-merge-tray-amd64 dist/net-merge-tray-arm64
+          chmod +x dist/net-merge dist/net-merge-tray
+          cp dist/net-merge internal/netmerge/embedded/bin/net-merge
+          cp dist/net-merge-tray internal/netmerge/embedded/bin/net-merge-tray
+
           for arch in amd64 arm64; do
             CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$v" -o dist/netpilot-$arch ./cmd/netpilot
           done
           lipo -create -output dist/netpilot dist/netpilot-amd64 dist/netpilot-arm64
-          codesign --force --sign - dist/netpilot
+          codesign --force --sign - dist/netpilot dist/net-merge dist/net-merge-tray
       - name: Build macOS DMG
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
@@ -81,7 +118,9 @@ jobs:
           rm -rf "$APP"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp dist/netpilot "$APP/Contents/MacOS/netpilot"
-          chmod +x "$APP/Contents/MacOS/netpilot"
+          cp dist/net-merge "$APP/Contents/MacOS/net-merge"
+          cp dist/net-merge-tray "$APP/Contents/MacOS/net-merge-tray"
+          chmod +x "$APP/Contents/MacOS/netpilot" "$APP/Contents/MacOS/net-merge" "$APP/Contents/MacOS/net-merge-tray"
 
           mkdir -p AppIcon.iconset
           sips -z 16 16 packaging/icons/hicolor/16x16/apps/net-merge.png --out AppIcon.iconset/icon_16x16.png
@@ -157,45 +196,63 @@ jobs:
             echo "apt attempt $i failed; retrying in 15s"
             sleep 15
           done
-      - name: Build frontend
+      - name: Build frontend with typescript-go (tsgo)
         run: |
           cd frontend
           npm ci || npm install
           npm run build
-      - name: Build NetPilot
+      - name: Build and Embed net-merge + net-merge-tray + NetPilot
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
-          mkdir -p dist
+          mkdir -p dist internal/netmerge/embedded/bin
+          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -X main.version=$v" -o dist/net-merge ./cmd/net-merge
+          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -X main.version=$v -X main.defaultCmd=tray" -o dist/net-merge-tray ./cmd/net-merge
+          chmod +x dist/net-merge dist/net-merge-tray
+          cp dist/net-merge internal/netmerge/embedded/bin/net-merge
+          cp dist/net-merge-tray internal/netmerge/embedded/bin/net-merge-tray
+
           CGO_ENABLED=1 go build -tags gtk3 -trimpath -ldflags "-s -w -X main.version=$v" -o dist/netpilot ./cmd/netpilot
-      - name: Build AppImage
+      - name: Build Universal Portable AppImage (All Desktop Environments)
         run: |
           set -euo pipefail
           appdir=AppDir
           rm -rf "$appdir"
           mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
+                   "$appdir/usr/share/icons/hicolor/32x32/apps" \
+                   "$appdir/usr/share/icons/hicolor/128x128/apps" \
+                   "$appdir/usr/share/icons/hicolor/256x256/apps" \
                    "$appdir/usr/share/icons/hicolor/512x512/apps" \
                    "$appdir/usr/share/doc/netpilot"
           cp dist/netpilot "$appdir/usr/bin/netpilot"
-          chmod +x "$appdir/usr/bin/netpilot"
+          cp dist/net-merge "$appdir/usr/bin/net-merge"
+          cp dist/net-merge-tray "$appdir/usr/bin/net-merge-tray"
+          chmod +x "$appdir/usr/bin/netpilot" "$appdir/usr/bin/net-merge" "$appdir/usr/bin/net-merge-tray"
 
           cp packaging/appimage/netpilot.desktop "$appdir/netpilot.desktop"
           cp packaging/appimage/netpilot.desktop "$appdir/usr/share/applications/netpilot.desktop"
-          cp packaging/icons/hicolor/512x512/apps/net-merge.png \
-             "$appdir/usr/share/icons/hicolor/512x512/apps/netpilot.png"
+          for sz in 32x32 128x128 256x256 512x512; do
+            cp "packaging/icons/hicolor/$sz/apps/net-merge.png" \
+               "$appdir/usr/share/icons/hicolor/$sz/apps/netpilot.png"
+          done
           cp "$appdir/usr/share/icons/hicolor/512x512/apps/netpilot.png" "$appdir/netpilot.png"
+          ln -sf netpilot.png "$appdir/.DirIcon"
           cp LICENSE THIRD-PARTY-NOTICES.md "$appdir/usr/share/doc/netpilot/"
 
           cat > "$appdir/AppRun" <<'APPRUN'
           #!/bin/sh
           HERE="$(dirname "$(readlink -f "$0")")"
+          export APPDIR="$HERE"
           export PATH="$HERE/usr/bin:$PATH"
-          export LD_LIBRARY_PATH="$HERE/usr/lib:$LD_LIBRARY_PATH"
+          export LD_LIBRARY_PATH="$HERE/usr/lib:${LD_LIBRARY_PATH:-}"
+          export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 
-          # Check for WebKitGTK library presence
-          if ! ldconfig -p 2>/dev/null | grep -qE "libwebkit2gtk-4\.[01]\.so|libwebkitgtk-6\.0\.so"; then
-            echo "Notice: WebKitGTK runtime library not detected in system cache." >&2
-            echo "If the window does not appear, install it via: sudo apt install libwebkit2gtk-4.1-0" >&2
-          fi
+          # Ensure StatusNotifierItem / AppIndicator tray icons resolve across KDE, GNOME, XFCE, Cinnamon, MATE, Sway, Hyprland
+          ICON_DST="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/32x32/apps"
+          mkdir -p "$ICON_DST" 2>/dev/null || true
+          cp -f "$HERE/usr/share/icons/hicolor/32x32/apps/netpilot.png" "$ICON_DST/netpilot.png" 2>/dev/null || true
+
+          # Wayland/X11 WebKit compositing stability across desktop environments
+          export WEBKIT_DISABLE_DMABUF_RENDERER="${WEBKIT_DISABLE_DMABUF_RENDERER:-1}"
 
           exec "$HERE/usr/bin/netpilot" "$@"
           APPRUN
@@ -225,22 +282,27 @@ jobs:
       - name: Collect packages
         run: |
           mkdir -p out
-          find artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' \) -exec cp {} out/ \;
+          find artifacts -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.AppImage' \) -exec cp {} out/ \;
           ls -lh out
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
-          notes=$(cat <<'EOF'
-          NetPilot release — multi-network manager desktop application.
+          nm_ver=$(tr -d '[:space:]' < internal/netmerge/VERSION || echo "0.3.6")
+          notes=$(cat <<EOF
+          NetPilot $tag — Multi-Adapter Network Control Center (with embedded net-merge v${nm_ver} & net-merge-tray).
 
-          NetPilot works alongside the official net-merge engine. Download net-merge for your platform from https://github.com/net-merge/net-merge/releases and place it in the same directory.
+          Highlights:
+          - Beszel-inspired dark UI with real-time per-adapter telemetry
+          - Speed Mode (simultaneous multi-link aggregation) & Backup Mode (primary-to-secondary automatic failover)
+          - Embedded net-merge + net-merge-tray out of the box (plus option to use external binary in Settings)
+          - Silent Windows execution (no console popups) & minimize-to-tray support across Windows, macOS, and Linux Desktop Environments
 
           Packages:
-          - Linux: netpilot-linux-amd64.AppImage
-          - macOS: netpilot-macos-universal.dmg
-          - Windows: netpilot-setup.exe (installer)
+          - Linux: netpilot-linux-amd64.AppImage (portable across all Linux desktop environments)
+          - macOS: netpilot-macos-universal.dmg (Intel & Apple Silicon)
+          - Windows: netpilot-setup.exe (installer) & netpilot-windows-amd64-portable.zip
           EOF
           )
 

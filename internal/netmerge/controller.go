@@ -21,35 +21,43 @@ import (
 	"netpilot/internal/tun"
 )
 
-// Config represents all controllable parameters of the net-merge engine.
+// Config represents all controllable parameters of the net-merge engine and NetPilot behavior.
 type Config struct {
-	AutoPause    bool               `json:"autoPause"`
-	AutoWeight   bool               `json:"autoWeight"`
-	IPv6Mode     string             `json:"ipv6Mode"` // "auto", "on", "off"
-	MTU          int                `json:"mtu"`      // 1280 - 65535
-	IncludeNICs  string             `json:"includeNics"`
-	RescanSec    int                `json:"rescanSec"`
-	SocksAddress string             `json:"socksAddress"` // e.g. "127.0.0.1:1080"
-	Weights      map[string]float64 `json:"weights"`
-	ShowConsole  bool               `json:"showConsole"`
-	Autostart    bool               `json:"autostart"`
-	BinaryPath   string             `json:"binaryPath,omitempty"`
+	AutoPause        bool               `json:"autoPause"`
+	AutoWeight       bool               `json:"autoWeight"`
+	IPv6Mode         string             `json:"ipv6Mode"` // "auto", "on", "off"
+	MTU              int                `json:"mtu"`      // 1280 - 65535
+	IncludeNICs      string             `json:"includeNics"`
+	RescanSec        int                `json:"rescanSec"`
+	SocksAddress     string             `json:"socksAddress"` // e.g. "127.0.0.1:1080"
+	Weights          map[string]float64 `json:"weights"`
+	ShowConsole      bool               `json:"showConsole"`
+	Autostart        bool               `json:"autostart"`
+	EngineSource     string             `json:"engineSource"`     // "builtin" (default) or "external"
+	BinaryPath       string             `json:"binaryPath,omitempty"`
+	RoutingMode      string             `json:"routingMode"`      // "speed" (default) or "backup"
+	PrimaryAdapter   string             `json:"primaryAdapter"`   // primary NIC name in backup mode
+	SecondaryAdapter string             `json:"secondaryAdapter"` // secondary/failover NIC name in backup mode
+	CloseAction      string             `json:"closeAction"`      // "minimize" (default) or "close"
 }
 
 // StatusInfo represents the runtime state of net-merge.
 type StatusInfo struct {
-	IsRunning    bool               `json:"isRunning"`
-	PID          int                `json:"pid"`
-	Mode         string             `json:"mode"`
-	V6State      string             `json:"v6State"`
-	UptimeSec    int64              `json:"uptimeSec"`
-	Autostart    bool               `json:"autostart"`
-	SocksRunning bool               `json:"socksRunning"`
-	SocksAddress string             `json:"socksAddress"`
-	Config       Config             `json:"config"`
-	NICs         []engine.SlotStats `json:"nics"`
-	Limits       map[string]float64 `json:"limits"`
-	Binary       BinaryInfo         `json:"binary"`
+	IsRunning        bool               `json:"isRunning"`
+	PID              int                `json:"pid"`
+	Mode             string             `json:"mode"`
+	RoutingMode      string             `json:"routingMode"`      // "speed" or "backup"
+	DefaultAdapter   string             `json:"defaultAdapter"`   // "net-merge" when active, "System Default" when inactive
+	ActiveAdapter    string             `json:"activeAdapter"`    // currently active primary/failover adapter or "net-merge"
+	V6State          string             `json:"v6State"`
+	UptimeSec        int64              `json:"uptimeSec"`
+	Autostart        bool               `json:"autostart"`
+	SocksRunning     bool               `json:"socksRunning"`
+	SocksAddress     string             `json:"socksAddress"`
+	Config           Config             `json:"config"`
+	NICs             []engine.SlotStats `json:"nics"`
+	Limits           map[string]float64 `json:"limits"`
+	Binary           BinaryInfo         `json:"binary"`
 }
 
 // Controller coordinates all net-merge operations directly inside NetPilot.
@@ -62,7 +70,7 @@ type Controller struct {
 	socksRunning bool
 	socksAddr    string
 
-	// In-process scheduler and balancer (always running so balanced NICs are visible)
+	// In-process scheduler and balancer
 	sched      *engine.Scheduler
 	balancer   *engine.Balancer
 	tunDev     *tun.Tun
@@ -91,11 +99,15 @@ func NewController(stateDir string) *Controller {
 		SocksAddress: "127.0.0.1:1080",
 		Weights:      make(map[string]float64),
 		ShowConsole:  false,
+		EngineSource: "builtin",
+		RoutingMode:  "speed",
+		CloseAction:  "minimize",
 	}
 
 	if b, err := os.ReadFile(cfgPath); err == nil {
 		_ = json.Unmarshal(b, &cfg)
 	}
+	cfg = normalizeConfig(cfg)
 
 	c := &Controller{
 		stateDir:   stateDir,
@@ -107,6 +119,38 @@ func NewController(stateDir string) *Controller {
 
 	c.initScheduler()
 	return c
+}
+
+func normalizeConfig(cfg Config) Config {
+	if cfg.IPv6Mode == "" {
+		cfg.IPv6Mode = "auto"
+	}
+	if cfg.MTU < 1280 || cfg.MTU > 65535 {
+		cfg.MTU = tun.DefaultMTU
+	}
+	if cfg.RescanSec <= 0 {
+		cfg.RescanSec = 3
+	}
+	if cfg.SocksAddress == "" {
+		cfg.SocksAddress = "127.0.0.1:1080"
+	}
+	if cfg.Weights == nil {
+		cfg.Weights = make(map[string]float64)
+	}
+	if cfg.EngineSource != "external" {
+		if strings.TrimSpace(cfg.BinaryPath) != "" && cfg.EngineSource == "" {
+			cfg.EngineSource = "external"
+		} else {
+			cfg.EngineSource = "builtin"
+		}
+	}
+	if cfg.RoutingMode != "backup" {
+		cfg.RoutingMode = "speed"
+	}
+	if cfg.CloseAction != "close" {
+		cfg.CloseAction = "minimize"
+	}
+	return cfg
 }
 
 func (c *Controller) parseIncludes() []string {
@@ -136,10 +180,29 @@ func (c *Controller) discover() []nics.Nic {
 	return found
 }
 
+func (c *Controller) applySchedulerModeLocked() {
+	if c.sched == nil {
+		return
+	}
+	c.sched.SetAuto(c.config.AutoWeight && len(c.config.Weights) == 0)
+	if c.config.RoutingMode == "backup" {
+		c.sched.SetMode(engine.ModeBackup, c.config.PrimaryAdapter, c.config.SecondaryAdapter)
+	} else {
+		c.sched.SetMode(engine.ModeSpeed, c.config.PrimaryAdapter, c.config.SecondaryAdapter)
+	}
+}
+
 func (c *Controller) initScheduler() {
 	initial := c.discover()
 	c.sched = engine.NewScheduler(initial)
-	c.sched.SetAuto(c.config.AutoWeight && len(c.config.Weights) == 0)
+	if c.config.PrimaryAdapter == "" && len(initial) > 0 {
+		c.config.PrimaryAdapter = initial[0].Name
+	}
+	if c.config.SecondaryAdapter == "" && len(initial) > 1 {
+		c.config.SecondaryAdapter = initial[1].Name
+	}
+	c.applySchedulerModeLocked()
+
 	if limits, err := state.LoadLimits(c.stateDir); err == nil {
 		c.sched.SetLimits(limits)
 	}
@@ -170,11 +233,16 @@ func (c *Controller) initScheduler() {
 				c.mu.RLock()
 				isOn := c.tunOn
 				since := c.tunSince
+				rm := c.config.RoutingMode
 				c.mu.RUnlock()
 				if isOn {
+					modeDesc := "system-wide (Speed Mode)"
+					if rm == "backup" {
+						modeDesc = "system-wide (Backup Failover)"
+					}
 					state.Write(c.stateDir, state.Status{
 						PID:     os.Getpid(),
-						Mode:    "system-wide (NetPilot)",
+						Mode:    modeDesc,
 						V6:      c.balancer.V6State(),
 						Since:   since,
 						Updated: now,
@@ -194,6 +262,95 @@ func (c *Controller) checkAutostartCached() bool {
 	return c.cachedAuto
 }
 
+// IsActive returns true if net-merge is currently active (either in-process or via status.json).
+// When IsActive is false, NetPilot's default adapter is "System Default" and NetPilot does nothing
+// (pure standby).
+func (c *Controller) IsActive() bool {
+	c.mu.RLock()
+	inProc := c.tunOn
+	stateDir := c.stateDir
+	c.mu.RUnlock()
+	if inProc {
+		return true
+	}
+	_, ok := state.Read(stateDir)
+	return ok
+}
+
+// DefaultAdapterName returns "net-merge" when net-merge is active, or "System Default" when inactive.
+func (c *Controller) DefaultAdapterName() string {
+	if c.IsActive() {
+		return "net-merge"
+	}
+	return "System Default"
+}
+
+// GetCloseAction returns the configured window close action ("minimize" or "close").
+func (c *Controller) GetCloseAction() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.config.CloseAction == "close" {
+		return "close"
+	}
+	return "minimize"
+}
+
+// SetCloseAction updates the window close button behavior ("minimize" to tray or "close" app).
+func (c *Controller) SetCloseAction(action string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if strings.EqualFold(strings.TrimSpace(action), "close") {
+		c.config.CloseAction = "close"
+	} else {
+		c.config.CloseAction = "minimize"
+	}
+	return c.saveConfigLocked()
+}
+
+// SetRoutingMode updates the routing mode ("speed" vs "backup") and primary/secondary adapters.
+func (c *Controller) SetRoutingMode(mode, primary, secondary string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if strings.EqualFold(strings.TrimSpace(mode), "backup") {
+		c.config.RoutingMode = "backup"
+	} else {
+		c.config.RoutingMode = "speed"
+	}
+	if primary != "" {
+		c.config.PrimaryAdapter = primary
+	}
+	if secondary != "" {
+		c.config.SecondaryAdapter = secondary
+	}
+	c.applySchedulerModeLocked()
+	return c.saveConfigLocked()
+}
+
+func resolveActiveAdapter(isRunning bool, cfg Config, snap []engine.SlotStats) string {
+	if !isRunning {
+		return "System Default"
+	}
+	if cfg.RoutingMode == "backup" {
+		// Check if PrimaryAdapter is present and up
+		for _, s := range snap {
+			if s.Name == cfg.PrimaryAdapter && s.Present && s.State != "no internet" {
+				return s.Name + " (Primary)"
+			}
+		}
+		for _, s := range snap {
+			if s.Name == cfg.SecondaryAdapter && s.Present && s.State != "no internet" {
+				return s.Name + " (Backup Active)"
+			}
+		}
+		for _, s := range snap {
+			if s.Present && s.State != "no internet" {
+				return s.Name + " (Failover)"
+			}
+		}
+	}
+	return "net-merge"
+}
+
 // GetStatus returns the current net-merge status and slot statistics without spawning processes on every poll.
 func (c *Controller) GetStatus() (StatusInfo, error) {
 	c.mu.Lock()
@@ -201,6 +358,7 @@ func (c *Controller) GetStatus() (StatusInfo, error) {
 	c.config.Autostart = auto
 	inProcOn := c.tunOn
 	inProcSince := c.tunSince
+	cfg := c.config
 	c.mu.Unlock()
 
 	c.mu.RLock()
@@ -211,15 +369,20 @@ func (c *Controller) GetStatus() (StatusInfo, error) {
 		snap = c.sched.Snapshot()
 	}
 
+	binInfo := ResolveBinaryWithSource(cfg.EngineSource, cfg.BinaryPath, c.stateDir)
+
 	info := StatusInfo{
-		IsRunning:    inProcOn,
-		Autostart:    auto,
-		SocksRunning: c.socksRunning,
-		SocksAddress: c.socksAddr,
-		Config:       c.config,
-		NICs:         snap,
-		Limits:       make(map[string]float64),
-		Binary:       ResolveBinary(c.config.BinaryPath),
+		IsRunning:      inProcOn,
+		RoutingMode:    cfg.RoutingMode,
+		DefaultAdapter: "System Default",
+		ActiveAdapter:  "System Default",
+		Autostart:      auto,
+		SocksRunning:   c.socksRunning,
+		SocksAddress:   c.socksAddr,
+		Config:         cfg,
+		NICs:           snap,
+		Limits:         make(map[string]float64),
+		Binary:         binInfo,
 	}
 
 	if lims, err := state.LoadLimits(c.stateDir); err == nil {
@@ -228,7 +391,13 @@ func (c *Controller) GetStatus() (StatusInfo, error) {
 
 	if inProcOn {
 		info.PID = os.Getpid()
-		info.Mode = "system-wide (NetPilot)"
+		if cfg.RoutingMode == "backup" {
+			info.Mode = "system-wide (Backup Mode)"
+		} else {
+			info.Mode = "system-wide (Speed Mode)"
+		}
+		info.DefaultAdapter = "net-merge"
+		info.ActiveAdapter = resolveActiveAdapter(true, cfg, snap)
 		if c.balancer != nil {
 			info.V6State = c.balancer.V6State()
 		}
@@ -246,6 +415,8 @@ func (c *Controller) GetStatus() (StatusInfo, error) {
 		if len(st.NICs) > 0 {
 			info.NICs = st.NICs
 		}
+		info.DefaultAdapter = "net-merge"
+		info.ActiveAdapter = resolveActiveAdapter(true, cfg, info.NICs)
 		return info, nil
 	}
 
@@ -267,16 +438,21 @@ func (c *Controller) SetSystemWide(on bool) error {
 		c.tunOn = false
 		state.Clear(c.stateDir)
 
-		// Signal external binary if available
-		bin := ResolveBinary(c.config.BinaryPath)
-		if bin.IsValid {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = exec.CommandContext(ctx, bin.Path, "off").Run()
-			cancel()
-		}
-
-		// Also signal any external daemon
+		// Signal external binary if running
 		_ = state.SendMarker(c.stateDir, "off")
+		if platform.InstanceRunning() {
+			bin := ResolveBinaryWithSource(c.config.EngineSource, c.config.BinaryPath, c.stateDir)
+			if bin.IsValid && bin.Path != "" {
+				exe, _ := os.Executable()
+				if bin.Path != exe {
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					cmd := exec.CommandContext(ctx, bin.Path, "off", "-state-dir", c.stateDir)
+					execx.PrepareCommand(cmd)
+					_ = cmd.Run()
+					cancel()
+				}
+			}
+		}
 		return nil
 	}
 
@@ -285,14 +461,19 @@ func (c *Controller) SetSystemWide(on bool) error {
 		return nil
 	}
 
-	// 1. If an external net-merge tray/daemon is already running, signal it
+	c.applySchedulerModeLocked()
+
+	// 1. If user explicitly selected an external net-merge binary, or if an external instance is already running:
+	bin := ResolveBinaryWithSource(c.config.EngineSource, c.config.BinaryPath, c.stateDir)
+	exe, _ := os.Executable()
+
 	if platform.InstanceRunning() {
 		_ = state.SendMarker(c.stateDir, "on")
 		return nil
 	}
 
-	// 2. If we have admin privileges (or on Linux/macOS root), start TUN in-process directly!
-	if platform.IsAdmin() {
+	// 2. If built-in mode (default) and we have admin/root privileges, start TUN in-process directly!
+	if c.config.EngineSource != "external" && platform.IsAdmin() {
 		if err := platform.CheckDriver(); err == nil {
 			t := tun.New(c.balancer)
 			mtu := c.config.MTU
@@ -304,9 +485,13 @@ func (c *Controller) SetSystemWide(on bool) error {
 				c.tunDev = t
 				c.tunOn = true
 				c.tunSince = time.Now()
+				modeDesc := "system-wide (Speed Mode)"
+				if c.config.RoutingMode == "backup" {
+					modeDesc = "system-wide (Backup Mode)"
+				}
 				state.Write(c.stateDir, state.Status{
 					PID:     os.Getpid(),
-					Mode:    "system-wide (NetPilot)",
+					Mode:    modeDesc,
 					V6:      c.balancer.V6State(),
 					Since:   c.tunSince,
 					Updated: time.Now(),
@@ -317,39 +502,47 @@ func (c *Controller) SetSystemWide(on bool) error {
 		}
 	}
 
-	// 3. Launch external net-merge binary if available
-	bin := ResolveBinary(c.config.BinaryPath)
-	if bin.IsValid {
+	// 3. Launch external or extracted embedded net-merge binary if available (and distinct from NetPilot GUI exe)
+	if bin.IsValid && bin.Path != "" && bin.Path != exe {
+		args := []string{
+			"run",
+			"-state-dir", c.stateDir,
+			"-mode", c.config.RoutingMode,
+		}
+		if c.config.PrimaryAdapter != "" {
+			args = append(args, "-primary", c.config.PrimaryAdapter)
+		}
+		if c.config.SecondaryAdapter != "" {
+			args = append(args, "-secondary", c.config.SecondaryAdapter)
+		}
 		if runtime.GOOS == "windows" {
-			dir := filepath.Dir(bin.Path)
-			trayBin := filepath.Join(dir, "net-merge-tray.exe")
-			if _, err := os.Stat(trayBin); err == nil {
-				cmd := exec.Command(trayBin)
+			args = append(args, "-hidden")
+			if bin.TrayPath != "" && fileExists(bin.TrayPath) {
+				cmd := exec.Command(bin.TrayPath, "-state-dir", c.stateDir, "-mode", c.config.RoutingMode, "-primary", c.config.PrimaryAdapter, "-secondary", c.config.SecondaryAdapter)
 				execx.PrepareCommand(cmd)
 				if err := cmd.Start(); err == nil {
 					_ = state.SendMarker(c.stateDir, "on")
 					return nil
 				}
 			}
-			cmd := exec.Command(bin.Path, "run", "-hidden", "-state-dir", c.stateDir)
-			execx.PrepareCommand(cmd)
-			if err := cmd.Start(); err == nil {
-				return nil
-			}
-		} else {
-			cmd := exec.Command(bin.Path, "run", "-state-dir", c.stateDir)
-			if err := cmd.Start(); err == nil {
-				return nil
-			}
+		}
+		cmd := exec.Command(bin.Path, args...)
+		execx.PrepareCommand(cmd)
+		if err := cmd.Start(); err == nil {
+			return nil
 		}
 	}
 
-	// 4. Always write active state and start SOCKS5 balancer fallback so multi-adapter balancing is immediately live
+	// 4. Activate multi-link balancer state in-process so NetPilot's net-merge adapter state is live
 	c.tunOn = true
 	c.tunSince = time.Now()
+	modeDesc := "system-wide (Speed Mode)"
+	if c.config.RoutingMode == "backup" {
+		modeDesc = "system-wide (Backup Mode)"
+	}
 	state.Write(c.stateDir, state.Status{
 		PID:     os.Getpid(),
-		Mode:    "multi-link active",
+		Mode:    modeDesc,
 		V6:      c.balancer.V6State(),
 		Since:   c.tunSince,
 		Updated: time.Now(),
@@ -472,10 +665,9 @@ func (c *Controller) SaveConfig(cfg Config) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	cfg = normalizeConfig(cfg)
 	c.config = cfg
-	if c.sched != nil {
-		c.sched.SetAuto(cfg.AutoWeight && len(cfg.Weights) == 0)
-	}
+	c.applySchedulerModeLocked()
 	if c.balancer != nil {
 		if v6, ok := engine.ParseV6Mode(cfg.IPv6Mode); ok {
 			c.balancer.SetV6Mode(v6)

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   api,
   InterfaceInfo,
+  NetMergeStatus,
   ProcessInfo,
   RuleRecord,
 } from '../api/wails';
@@ -11,65 +12,72 @@ import {
   ArrowDown,
   ArrowUp,
   X,
-  Network,
   Globe,
   Trash2,
   Edit3,
   Search,
   Activity,
+  Zap,
+  ShieldAlert,
+  GitMerge,
+  Power,
+  CheckCircle2,
+  PauseCircle,
 } from 'lucide-react';
 
 interface AdapterWithHistory extends InterfaceInfo {
   rxHistory: number[];
   txHistory: number[];
-  isDefault?: boolean;
 }
 
 export const DashboardView: React.FC = () => {
   const [interfaces, setInterfaces] = useState<AdapterWithHistory[]>([]);
+  const [nmStatus, setNmStatus] = useState<NetMergeStatus | null>(null);
   const [apps, setApps] = useState<ProcessInfo[]>([]);
   const [rules, setRules] = useState<RuleRecord[]>([]);
   const [appSearch, setAppSearch] = useState<string>('');
+  const [busyMode, setBusyMode] = useState<boolean>(false);
 
   // Modal for Add / Edit App Rule
   const [showModal, setShowModal] = useState<boolean>(false);
   const [editingRuleId, setEditingRuleId] = useState<string>('');
   const [modalApp, setModalApp] = useState<string>('');
   const [modalPath, setModalPath] = useState<string>('');
-  const [modalPreferred, setModalPreferred] = useState<string>('FASTEST');
+  const [modalPreferred, setModalPreferred] = useState<string>('net-merge');
   const [modalFallback, setModalFallback] = useState<string>('');
   const [modalDns, setModalDns] = useState<string>('');
   const [modalLimit, setModalLimit] = useState<string>('');
   const [modalQuota, setModalQuota] = useState<string>('');
 
   const loadData = async () => {
-    const [ifaces, appList, ruleList] = await Promise.all([
+    const [ifaces, appList, ruleList, nm] = await Promise.all([
       api.getInterfaces(),
       api.getApplications(),
       api.getRules(),
+      api.getNetMergeStatus(),
     ]);
 
     setRules(ruleList);
     setApps(appList);
+    setNmStatus(nm);
 
     setInterfaces(prev => {
-      return ifaces.map((cur, idx) => {
+      return ifaces.map((cur) => {
         const existing = prev.find(p => p.name === cur.name);
         const rx = cur.rxMbps || 0;
         const tx = cur.txMbps || 0;
 
         const rxHist = existing
           ? [...existing.rxHistory.slice(1), rx]
-          : [0, 0, 0, 0, 0, 0, rx];
+          : [0, 0, 0, 0, 0, 0, 0, 0, rx];
         const txHist = existing
           ? [...existing.txHistory.slice(1), tx]
-          : [0, 0, 0, 0, 0, 0, tx];
+          : [0, 0, 0, 0, 0, 0, 0, 0, tx];
 
         return {
           ...cur,
           rxHistory: rxHist,
           txHistory: txHist,
-          isDefault: existing?.isDefault !== undefined ? existing.isDefault : idx === 0,
         };
       });
     });
@@ -81,12 +89,43 @@ export const DashboardView: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  const isMergeActive = nmStatus?.isRunning ?? false;
+  const routingMode = nmStatus?.routingMode || nmStatus?.config?.routingMode || 'speed';
+  const primaryAdapter = nmStatus?.config?.primaryAdapter || interfaces[0]?.name || '';
+  const secondaryAdapter = nmStatus?.config?.secondaryAdapter || interfaces[1]?.name || interfaces[0]?.name || '';
+
+  const handleToggleMerge = async () => {
+    if (busyMode) return;
+    setBusyMode(true);
+    try {
+      await api.toggleNetMerge(!isMergeActive);
+      await loadData();
+    } finally {
+      setBusyMode(false);
+    }
+  };
+
+  const handleSwitchRoutingMode = async (mode: 'speed' | 'backup', pri?: string, sec?: string) => {
+    if (busyMode) return;
+    setBusyMode(true);
+    try {
+      await api.setNetMergeRoutingMode(
+        mode,
+        pri !== undefined ? pri : primaryAdapter,
+        sec !== undefined ? sec : secondaryAdapter,
+      );
+      await loadData();
+    } finally {
+      setBusyMode(false);
+    }
+  };
+
   const openModalForRule = (rule?: RuleRecord, defaultAppName?: string, defaultPath?: string) => {
     if (rule) {
       setEditingRuleId(rule.id);
       setModalApp(rule.appName);
       setModalPath(rule.appPath || '');
-      setModalPreferred(rule.preferredInterface || 'FASTEST');
+      setModalPreferred(rule.preferredInterface || 'net-merge');
       setModalFallback(rule.fallbackInterface || '');
       setModalDns(rule.customDns || '');
       setModalLimit(rule.bandwidthLimitMbps > 0 ? String(rule.bandwidthLimitMbps) : '');
@@ -95,7 +134,7 @@ export const DashboardView: React.FC = () => {
       setEditingRuleId('');
       setModalApp(defaultAppName || '');
       setModalPath(defaultPath || '');
-      setModalPreferred('FASTEST');
+      setModalPreferred('net-merge');
       setModalFallback(interfaces[0]?.name || '');
       setModalDns('');
       setModalLimit('');
@@ -151,21 +190,21 @@ export const DashboardView: React.FC = () => {
     );
   };
 
-  const defaultIfaceName = interfaces.find(i => i.isDefault)?.name || interfaces[0]?.name || 'system default';
-  const allIfaceNames = interfaces.map(i => i.name).join(' + ') || 'active adapters';
-
   const formatRouteSummary = (rule?: RuleRecord): string => {
+    if (!isMergeActive) {
+      return 'System Default (Standby)';
+    }
     if (!rule || !rule.enabled) {
-      return `System Default (${defaultIfaceName})`;
+      return 'net-merge (Default Adapter)';
     }
     if (rule.preferredInterface === 'FASTEST') {
-      return `Fastest Adapter (${allIfaceNames})`;
+      return 'Fastest Adapter (Lowest RTT)';
     }
-    if (rule.preferredInterface === 'ALL') {
-      return `Merged (${allIfaceNames})`;
+    if (rule.preferredInterface === 'ALL' || rule.preferredInterface === 'net-merge') {
+      return 'net-merge (Multi-Link)';
     }
     if (rule.fallbackInterface && rule.fallbackInterface !== rule.preferredInterface) {
-      return `${rule.preferredInterface} (backup: ${rule.fallbackInterface})`;
+      return `${rule.preferredInterface} → ${rule.fallbackInterface}`;
     }
     return rule.preferredInterface;
   };
@@ -176,163 +215,345 @@ export const DashboardView: React.FC = () => {
     return a.name.toLowerCase().includes(q) || (a.executable && a.executable.toLowerCase().includes(q));
   });
 
+  // Compute total load across slots
+  const totalSlotsActive = (nmStatus?.nics || []).reduce((acc, s) => acc + (s.Active || 0), 0);
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      {/* Live Network Adapters Grid */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${Math.max(1, Math.min(interfaces.length, 3))}, 1fr)`,
-        gap: '10px',
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {/* Beszel-Style Top Control & Mode Banner */}
+      <div className="card" style={{
+        marginBottom: 0,
+        padding: '14px 18px',
+        background: '#121215',
+        border: `1px solid ${isMergeActive ? 'rgba(16, 185, 129, 0.3)' : '#232329'}`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '14px',
       }}>
-        {interfaces.map((iface) => {
-          const rx = iface.rxMbps || 0;
-          const tx = iface.txMbps || 0;
-          const rxStr = rx >= 1 ? `${rx.toFixed(2)} Mbit/s` : `${(rx * 1000).toFixed(0)} kbit/s`;
-          const txStr = tx >= 1 ? `${tx.toFixed(2)} Mbit/s` : `${(tx * 1000).toFixed(0)} kbit/s`;
+        {/* Left: Adapter Status */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '8px',
+            background: isMergeActive ? 'rgba(16, 185, 129, 0.14)' : '#18181b',
+            border: `1px solid ${isMergeActive ? 'rgba(16, 185, 129, 0.35)' : '#27272a'}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            {isMergeActive ? (
+              <CheckCircle2 size={20} color="#10b981" />
+            ) : (
+              <PauseCircle size={20} color="#a1a1aa" />
+            )}
+          </div>
 
-          return (
-            <div
-              key={iface.name}
-              style={{
-                background: '#121620',
-                border: '1px solid #1e2636',
-                borderRadius: '7px',
-                padding: '11px 13px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '8px',
-              }}
-            >
-              {/* Adapter Header */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Network size={14} color="#38bdf8" />
-                    <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#f1f5f9' }}>
-                      {iface.name}
-                    </span>
-                  </div>
-
-                  {/* Local IP & Real WAN IP */}
-                  <div className="font-mono" style={{ fontSize: '11px', color: '#94a3b8', marginTop: '3px', display: 'flex', flexDirection: 'column', gap: '1px' }}>
-                    <div>
-                      <span style={{ color: '#64748b' }}>LAN: </span>
-                      <span>{iface.ip || 'Unassigned'}</span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Globe size={10} color={iface.wanIp ? '#34d399' : '#64748b'} />
-                      <span style={{ color: '#64748b' }}>WAN: </span>
-                      <span style={{ color: iface.wanIp ? '#34d399' : '#64748b', fontWeight: iface.wanIp ? 600 : 400 }}>
-                        {iface.wanIp || 'Private / Local Subnet'}
-                      </span>
-                      {iface.location && (
-                        <span style={{ color: '#64748b', fontSize: '10px' }}>({iface.location})</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                  <span className={`status-pill ${iface.isUp ? 'pass' : 'fail'}`} style={{ fontSize: '10px' }}>
-                    {iface.isUp ? 'ONLINE' : 'DOWN'}
-                  </span>
-
-                  {iface.isDefault ? (
-                    <span style={{
-                      fontSize: '10px',
-                      fontWeight: 600,
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                      background: 'rgba(2, 132, 199, 0.2)',
-                      color: '#38bdf8',
-                      border: '1px solid rgba(56, 189, 248, 0.3)',
-                    }}>
-                      PRIMARY
-                    </span>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        setInterfaces(prev => prev.map(p => ({ ...p, isDefault: p.name === iface.name })));
-                      }}
-                      style={{
-                        fontSize: '10px',
-                        fontWeight: 500,
-                        padding: '2px 6px',
-                        borderRadius: '4px',
-                        background: 'transparent',
-                        color: '#64748b',
-                        border: '1px solid #263042',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Set Primary
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Live Throughput Row */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '2px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <ArrowDown size={13} color="#38bdf8" />
-                    <span className="font-mono" style={{ color: '#38bdf8', fontWeight: 700, fontSize: '12.5px' }}>
-                      {rxStr}
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <ArrowUp size={13} color="#eab308" />
-                    <span className="font-mono" style={{ color: '#eab308', fontWeight: 700, fontSize: '12.5px' }}>
-                      {txStr}
-                    </span>
-                  </div>
-                </div>
-
-                <Sparkline data={iface.rxHistory} color="#38bdf8" width={90} height={22} />
-              </div>
-
-              {/* Footer: Limits & Quotas if set */}
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                fontSize: '10.5px',
-                color: '#64748b',
-                borderTop: '1px solid rgba(255, 255, 255, 0.05)',
-                paddingTop: '5px',
-              }}>
-                <span>
-                  {iface.rxLimitMbps && iface.rxLimitMbps > 0
-                    ? `Speed Cap: ↓ ${iface.rxLimitMbps} Mbps`
-                    : 'Speed Cap: Unlimited'}
-                </span>
-                <span>
-                  {iface.dataQuotaMb && iface.dataQuotaMb > 0
-                    ? `Used: ${(iface.dataUsedMb || 0).toFixed(0)} / ${iface.dataQuotaMb.toFixed(0)} MB`
-                    : 'No Data Cap'}
-                </span>
-              </div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '14px', fontWeight: 700, color: '#fafafa' }}>
+                {isMergeActive
+                  ? 'Active Adapter: net-merge'
+                  : 'Default Adapter: System Default (Standby)'}
+              </span>
+              <span className={`status-pill ${isMergeActive ? 'pass' : 'blocked'}`}>
+                {isMergeActive ? 'ACTIVE' : 'INACTIVE · DO NOTHING'}
+              </span>
             </div>
-          );
-        })}
+            <div style={{ fontSize: '11.5px', color: '#a1a1aa', marginTop: '2px' }}>
+              {isMergeActive
+                ? routingMode === 'backup'
+                  ? `Backup Failover Mode: Traffic uses Primary (${primaryAdapter || 'auto'}) and switches to Secondary (${secondaryAdapter || 'auto'}) only on failure.`
+                  : 'Speed Mode: Utilizing all healthy network adapters simultaneously for maximum combined bandwidth.'
+                : 'Net-Merge is off. Your OS uses its unmodified System Default adapter; NetPilot is standing by without altering any routes.'}
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Mode Selector (Speed vs Backup) + Master Power Toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          {/* Speed vs Backup Mode Segmented Control */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            backgroundColor: '#09090b',
+            border: '1px solid #27272a',
+            borderRadius: '7px',
+            padding: '3px',
+            gap: '3px',
+          }}>
+            <button
+              onClick={() => handleSwitchRoutingMode('speed')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '5px 11px',
+                borderRadius: '5px',
+                fontSize: '11.5px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                border: 'none',
+                backgroundColor: routingMode !== 'backup' ? '#27272a' : 'transparent',
+                color: routingMode !== 'backup' ? '#38bdf8' : '#a1a1aa',
+              }}
+              title="Speed Mode: Use all adapters simultaneously for higher combined speed"
+            >
+              <Zap size={12} />
+              <span>Speed Mode</span>
+            </button>
+
+            <button
+              onClick={() => handleSwitchRoutingMode('backup')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '5px 11px',
+                borderRadius: '5px',
+                fontSize: '11.5px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                border: 'none',
+                backgroundColor: routingMode === 'backup' ? '#27272a' : 'transparent',
+                color: routingMode === 'backup' ? '#fbbf24' : '#a1a1aa',
+              }}
+              title="Backup Mode: Use primary adapter, switch to secondary only if primary fails"
+            >
+              <ShieldAlert size={12} />
+              <span>Backup Mode</span>
+            </button>
+          </div>
+
+          {/* Primary / Secondary Adapter Selector when in Backup Mode */}
+          {routingMode === 'backup' && interfaces.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
+              <span style={{ color: '#a1a1aa' }}>Primary:</span>
+              <select
+                value={primaryAdapter}
+                onChange={e => handleSwitchRoutingMode('backup', e.target.value, secondaryAdapter)}
+                style={{ padding: '4px 8px', fontSize: '11px' }}
+              >
+                {interfaces.map(i => (
+                  <option key={i.name} value={i.name}>{i.name}</option>
+                ))}
+              </select>
+              <span style={{ color: '#a1a1aa' }}>Backup:</span>
+              <select
+                value={secondaryAdapter}
+                onChange={e => handleSwitchRoutingMode('backup', primaryAdapter, e.target.value)}
+                style={{ padding: '4px 8px', fontSize: '11px' }}
+              >
+                {interfaces.map(i => (
+                  <option key={i.name} value={i.name}>{i.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <button
+            onClick={handleToggleMerge}
+            disabled={busyMode}
+            className={`btn ${isMergeActive ? 'btn-danger' : 'btn-emerald'}`}
+            style={{ padding: '6px 14px' }}
+          >
+            <Power size={13} />
+            <span>{isMergeActive ? 'Stop Net-Merge' : 'Start Net-Merge'}</span>
+          </button>
+        </div>
       </div>
 
-      {/* Two-Column Split Application Management:
-          1. Configured App Policies (Apps Added to Modify Settings)
-          2. Live Running Host Processes (Click + to Add) */}
+      {/* Beszel-Style "All Systems / Network Adapters" Table Card */}
+      <div className="card" style={{ marginBottom: 0, padding: '0', overflow: 'hidden' }}>
+        <div style={{
+          padding: '13px 16px',
+          borderBottom: '1px solid #232329',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <GitMerge size={15} color="#10b981" />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#fafafa' }}>
+              Network Adapters ({interfaces.length})
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '11px', color: '#a1a1aa' }}>
+            <span>
+              Default Route:{' '}
+              <strong style={{ color: isMergeActive ? '#10b981' : '#fafafa' }}>
+                {isMergeActive ? 'net-merge' : 'System Default'}
+              </strong>
+            </span>
+            <span>
+              Active Flows: <strong className="font-mono" style={{ color: '#fafafa' }}>{totalSlotsActive}</strong>
+            </span>
+          </div>
+        </div>
+
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th style={{ width: '18%' }}>Adapter</th>
+              <th style={{ width: '22%' }}>Addresses (LAN / WAN)</th>
+              <th style={{ width: '16%' }}>Role & Weight</th>
+              <th style={{ width: '18%' }}>Download Load</th>
+              <th style={{ width: '14%' }}>Upload Load</th>
+              <th style={{ width: '12%', textAlign: 'right' }}>Trend</th>
+            </tr>
+          </thead>
+          <tbody>
+            {interfaces.map((iface) => {
+              const rx = iface.rxMbps || 0;
+              const tx = iface.txMbps || 0;
+              const rxStr = rx >= 1 ? `${rx.toFixed(2)} MB/s` : `${(rx * 1000).toFixed(0)} KB/s`;
+              const txStr = tx >= 1 ? `${tx.toFixed(2)} MB/s` : `${(tx * 1000).toFixed(0)} KB/s`;
+
+              const nmSlot = (nmStatus?.nics || []).find(s => s.Name === iface.name);
+              const weightPct = nmSlot ? Math.round((nmSlot.Weight || 1) * 100) : 100;
+              const capMbps = iface.rxLimitMbps && iface.rxLimitMbps > 0 ? iface.rxLimitMbps : 100;
+              const rxBarPct = Math.min(100, Math.max(rx > 0 ? 4 : 0, (rx / capMbps) * 100));
+              const txBarPct = Math.min(100, Math.max(tx > 0 ? 4 : 0, (tx / capMbps) * 100));
+
+              let roleLabel = 'Balanced';
+              let roleColor = '#38bdf8';
+              if (!isMergeActive) {
+                roleLabel = 'System Default';
+                roleColor = '#a1a1aa';
+              } else if (routingMode === 'backup') {
+                if (iface.name === primaryAdapter) {
+                  roleLabel = 'Primary Active';
+                  roleColor = '#10b981';
+                } else if (iface.name === secondaryAdapter) {
+                  roleLabel = 'Failover Standby';
+                  roleColor = '#f59e0b';
+                } else {
+                  roleLabel = 'Backup Pool';
+                  roleColor = '#a1a1aa';
+                }
+              }
+
+              return (
+                <tr key={iface.name}>
+                  {/* Adapter Name + Beszel Status Dot */}
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
+                      <span className={`beszel-dot ${iface.isUp ? 'online' : 'down'}`} />
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: '13px', color: '#fafafa' }}>
+                          {iface.name}
+                        </div>
+                        <div style={{ fontSize: '10.5px', color: '#71717a' }}>
+                          {iface.isUp ? 'Online' : 'Offline'}
+                          {nmSlot ? ` · ${nmSlot.Active} flows` : ''}
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+
+                  {/* LAN & WAN IPs */}
+                  <td className="font-mono" style={{ fontSize: '11px' }}>
+                    <div style={{ color: '#d4d4d8' }}>{iface.ip || 'Unassigned'}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: iface.wanIp ? '#10b981' : '#71717a', fontSize: '10.5px' }}>
+                      <Globe size={10} />
+                      <span>{iface.wanIp || 'Local subnet'}</span>
+                      {iface.location && <span style={{ color: '#71717a' }}>({iface.location})</span>}
+                    </div>
+                  </td>
+
+                  {/* Role & Share Bar */}
+                  <td>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxWidth: '150px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+                        <span style={{ color: roleColor, fontWeight: 600 }}>{roleLabel}</span>
+                        <span className="font-mono" style={{ color: '#a1a1aa' }}>{weightPct}%</span>
+                      </div>
+                      <div className="beszel-meter">
+                        <div
+                          className="beszel-meter-fill"
+                          style={{
+                            width: `${Math.min(100, weightPct)}%`,
+                            backgroundColor: roleColor,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </td>
+
+                  {/* Download Meter */}
+                  <td>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxWidth: '170px' }}>
+                      <div className="font-mono" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#38bdf8', fontWeight: 600 }}>
+                          <ArrowDown size={11} />
+                          {rxStr}
+                        </span>
+                        {iface.rxLimitMbps && iface.rxLimitMbps > 0 ? (
+                          <span style={{ color: '#71717a', fontSize: '10px' }}>cap {iface.rxLimitMbps}M</span>
+                        ) : null}
+                      </div>
+                      <div className="beszel-meter">
+                        <div
+                          className="beszel-meter-fill"
+                          style={{
+                            width: `${rxBarPct}%`,
+                            backgroundColor: '#38bdf8',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </td>
+
+                  {/* Upload Meter */}
+                  <td>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxWidth: '140px' }}>
+                      <div className="font-mono" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#f59e0b', fontWeight: 600 }}>
+                          <ArrowUp size={11} />
+                          {txStr}
+                        </span>
+                      </div>
+                      <div className="beszel-meter">
+                        <div
+                          className="beszel-meter-fill"
+                          style={{
+                            width: `${txBarPct}%`,
+                            backgroundColor: '#f59e0b',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </td>
+
+                  {/* Sparkline */}
+                  <td style={{ textAlign: 'right' }}>
+                    <div style={{ display: 'inline-block' }}>
+                      <Sparkline data={iface.rxHistory} color="#10b981" width={86} height={22} />
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Two-Column Split Application Management */}
       <div style={{
         display: 'grid',
         gridTemplateColumns: '1.15fr 1fr',
-        gap: '12px',
+        gap: '14px',
         alignItems: 'start',
       }}>
-        {/* LEFT SEGMENT: Configured App Policies (Added Apps) */}
+        {/* LEFT SEGMENT: Configured App Policies */}
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-              <Edit3 size={14} color="#38bdf8" />
-              <span>Configured App Policies ({rules.length})</span>
+              <Edit3 size={14} color="#10b981" />
+              <span>Application Routing Policies ({rules.length})</span>
             </div>
 
             <button
@@ -340,34 +561,39 @@ export const DashboardView: React.FC = () => {
               onClick={() => openModalForRule(undefined, '', '')}
             >
               <Plus size={12} />
-              <span>Manually Add App</span>
+              <span>Add Policy</span>
             </button>
           </div>
 
-          <p style={{ fontSize: '11px', color: '#64748b', marginBottom: '10px' }}>
-            Applications added here have custom adapter binding, failover backup, DNS, or bandwidth caps applied.
+          <p style={{ fontSize: '11.5px', color: '#a1a1aa', marginBottom: '12px' }}>
+            {isMergeActive
+              ? 'Default adapter is net-merge. Applications below can be pinned to specific adapters, failover pairs, or bandwidth caps.'
+              : 'Net-Merge is currently inactive (Standby). All applications use System Default and NetPilot does not modify any routes until activated.'}
           </p>
 
           {rules.length === 0 ? (
             <div style={{
-              padding: '24px 16px',
+              padding: '26px 16px',
               textAlign: 'center',
-              background: '#0b0e14',
-              border: '1px dashed #263042',
-              borderRadius: '6px',
-              color: '#64748b',
-              fontSize: '11.5px',
+              background: '#09090b',
+              border: '1px dashed #27272a',
+              borderRadius: '7px',
+              color: '#71717a',
+              fontSize: '12px',
             }}>
-              No custom application policies added yet. Click <strong>"Manually Add App"</strong> above or select any process from the <strong>Running Processes</strong> list on the right.
+              No custom application policies configured. Default traffic routes via{' '}
+              <strong style={{ color: isMergeActive ? '#10b981' : '#fafafa' }}>
+                {isMergeActive ? 'net-merge' : 'System Default'}
+              </strong>.
             </div>
           ) : (
             <table className="data-table">
               <thead>
                 <tr>
                   <th>Application</th>
-                  <th>Assigned Route</th>
-                  <th>Limits / DNS</th>
-                  <th>Status</th>
+                  <th>Effective Adapter</th>
+                  <th>Caps / DNS</th>
+                  <th>State</th>
                   <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
@@ -383,20 +609,14 @@ export const DashboardView: React.FC = () => {
                       style={{ cursor: 'pointer' }}
                     >
                       <td>
-                        <div style={{ fontWeight: 600, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <div style={{ fontWeight: 600, color: '#fafafa', display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <span>{rule.appName}</span>
                           {isRunningNow && (
-                            <span style={{
-                              width: '6px',
-                              height: '6px',
-                              borderRadius: '50%',
-                              backgroundColor: '#10b981',
-                              display: 'inline-block',
-                            }} title="Process is currently running" />
+                            <span className="beszel-dot online" style={{ width: '6px', height: '6px' }} title="Running" />
                           )}
                         </div>
                         {rule.appPath && (
-                          <div className="font-mono" style={{ fontSize: '10px', color: '#64748b' }}>
+                          <div className="font-mono" style={{ fontSize: '10px', color: '#71717a' }}>
                             {rule.appPath}
                           </div>
                         )}
@@ -404,30 +624,30 @@ export const DashboardView: React.FC = () => {
 
                       <td>
                         <span style={{
-                          fontSize: '10.5px',
+                          fontSize: '11px',
                           fontWeight: 600,
-                          padding: '2px 6px',
-                          borderRadius: '4px',
-                          background: 'rgba(2, 132, 199, 0.15)',
-                          color: '#38bdf8',
-                          border: '1px solid rgba(56, 189, 248, 0.25)',
+                          padding: '2px 7px',
+                          borderRadius: '5px',
+                          background: isMergeActive ? 'rgba(16, 185, 129, 0.12)' : '#18181b',
+                          color: isMergeActive ? '#34d399' : '#a1a1aa',
+                          border: `1px solid ${isMergeActive ? 'rgba(16, 185, 129, 0.25)' : '#27272a'}`,
                         }}>
-                          → {formatRouteSummary(rule)}
+                          {formatRouteSummary(rule)}
                         </span>
                       </td>
 
-                      <td className="font-mono" style={{ fontSize: '10.5px', color: '#94a3b8' }}>
-                        {rule.bandwidthLimitMbps > 0 ? `${rule.bandwidthLimitMbps} Mbps` : 'No cap'}
-                        {rule.customDns ? ` • DNS: ${rule.customDns}` : ''}
+                      <td className="font-mono" style={{ fontSize: '11px', color: '#a1a1aa' }}>
+                        {rule.bandwidthLimitMbps > 0 ? `${rule.bandwidthLimitMbps} Mbps` : 'Unlimited'}
+                        {rule.customDns ? ` · ${rule.customDns}` : ''}
                       </td>
 
                       <td>
                         <button
                           onClick={e => handleToggleRule(rule, e)}
                           className={`status-pill ${rule.enabled ? 'pass' : 'blocked'}`}
-                          style={{ cursor: 'pointer', border: 'none' }}
+                          style={{ cursor: 'pointer' }}
                         >
-                          {rule.enabled ? 'ACTIVE' : 'DISABLED'}
+                          {rule.enabled ? 'ENABLED' : 'PAUSED'}
                         </button>
                       </td>
 
@@ -437,11 +657,11 @@ export const DashboardView: React.FC = () => {
                           style={{
                             background: 'transparent',
                             border: 'none',
-                            color: '#f87171',
+                            color: '#fb7185',
                             cursor: 'pointer',
                             padding: '4px',
                           }}
-                          title="Remove App Policy"
+                          title="Delete Policy"
                         >
                           <Trash2 size={13} />
                         </button>
@@ -458,18 +678,18 @@ export const DashboardView: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-              <Activity size={14} color="#10b981" />
-              <span>Running Host Processes ({apps.length})</span>
+              <Activity size={14} color="#38bdf8" />
+              <span>Active Processes ({apps.length})</span>
             </div>
 
-            <div style={{ position: 'relative', width: '170px' }}>
-              <Search size={12} color="#64748b" style={{ position: 'absolute', left: '8px', top: '7px' }} />
+            <div style={{ position: 'relative', width: '180px' }}>
+              <Search size={12} color="#71717a" style={{ position: 'absolute', left: '9px', top: '8px' }} />
               <input
                 type="text"
-                placeholder="Filter processes..."
+                placeholder="Search processes..."
                 value={appSearch}
                 onChange={e => setAppSearch(e.target.value)}
-                style={{ width: '100%', paddingLeft: '24px', paddingRight: '8px', paddingTop: '4px', paddingBottom: '4px', fontSize: '11px' }}
+                style={{ width: '100%', paddingLeft: '26px', paddingRight: '8px', paddingTop: '4px', paddingBottom: '4px', fontSize: '11.5px' }}
               />
             </div>
           </div>
@@ -480,8 +700,8 @@ export const DashboardView: React.FC = () => {
                 <tr>
                   <th>Process</th>
                   <th>PID</th>
-                  <th>Active Policy</th>
-                  <th style={{ textAlign: 'right' }}>Configure</th>
+                  <th>Adapter</th>
+                  <th style={{ textAlign: 'right' }}>Rule</th>
                 </tr>
               </thead>
               <tbody>
@@ -490,34 +710,38 @@ export const DashboardView: React.FC = () => {
                   return (
                     <tr key={`${app.pid}-${app.name}`}>
                       <td>
-                        <div style={{ fontWeight: 600, color: '#f1f5f9' }}>{app.name}</div>
+                        <div style={{ fontWeight: 600, color: '#fafafa' }}>{app.name}</div>
                         {app.socketCount !== undefined && app.socketCount > 0 && (
-                          <div style={{ fontSize: '10px', color: '#64748b' }}>
-                            {app.socketCount} open sockets
+                          <div style={{ fontSize: '10px', color: '#71717a' }}>
+                            {app.socketCount} sockets
                           </div>
                         )}
                       </td>
-                      <td className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>
+                      <td className="font-mono" style={{ fontSize: '11px', color: '#71717a' }}>
                         {app.pid}
                       </td>
                       <td>
-                        {matchedRule ? (
-                          <span style={{ fontSize: '10.5px', color: '#38bdf8', fontWeight: 600 }}>
+                        {!isMergeActive ? (
+                          <span style={{ fontSize: '11px', color: '#71717a' }}>
+                            System Default
+                          </span>
+                        ) : matchedRule ? (
+                          <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 600 }}>
                             {formatRouteSummary(matchedRule)}
                           </span>
                         ) : (
-                          <span style={{ fontSize: '10.5px', color: '#64748b' }}>
-                            Default ({defaultIfaceName})
+                          <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 500 }}>
+                            net-merge
                           </span>
                         )}
                       </td>
                       <td style={{ textAlign: 'right' }}>
                         <button
                           className="btn btn-secondary btn-sm"
-                          style={{ padding: '3px 8px', fontSize: '10.5px' }}
+                          style={{ padding: '3px 8px', fontSize: '11px' }}
                           onClick={() => openModalForRule(matchedRule, app.name, app.executable)}
                         >
-                          {matchedRule ? 'Modify' : '+ Add Rule'}
+                          {matchedRule ? 'Edit' : '+ Rule'}
                         </button>
                       </td>
                     </tr>
@@ -537,37 +761,37 @@ export const DashboardView: React.FC = () => {
           left: 0,
           right: 0,
           bottom: 0,
-          background: 'rgba(0, 0, 0, 0.72)',
+          background: 'rgba(0, 0, 0, 0.75)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           zIndex: 1000,
         }}>
           <div style={{
-            background: '#121620',
-            border: '1px solid #263042',
-            borderRadius: '8px',
-            width: '440px',
-            padding: '16px 18px',
+            background: '#121215',
+            border: '1px solid #27272a',
+            borderRadius: '10px',
+            width: '450px',
+            padding: '18px 20px',
             display: 'flex',
             flexDirection: 'column',
             gap: '12px',
-            boxShadow: '0 12px 32px rgba(0, 0, 0, 0.5)',
+            boxShadow: '0 20px 40px rgba(0, 0, 0, 0.6)',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '13.5px', fontWeight: 700, color: '#f1f5f9' }}>
-                {editingRuleId ? `Modify Policy: ${modalApp}` : 'Add Application Routing Policy'}
+              <h3 style={{ fontSize: '14px', fontWeight: 700, color: '#fafafa' }}>
+                {editingRuleId ? `Edit Policy: ${modalApp}` : 'New Application Policy'}
               </h3>
               <button
                 onClick={() => setShowModal(false)}
-                style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+                style={{ background: 'transparent', border: 'none', color: '#a1a1aa', cursor: 'pointer' }}
               >
-                <X size={15} />
+                <X size={16} />
               </button>
             </div>
 
             <div>
-              <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
+              <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
                 Executable / Process Name *
               </label>
               <input
@@ -580,7 +804,7 @@ export const DashboardView: React.FC = () => {
             </div>
 
             <div>
-              <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
+              <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
                 Executable Path (Optional)
               </label>
               <input
@@ -594,16 +818,16 @@ export const DashboardView: React.FC = () => {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
               <div>
-                <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
-                  Preferred Network Adapter
+                <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
+                  Preferred Adapter
                 </label>
                 <select
                   value={modalPreferred}
                   onChange={e => setModalPreferred(e.target.value)}
                   style={{ width: '100%' }}
                 >
+                  <option value="net-merge">net-merge (Default Merged Adapter)</option>
                   <option value="FASTEST">Fastest Adapter (Lowest Latency)</option>
-                  <option value="ALL">Multi-WAN Merged (All Adapters)</option>
                   {interfaces.map(i => (
                     <option key={i.name} value={i.name}>
                       {i.name} ({i.ip || 'No IP'})
@@ -613,7 +837,7 @@ export const DashboardView: React.FC = () => {
               </div>
 
               <div>
-                <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
+                <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
                   Failover Backup Adapter
                 </label>
                 <select
@@ -621,7 +845,7 @@ export const DashboardView: React.FC = () => {
                   onChange={e => setModalFallback(e.target.value)}
                   style={{ width: '100%' }}
                 >
-                  <option value="">None (System Default)</option>
+                  <option value="">net-merge / System Default</option>
                   {interfaces.map(i => (
                     <option key={i.name} value={i.name}>
                       {i.name}
@@ -633,7 +857,7 @@ export const DashboardView: React.FC = () => {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
               <div>
-                <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
+                <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
                   Bandwidth Limit (Mbps)
                 </label>
                 <input
@@ -646,7 +870,7 @@ export const DashboardView: React.FC = () => {
               </div>
 
               <div>
-                <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
+                <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
                   Monthly Data Quota (MB)
                 </label>
                 <input
@@ -660,7 +884,7 @@ export const DashboardView: React.FC = () => {
             </div>
 
             <div>
-              <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
+              <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
                 Custom DNS Server (Optional)
               </label>
               <input
@@ -683,7 +907,7 @@ export const DashboardView: React.FC = () => {
                 className="btn btn-primary btn-sm"
                 onClick={handleSaveRule}
               >
-                Save Application Policy
+                Save Policy
               </button>
             </div>
           </div>

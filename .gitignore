@@ -14,3 +14,13 @@ result
 # Editor / OS
 .DS_Store
 *.log
+
+# Local planning & upstream reference (do not mix repos)
+/.reference/
+/task_plan.md
+/findings.md
+/progress.md
+/.planning/
+/internal/netmerge/embedded/bin/*
+!/internal/netmerge/embedded/bin/.keep
+

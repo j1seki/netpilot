@@ -10,7 +10,7 @@ export const RoutingRules: React.FC = () => {
   const [formId, setFormId] = useState('');
   const [formApp, setFormApp] = useState('');
   const [formDomain, setFormDomain] = useState('');
-  const [formPrefNic, setFormPrefNic] = useState('FASTEST');
+  const [formPrefNic, setFormPrefNic] = useState('net-merge');
   const [formFbNic, setFormFbNic] = useState('');
   const [formPriority, setFormPriority] = useState(50);
   const [formLimitMbps, setFormLimitMbps] = useState(0);
@@ -66,7 +66,7 @@ export const RoutingRules: React.FC = () => {
     setFormId('');
     setFormApp('');
     setFormDomain('');
-    setFormPrefNic('FASTEST');
+    setFormPrefNic('net-merge');
     setFormFbNic('');
     setFormPriority(50);
     setFormLimitMbps(0);
@@ -265,9 +265,10 @@ export const RoutingRules: React.FC = () => {
                   <select
                     value={formPrefNic}
                     onChange={e => setFormPrefNic(e.target.value)}
-                    style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'white', fontSize: '13px' }}
+                    style={{ width: '100%' }}
                   >
-                    <option value="FASTEST">⚡ FASTEST (Lowest Latency Adapter)</option>
+                    <option value="net-merge">net-merge (Default Merged Adapter)</option>
+                    <option value="FASTEST">FASTEST (Lowest Latency Adapter)</option>
                     {interfaces.map(i => (
                       <option key={i.name} value={i.name}>{i.name} ({i.ip || 'No IP'})</option>
                     ))}

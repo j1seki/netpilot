@@ -492,3 +492,33 @@ func TestUpdateDropsVanishedWhenIdle(t *testing.T) {
 		t.Fatal("NIC should be dropped once idle")
 	}
 }
+
+func TestBackupModeFailoverAndRecovery(t *testing.T) {
+	s := NewScheduler([]nics.Nic{nic("Primary", "10.0.0.1", 1), nic("Secondary", "10.0.0.2", 1)})
+	s.SetMode(ModeBackup, "Primary", "Secondary")
+	pri, sec := s.slots[0], s.slots[1]
+	s.SetState(pri, Fam4, true)
+	s.SetState(sec, Fam4, true)
+
+	// While Primary is healthy, all flows go to Primary even when Primary already has active flows
+	for i := 0; i < 6; i++ {
+		if got := s.Acquire(nil); got != pri {
+			t.Fatalf("flow %d went to %s in backup mode, want Primary", i, got.Name)
+		}
+	}
+
+	// Primary fails -> flows automatically switch to Secondary
+	s.SetState(pri, Fam4, false)
+	for i := 0; i < 4; i++ {
+		if got := s.Acquire(nil); got != sec {
+			t.Fatalf("failover flow %d went to %s, want Secondary", i, got.Name)
+		}
+	}
+
+	// Primary recovers -> flows switch back to Primary immediately
+	s.SetState(pri, Fam4, true)
+	if got := s.Acquire(nil); got != pri {
+		t.Fatalf("after primary recovery, flow went to %s, want Primary", got.Name)
+	}
+}
+

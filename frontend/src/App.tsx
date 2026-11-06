@@ -23,6 +23,9 @@ import {
   Bug,
   Settings as SettingsIcon,
   ShieldCheck,
+  Zap,
+  ShieldAlert,
+  Power,
 } from 'lucide-react';
 
 export type MainTab =
@@ -39,6 +42,7 @@ export const App: React.FC = () => {
   const [branding, setBranding] = useState<BrandingInfo | null>(null);
   const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
   const [netMergeStatus, setNetMergeStatus] = useState<NetMergeStatus | null>(null);
+  const [toggling, setToggling] = useState<boolean>(false);
   const [visitedTabs, setVisitedTabs] = useState<Record<MainTab, boolean>>({
     dashboard: true,
     netmerge: false,
@@ -50,7 +54,7 @@ export const App: React.FC = () => {
   });
 
   // Real aggregate rolling history for top-bar sparkline
-  const [globalRxHist, setGlobalRxHist] = useState<number[]>([0, 0, 0, 0, 0, 0, 0]);
+  const [globalRxHist, setGlobalRxHist] = useState<number[]>([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   const loadHeaderData = async () => {
     try {
@@ -79,20 +83,33 @@ export const App: React.FC = () => {
     setVisitedTabs(prev => ({ ...prev, [tab]: true }));
   };
 
+  const handleQuickToggle = async () => {
+    if (toggling) return;
+    setToggling(true);
+    try {
+      const want = !(netMergeStatus?.isRunning ?? false);
+      await api.toggleNetMerge(want);
+      await loadHeaderData();
+    } finally {
+      setToggling(false);
+    }
+  };
+
   const totalRx = interfaces.reduce((acc, i) => acc + (i.rxMbps || 0), 0);
   const totalTx = interfaces.reduce((acc, i) => acc + (i.txMbps || 0), 0);
-  const activeRxStr = totalRx >= 1 ? `${totalRx.toFixed(1)} Mbit/s` : `${(totalRx * 1000).toFixed(0)} kbit/s`;
-  const activeTxStr = totalTx >= 1 ? `${totalTx.toFixed(1)} Mbit/s` : `${(totalTx * 1000).toFixed(0)} kbit/s`;
+  const activeRxStr = totalRx >= 1 ? `${totalRx.toFixed(2)} MB/s` : `${(totalRx * 1000).toFixed(0)} KB/s`;
+  const activeTxStr = totalTx >= 1 ? `${totalTx.toFixed(2)} MB/s` : `${(totalTx * 1000).toFixed(0)} KB/s`;
 
-  const ifaceNames = interfaces.map(i => i.name).join(', ') || 'No active adapters';
   const isMergeRunning = netMergeStatus?.isRunning ?? false;
+  const routingMode = netMergeStatus?.routingMode || netMergeStatus?.config?.routingMode || 'speed';
+  const defaultAdapter = isMergeRunning ? 'net-merge' : 'System Default';
 
   const navItems: { id: MainTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={13} /> },
+    { id: 'dashboard', label: 'Systems', icon: <LayoutDashboard size={13} /> },
     { id: 'netmerge', label: 'Net-Merge', icon: <GitMerge size={13} /> },
-    { id: 'ttl', label: 'TTL & Hop Limit', icon: <ShieldCheck size={13} /> },
     { id: 'rules', label: 'Rules', icon: <Split size={13} /> },
-    { id: 'usage', label: 'Usage', icon: <BarChart2 size={13} /> },
+    { id: 'ttl', label: 'TTL', icon: <ShieldCheck size={13} /> },
+    { id: 'usage', label: 'Metrics', icon: <BarChart2 size={13} /> },
     { id: 'test-suite', label: 'Diagnostics', icon: <Bug size={13} /> },
     { id: 'settings', label: 'Settings', icon: <SettingsIcon size={13} /> },
   ];
@@ -103,81 +120,146 @@ export const App: React.FC = () => {
       flexDirection: 'column',
       height: '100vh',
       width: '100vw',
-      backgroundColor: '#090b10',
-      color: '#f1f5f9',
+      backgroundColor: '#09090b',
+      color: '#fafafa',
       overflow: 'hidden',
     }}>
-      {/* Clean Native Desktop Header Bar */}
+      {/* Beszel-Inspired Top Header Bar */}
       <header style={{
-        height: '52px',
-        minHeight: '52px',
-        backgroundColor: '#0f131b',
-        borderBottom: '1px solid #1e2636',
-        padding: '0 16px',
+        height: '54px',
+        minHeight: '54px',
+        backgroundColor: '#0c0c0f',
+        borderBottom: '1px solid #232329',
+        padding: '0 18px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         userSelect: 'none',
       }}>
-        {/* Left: Application Identity & Status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        {/* Left: Brand Identity + Default Adapter Status Pill */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{
             width: '30px',
             height: '30px',
-            borderRadius: '6px',
-            backgroundColor: isMergeRunning ? '#10b981' : '#0284c7',
+            borderRadius: '7px',
+            backgroundColor: isMergeRunning ? 'rgba(16, 185, 129, 0.14)' : '#18181b',
+            border: `1px solid ${isMergeRunning ? 'rgba(16, 185, 129, 0.4)' : '#27272a'}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
           }}>
-            <GitMerge size={17} color="#ffffff" />
+            <GitMerge size={16} color={isMergeRunning ? '#10b981' : '#a1a1aa'} />
           </div>
 
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-              <span style={{ fontSize: '14px', fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.01em' }}>
-                {branding?.name || 'NetPilot'}
-              </span>
-              <span style={{
-                fontSize: '9.5px',
-                fontWeight: 700,
-                padding: '1px 5px',
-                borderRadius: '3px',
-                backgroundColor: isMergeRunning ? 'rgba(16, 185, 129, 0.16)' : 'rgba(148, 163, 184, 0.12)',
-                color: isMergeRunning ? '#34d399' : '#94a3b8',
-                border: `1px solid ${isMergeRunning ? 'rgba(16, 185, 129, 0.3)' : 'rgba(148, 163, 184, 0.2)'}`,
-              }}>
-                {isMergeRunning ? 'MERGING ON' : 'STANDBY'}
-              </span>
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '14.5px', fontWeight: 700, color: '#fafafa', letterSpacing: '-0.02em' }}>
+                  {branding?.name || 'NetPilot'}
+                </span>
 
-            <div style={{ fontSize: '10.5px', color: '#64748b' }}>
-              {ifaceNames}
+                {/* Active Adapter / Standby Badge */}
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontSize: '10.5px',
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: '999px',
+                  backgroundColor: isMergeRunning ? 'rgba(16, 185, 129, 0.12)' : 'rgba(113, 113, 122, 0.14)',
+                  color: isMergeRunning ? '#34d399' : '#a1a1aa',
+                  border: `1px solid ${isMergeRunning ? 'rgba(16, 185, 129, 0.3)' : '#27272a'}`,
+                }}>
+                  <span className={`beszel-dot ${isMergeRunning ? 'online' : 'standby'}`} style={{ width: '6px', height: '6px' }} />
+                  <span>{isMergeRunning ? `Adapter: ${defaultAdapter}` : 'Standby · System Default'}</span>
+                </span>
+
+                {/* Mode Badge when Active */}
+                {isMergeRunning && (
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '10px',
+                    fontWeight: 600,
+                    padding: '2px 7px',
+                    borderRadius: '999px',
+                    backgroundColor: routingMode === 'backup' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(56, 189, 248, 0.12)',
+                    color: routingMode === 'backup' ? '#fbbf24' : '#38bdf8',
+                    border: `1px solid ${routingMode === 'backup' ? 'rgba(245, 158, 11, 0.28)' : 'rgba(56, 189, 248, 0.28)'}`,
+                  }}>
+                    {routingMode === 'backup' ? <ShieldAlert size={10} /> : <Zap size={10} />}
+                    <span>{routingMode === 'backup' ? 'BACKUP FAILOVER' : 'SPEED MERGE'}</span>
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Center: Live Host Throughput */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '18px' }}>
-          <div style={{ width: '110px', height: '24px' }}>
-            <Sparkline data={globalRxHist} color="#38bdf8" width={110} height={24} />
-          </div>
-
-          <div className="font-mono" style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#38bdf8', fontWeight: 600 }}>
-              <ArrowDown size={13} />
-              <span>{activeRxStr}</span>
+        {/* Center: Live Host Bandwidth Telemetry + Quick Power Switch */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '14px',
+            backgroundColor: '#121215',
+            border: '1px solid #232329',
+            borderRadius: '7px',
+            padding: '4px 12px',
+          }}>
+            <div style={{ width: '88px', height: '20px' }}>
+              <Sparkline data={globalRxHist} color={isMergeRunning ? '#10b981' : '#38bdf8'} width={88} height={20} />
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#eab308', fontWeight: 600 }}>
-              <ArrowUp size={13} />
-              <span>{activeTxStr}</span>
+            <div className="font-mono" style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '11.5px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#38bdf8', fontWeight: 600 }}>
+                <ArrowDown size={12} />
+                <span>{activeRxStr}</span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#f59e0b', fontWeight: 600 }}>
+                <ArrowUp size={12} />
+                <span>{activeTxStr}</span>
+              </div>
             </div>
           </div>
+
+          <button
+            onClick={handleQuickToggle}
+            disabled={toggling}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '5px 11px',
+              borderRadius: '6px',
+              fontSize: '11.5px',
+              fontWeight: 600,
+              cursor: toggling ? 'wait' : 'pointer',
+              backgroundColor: isMergeRunning ? 'rgba(16, 185, 129, 0.14)' : '#18181b',
+              color: isMergeRunning ? '#34d399' : '#d4d4d8',
+              border: `1px solid ${isMergeRunning ? 'rgba(16, 185, 129, 0.35)' : '#27272a'}`,
+              transition: 'all 0.14s ease',
+            }}
+            title={isMergeRunning ? 'Turn off Net-Merge and return to System Default standby' : 'Activate Net-Merge adapter'}
+          >
+            <Power size={12} />
+            <span>{isMergeRunning ? 'Active' : 'Activate'}</span>
+          </button>
         </div>
 
-        {/* Right: Navigation Tabs (No Duplicate Start Button) */}
-        <nav style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        {/* Right: Beszel-style Pill Navigation */}
+        <nav style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '2px',
+          backgroundColor: '#121215',
+          border: '1px solid #232329',
+          padding: '3px',
+          borderRadius: '8px',
+        }}>
           {navItems.map(item => {
             const active = currentTab === item.id;
             return (
@@ -188,14 +270,14 @@ export const App: React.FC = () => {
                   display: 'flex',
                   alignItems: 'center',
                   gap: '5px',
-                  padding: '6px 11px',
+                  padding: '5px 10px',
                   borderRadius: '5px',
                   fontSize: '11.5px',
                   fontWeight: active ? 600 : 500,
                   cursor: 'pointer',
-                  backgroundColor: active ? '#182030' : 'transparent',
-                  color: active ? '#f1f5f9' : '#94a3b8',
-                  border: `1px solid ${active ? '#2b3954' : 'transparent'}`,
+                  backgroundColor: active ? '#27272a' : 'transparent',
+                  color: active ? '#fafafa' : '#a1a1aa',
+                  border: 'none',
                   transition: 'all 0.12s ease',
                 }}
               >
@@ -207,12 +289,12 @@ export const App: React.FC = () => {
         </nav>
       </header>
 
-      {/* Main Content Area — Keep visited views mounted so switching tabs never loses state or re-runs probes */}
+      {/* Main Content Area */}
       <main style={{
         flex: 1,
         overflowY: 'auto',
-        padding: '14px 16px',
-        backgroundColor: '#090b10',
+        padding: '16px 20px',
+        backgroundColor: '#09090b',
       }}>
         <div style={{ display: currentTab === 'dashboard' ? 'block' : 'none' }}>
           <DashboardView />

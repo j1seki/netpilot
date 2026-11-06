@@ -1,0 +1,86 @@
+name: sync-net-merge
+on:
+  schedule:
+    # Check every 6 hours for a new release of net-merge/net-merge
+    - cron: '0 */6 * * *'
+  repository_dispatch:
+    types: [net-merge-release]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'net-merge release tag to sync (leave empty for latest)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check latest net-merge release
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          want="${{ inputs.tag }}"
+          if [ -z "$want" ]; then
+            want=$(gh api repos/net-merge/net-merge/releases/latest --jq .tag_name)
+          fi
+          want="${want#v}"
+          have=""
+          if [ -f internal/netmerge/VERSION ]; then
+            have=$(tr -d '[:space:]' < internal/netmerge/VERSION)
+          fi
+          echo "latest=$want" >> "$GITHUB_OUTPUT"
+          echo "current=$have" >> "$GITHUB_OUTPUT"
+          echo "Upstream net-merge latest: v$want (current embedded: v$have)"
+          if [ "$want" = "$have" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync net-merge source and build frontend
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          bash scripts/sync-net-merge.sh "${{ steps.check.outputs.latest }}"
+          cd frontend
+          npm ci || npm install
+          npm run build
+
+      - name: Verify engine tests
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          CGO_ENABLED=0 go vet ./internal/... ./cmd/net-merge/...
+          CGO_ENABLED=0 go test ./internal/engine/... ./internal/state/... ./tests/common/... ./tests/scenarios/...
+
+      - name: Commit, tag, and trigger NetPilot release rebuild
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="${{ steps.check.outputs.latest }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add internal/ cmd/net-merge/ frontend/dist/
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(net-merge): sync and embed net-merge v${ver} + net-merge-tray"
+            git push origin HEAD:main
+          fi
+          tag="v${ver}"
+          git tag -f "$tag"
+          git push -f origin "$tag"
+          gh workflow run release.yml -f tag="$tag" || true

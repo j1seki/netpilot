@@ -136,3 +136,61 @@ func TestBinaryResolutionAndValidation(t *testing.T) {
 	}
 	t.Logf("Controller persistence test passed")
 }
+
+func TestBuiltinVsExternalEngineModesAndInactiveStandby(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctrl := NewController(tmpDir)
+
+	// 1. Default engine source is builtin, default close action is minimize, default routing mode is speed
+	cfg := ctrl.GetConfig()
+	if cfg.EngineSource != "builtin" {
+		t.Fatalf("expected default EngineSource='builtin', got %q", cfg.EngineSource)
+	}
+	if ctrl.GetCloseAction() != "minimize" {
+		t.Fatalf("expected default CloseAction='minimize', got %q", ctrl.GetCloseAction())
+	}
+	if cfg.RoutingMode != "speed" {
+		t.Fatalf("expected default RoutingMode='speed', got %q", cfg.RoutingMode)
+	}
+
+	// 2. When net-merge is not active, DefaultAdapterName is "System Default"
+	if ctrl.IsActive() {
+		t.Fatalf("expected controller to start inactive")
+	}
+	if got := ctrl.DefaultAdapterName(); got != "System Default" {
+		t.Fatalf("expected DefaultAdapterName='System Default' when inactive, got %q", got)
+	}
+
+	st, err := ctrl.GetStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.DefaultAdapter != "System Default" {
+		t.Fatalf("expected status DefaultAdapter='System Default' when inactive, got %q", st.DefaultAdapter)
+	}
+	if !st.Binary.IsValid || st.Binary.EngineSource != "builtin" {
+		t.Fatalf("expected builtin binary to be valid, got %+v", st.Binary)
+	}
+
+	// 3. Test switching to Backup mode
+	if err := ctrl.SetRoutingMode("backup", "eth0", "wlan0"); err != nil {
+		t.Fatal(err)
+	}
+	cfg2 := ctrl.GetConfig()
+	if cfg2.RoutingMode != "backup" || cfg2.PrimaryAdapter != "eth0" || cfg2.SecondaryAdapter != "wlan0" {
+		t.Fatalf("unexpected backup mode config: %+v", cfg2)
+	}
+
+	// 4. Test switching CloseAction
+	if err := ctrl.SetCloseAction("close"); err != nil {
+		t.Fatal(err)
+	}
+	if ctrl.GetCloseAction() != "close" {
+		t.Fatalf("expected CloseAction='close', got %q", ctrl.GetCloseAction())
+	}
+	_ = ctrl.SetCloseAction("minimize")
+	if ctrl.GetCloseAction() != "minimize" {
+		t.Fatalf("expected CloseAction='minimize', got %q", ctrl.GetCloseAction())
+	}
+}
+

@@ -130,21 +130,60 @@ type SlotStats struct {
 	LimitMbps         float64 // cap in Mbit/s, 0 = unlimited
 }
 
-// Scheduler uses weighted least-busy-flows per address family. Automatic mode
-// discounts idle TCP sockets; static mode
+// RoutingMode controls how the scheduler selects across healthy adapters:
+//   - ModeSpeed ("speed"): default net-merge behavior; distributes flows across all healthy
+//     adapters simultaneously according to their weights / busy flow load for maximum combined speed.
+//   - ModeBackup ("backup"): active-passive failover; sends all flows through the primary adapter
+//     while it is healthy and not cooling down, switching to the secondary (or next available)
+//     adapter only when the primary fails.
+type RoutingMode string
+
+const (
+	ModeSpeed  RoutingMode = "speed"
+	ModeBackup RoutingMode = "backup"
+)
+
+// Scheduler uses weighted least-busy-flows per address family in Speed mode, or active-passive
+// failover in Backup mode. Automatic mode discounts idle TCP sockets; static mode
 // retains weighted least-open-flows. Data transfer accounting stays lock-free.
 type Scheduler struct {
-	mu     sync.Mutex
-	slots  []*Slot
-	auto   bool
-	limits map[string]float64 // adapter name -> Mbit/s, 0 or absent = unlimited
-	now    func() time.Time
+	mu         sync.Mutex
+	slots      []*Slot
+	auto       bool
+	mode       RoutingMode
+	primaryNIC string
+	backupNIC  string
+	limits     map[string]float64 // adapter name -> Mbit/s, 0 or absent = unlimited
+	now        func() time.Time
 }
 
 func NewScheduler(nics []nics.Nic) *Scheduler {
-	s := &Scheduler{now: time.Now}
+	s := &Scheduler{now: time.Now, mode: ModeSpeed}
 	s.Update(nics)
 	return s
+}
+
+// SetMode switches between ModeSpeed (simultaneous multi-link aggregation) and ModeBackup
+// (primary adapter with automatic failover to secondary only when primary fails).
+func (s *Scheduler) SetMode(mode RoutingMode, primaryNIC, backupNIC string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if mode != ModeBackup {
+		mode = ModeSpeed
+	}
+	s.mode = mode
+	s.primaryNIC = primaryNIC
+	s.backupNIC = backupNIC
+}
+
+// Mode returns the current routing mode and configured primary/backup adapter names.
+func (s *Scheduler) Mode() (RoutingMode, string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mode == "" {
+		return ModeSpeed, s.primaryNIC, s.backupNIC
+	}
+	return s.mode, s.primaryNIC, s.backupNIC
 }
 
 // SetAuto makes Tick derive weights from observed throughput instead of the static ones.
@@ -417,6 +456,35 @@ func (s *Scheduler) AcquireFor(f Family, skip map[string]struct{}) *Slot {
 	}
 	if len(pool) == 0 {
 		return nil
+	}
+	// In Backup (active-passive failover) mode, always pick the primary adapter if it is in the
+	// best healthy tier; only when the primary fails or cools down does traffic switch to the
+	// secondary (or first healthy fallback) adapter.
+	if s.mode == ModeBackup {
+		var best *Slot
+		if s.primaryNIC != "" {
+			for _, sl := range pool {
+				if sl.Name == s.primaryNIC {
+					best = sl
+					break
+				}
+			}
+		}
+		if best == nil && s.backupNIC != "" {
+			for _, sl := range pool {
+				if sl.Name == s.backupNIC {
+					best = sl
+					break
+				}
+			}
+		}
+		if best == nil {
+			best = pool[0]
+		}
+		best.active.Add(1)
+		best.actF[f].Add(1)
+		best.total.Add(1)
+		return best
 	}
 	// Random start so ties don't resonate with the arrival pattern (a rotating counter can
 	// lock onto e.g. "every third flow is a short DNS-like one" and starve an adapter).

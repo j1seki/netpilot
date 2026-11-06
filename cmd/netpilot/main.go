@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 
 	"netpilot/frontend"
 	"netpilot/internal/analytics"
@@ -212,7 +213,9 @@ func main() {
 		select {}
 	}
 
-	// 6. Launch Wails 3 Desktop Application
+	// 6. Launch Wails 3 Desktop Application with Cross-Platform System Tray & Close-to-Tray Hook
+	prepareLinuxTrayEnvironment()
+
 	distFS, err := fs.Sub(frontend.DistFS, "dist")
 	var assetHandler http.Handler
 	if err == nil {
@@ -233,13 +236,114 @@ func main() {
 		},
 	})
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	mainWin := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     branding.WindowTitle,
-		Width:     1280,
-		Height:    850,
+		Width:     1320,
+		Height:    860,
 		MinWidth:  1024,
 		MinHeight: 650,
 	})
+
+	showMainWindow := func() {
+		mainWin.Show()
+		mainWin.Restore()
+		mainWin.Focus()
+	}
+
+	// Register window close hook: check user preference ("minimize" to tray by default vs "close" app)
+	mainWin.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
+		closeAction := service.GetCloseAction()
+		if closeAction == "close" {
+			return // allow normal close & application exit
+		}
+		// Minimize to system tray (or task bar if Linux DE has no StatusNotifierWatcher at all)
+		event.Cancel()
+		if isLinuxTrayHostAvailable() {
+			mainWin.Hide()
+		} else {
+			mainWin.Minimise()
+		}
+	})
+
+	// Initialize System Tray
+	sysTray := app.SystemTray.New()
+	sysTray.SetIcon(icon.PNG(netmergeCtrl.IsActive()))
+	sysTray.SetLabel("NetPilot")
+	sysTray.SetTooltip("NetPilot — Multi-Adapter Network Control Center")
+
+	trayMenu := app.NewMenu()
+	openItem := trayMenu.Add("Open NetPilot")
+	openItem.OnClick(func(_ *application.Context) {
+		showMainWindow()
+	})
+
+	trayMenu.AddSeparator()
+	statusItem := trayMenu.Add("Adapter: System Default (Standby)")
+	statusItem.SetEnabled(false)
+
+	toggleItem := trayMenu.AddCheckbox("Enable Net-Merge Adapter", netmergeCtrl.IsActive())
+	toggleItem.OnClick(func(_ *application.Context) {
+		want := !netmergeCtrl.IsActive()
+		_ = service.SetNetMergeMode(want)
+		toggleItem.SetChecked(netmergeCtrl.IsActive())
+		sysTray.SetIcon(icon.PNG(netmergeCtrl.IsActive()))
+	})
+
+	trayMenu.AddSeparator()
+	speedModeItem := trayMenu.AddRadio("Mode: Speed (Multi-Link Aggregation)", netmergeCtrl.GetConfig().RoutingMode != "backup")
+	backupModeItem := trayMenu.AddRadio("Mode: Backup (Primary -> Failover)", netmergeCtrl.GetConfig().RoutingMode == "backup")
+
+	speedModeItem.OnClick(func(_ *application.Context) {
+		_ = service.SetNetMergeRoutingMode("speed", "", "")
+		speedModeItem.SetChecked(true)
+		backupModeItem.SetChecked(false)
+	})
+	backupModeItem.OnClick(func(_ *application.Context) {
+		_ = service.SetNetMergeRoutingMode("backup", "", "")
+		backupModeItem.SetChecked(true)
+		speedModeItem.SetChecked(false)
+	})
+
+	trayMenu.AddSeparator()
+	quitItem := trayMenu.Add("Quit NetPilot")
+	quitItem.OnClick(func(_ *application.Context) {
+		_ = service.SetNetMergeMode(false)
+		app.Quit()
+	})
+
+	sysTray.SetMenu(trayMenu)
+	sysTray.OnClick(func() {
+		showMainWindow()
+	})
+
+	// Background goroutine to keep tray icon & status synchronized with Net-Merge state
+	go func() {
+		lastActive := !netmergeCtrl.IsActive()
+		lastMode := ""
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			active := netmergeCtrl.IsActive()
+			cfg := netmergeCtrl.GetConfig()
+			if active != lastActive || cfg.RoutingMode != lastMode {
+				lastActive = active
+				lastMode = cfg.RoutingMode
+				sysTray.SetIcon(icon.PNG(active))
+				toggleItem.SetChecked(active)
+				speedModeItem.SetChecked(cfg.RoutingMode != "backup")
+				backupModeItem.SetChecked(cfg.RoutingMode == "backup")
+				if active {
+					if cfg.RoutingMode == "backup" {
+						statusItem.SetLabel("Active: net-merge (Backup Mode)")
+					} else {
+						statusItem.SetLabel("Active: net-merge (Speed Mode)")
+					}
+				} else {
+					statusItem.SetLabel("Adapter: System Default (Standby)")
+				}
+			}
+		}
+	}()
 
 	if err := app.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "application run error: %v\n", err)

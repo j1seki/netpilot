@@ -363,10 +363,22 @@ func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 }
 
 // DiscoverApplications returns currently active applications with matched policies.
+// When net-merge is NOT active, the default adapter is "System Default" and NetPilot does nothing
+// (pure standby — no custom routing rules are enforced). When net-merge IS active, the default
+// adapter is "net-merge" and active routing rules are evaluated.
 func (s *NetPilotService) DiscoverApplications() []apps.ProcessInfo {
 	procs := s.appManager.Discover()
+	isActive := s.netmergeCtrl != nil && s.netmergeCtrl.IsActive()
+	defaultAdapter := "System Default"
+	if isActive {
+		defaultAdapter = "net-merge"
+	}
 	for i := range procs {
-		decision := s.ruleEngine.Evaluate(procs[i].Name, procs[i].Executable, "", "eth0")
+		procs[i].AssignedNIC = defaultAdapter
+		if !isActive {
+			continue
+		}
+		decision := s.ruleEngine.Evaluate(procs[i].Name, procs[i].Executable, "", defaultAdapter)
 		if decision.MatchedRuleID != "" {
 			procs[i].AssignedNIC = decision.SelectedInterface
 			procs[i].RuleMatched = decision.MatchedRuleID
@@ -450,8 +462,18 @@ func (s *NetPilotService) SimRecoverInterface(name string) error {
 }
 
 // EvaluateRoute computes the routing outcome for a prospective flow.
+// When net-merge is not active, default is "System Default" and NetPilot stands by without altering routes.
 func (s *NetPilotService) EvaluateRoute(appName, path, destination string) rules.MatchDecision {
-	return s.ruleEngine.Evaluate(appName, path, destination, "eth0")
+	if s.netmergeCtrl == nil || !s.netmergeCtrl.IsActive() {
+		return rules.MatchDecision{
+			AppName:           appName,
+			Destination:       destination,
+			SelectedInterface: "System Default",
+			Reason:            "Net-Merge is inactive (Standby Mode): using System Default adapter; NetPilot is not modifying routes.",
+			EvaluatedAt:       time.Now(),
+		}
+	}
+	return s.ruleEngine.Evaluate(appName, path, destination, "net-merge")
 }
 
 // GetAdapterCaps returns configured adapter caps.
@@ -561,6 +583,39 @@ func (s *NetPilotService) SetNetMergeBinaryPath(path string) (netmerge.BinaryInf
 		return netmerge.BinaryInfo{}, fmt.Errorf("net-merge controller not initialized")
 	}
 	return s.netmergeCtrl.SetCustomBinaryPath(path)
+}
+
+func (s *NetPilotService) SetNetMergeEngineSource(source, customPath string) (netmerge.BinaryInfo, error) {
+	if s.netmergeCtrl == nil {
+		return netmerge.BinaryInfo{}, fmt.Errorf("net-merge controller not initialized")
+	}
+	return s.netmergeCtrl.SetEngineSource(source, customPath)
+}
+
+func (s *NetPilotService) SetNetMergeRoutingMode(mode, primary, secondary string) error {
+	if s.netmergeCtrl == nil {
+		return fmt.Errorf("net-merge controller not initialized")
+	}
+	s.ringLog.Log(logger.LogEntry{
+		Level:     logger.LevelInfo,
+		Component: "NetMerge",
+		Message:   fmt.Sprintf("Routing mode updated to %s (primary=%s, secondary=%s)", mode, primary, secondary),
+	})
+	return s.netmergeCtrl.SetRoutingMode(mode, primary, secondary)
+}
+
+func (s *NetPilotService) GetCloseAction() string {
+	if s.netmergeCtrl == nil {
+		return "minimize"
+	}
+	return s.netmergeCtrl.GetCloseAction()
+}
+
+func (s *NetPilotService) SetCloseAction(action string) error {
+	if s.netmergeCtrl == nil {
+		return fmt.Errorf("net-merge controller not initialized")
+	}
+	return s.netmergeCtrl.SetCloseAction(action)
 }
 
 func (s *NetPilotService) SetConsoleWindow(show bool) error {
@@ -898,10 +953,17 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "netmerge/binary":
 		if r.Method == http.MethodPost {
 			var body struct {
-				Path string `json:"path"`
+				Source string `json:"source"`
+				Path   string `json:"path"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			info, err := s.SetNetMergeBinaryPath(body.Path)
+			var info netmerge.BinaryInfo
+			var err error
+			if body.Source != "" {
+				info, err = s.SetNetMergeEngineSource(body.Source, body.Path)
+			} else {
+				info, err = s.SetNetMergeBinaryPath(body.Path)
+			}
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -919,6 +981,36 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			_ = json.NewEncoder(w).Encode(info)
+		}
+
+	case path == "netmerge/routing-mode":
+		var body struct {
+			Mode      string `json:"mode"`
+			Primary   string `json:"primary"`
+			Secondary string `json:"secondary"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if err := s.SetNetMergeRoutingMode(body.Mode, body.Primary, body.Secondary); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "mode": body.Mode})
+
+	case path == "system/close-action":
+		if r.Method == http.MethodPost {
+			var body struct {
+				Action string `json:"action"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if err := s.SetCloseAction(body.Action); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"closeAction": s.GetCloseAction()})
+		} else {
+			_ = json.NewEncoder(w).Encode(map[string]string{"closeAction": s.GetCloseAction()})
 		}
 
 	case path == "system/console":

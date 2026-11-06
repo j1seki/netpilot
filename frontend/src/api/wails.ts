@@ -154,9 +154,11 @@ export interface NetMergeSlotStats {
 
 export interface NetMergeBinaryInfo {
   path: string;
+  trayPath?: string;
   customPath: string;
+  engineSource?: 'builtin' | 'external';
   exists: boolean;
-  source: 'custom' | 'same-folder' | 'path' | 'system' | 'none';
+  source: 'builtin' | 'custom' | 'same-folder' | 'path' | 'system' | 'none';
   version: string;
   isValid: boolean;
   error?: string;
@@ -173,13 +175,21 @@ export interface NetMergeConfig {
   weights: Record<string, number>;
   showConsole: boolean;
   autostart: boolean;
+  engineSource?: 'builtin' | 'external';
   binaryPath?: string;
+  routingMode?: 'speed' | 'backup';
+  primaryAdapter?: string;
+  secondaryAdapter?: string;
+  closeAction?: 'minimize' | 'close';
 }
 
 export interface NetMergeStatus {
   isRunning: boolean;
   pid: number;
   mode: string;
+  routingMode?: 'speed' | 'backup';
+  defaultAdapter?: string;
+  activeAdapter?: string;
   v6State: string;
   uptimeSec: number;
   autostart: boolean;
@@ -707,6 +717,40 @@ export const api = {
     });
     if (res) return res;
     throw new Error('Failed to set net-merge binary path');
+  },
+
+  async setNetMergeEngineSource(source: 'builtin' | 'external', path: string = ''): Promise<NetMergeBinaryInfo> {
+    const res = await fetchApi<NetMergeBinaryInfo>('netmerge/binary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, path }),
+    });
+    if (res) return res;
+    throw new Error('Failed to update net-merge engine source');
+  },
+
+  async setNetMergeRoutingMode(mode: 'speed' | 'backup', primary: string = '', secondary: string = ''): Promise<void> {
+    await fetchApi<void>('netmerge/routing-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, primary, secondary }),
+    });
+  },
+
+  async getCloseAction(): Promise<'minimize' | 'close'> {
+    const res = await fetchApi<{ closeAction: 'minimize' | 'close' }>('system/close-action');
+    if (res && res.closeAction) return res.closeAction;
+    return 'minimize';
+  },
+
+  async setCloseAction(action: 'minimize' | 'close'): Promise<'minimize' | 'close'> {
+    const res = await fetchApi<{ closeAction: 'minimize' | 'close' }>('system/close-action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    if (res && res.closeAction) return res.closeAction;
+    return action;
   },
 
   async setConsoleVisible(show: boolean): Promise<void> {

@@ -103,7 +103,10 @@ func delRoutes(idx int) {
 
 func run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: windows.CREATE_NO_WINDOW,
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return cmdError(name, args, err, out)
@@ -193,7 +196,10 @@ func syncStrongHost(stop chan struct{}) {
 		"Get-NetIPInterface -InterfaceIndex "+strings.Join(idx, ",")+" -ErrorAction SilentlyContinue | "+
 			"Where-Object { $_.WeakHostSend -eq 'Enabled' -or $_.Forwarding -eq 'Enabled' } | "+
 			"ForEach-Object { '{0} {1} {2} {3}' -f $_.AddressFamily, $_.InterfaceIndex, $_.WeakHostSend, $_.Forwarding }")
-	ps.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	ps.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: windows.CREATE_NO_WINDOW,
+	}
 	out, err := ps.Output()
 	if err != nil {
 		logx.Printf("warning: could not check the adapters' weak host setting: %v\n", err)

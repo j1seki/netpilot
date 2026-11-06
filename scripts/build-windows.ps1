@@ -17,18 +17,20 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must look like 1.2.3,
 if (Test-Path dist) { Remove-Item dist -Recurse -Force }
 New-Item -ItemType Directory dist | Out-Null
 
-# 1. Build frontend
+# 1. Build frontend with typescript-go (tsgo)
 Write-Host "Building frontend..."
 Push-Location frontend
 Invoke-Native 'npm build' { cmd /c "npm ci || npm install && npm run build" }
 Pop-Location
 
-# 2. Build NetPilot GUI
-Write-Host "Building NetPilot GUI binary..."
-Invoke-Native 'build netpilot' { go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$Version" -o dist\netpilot.exe .\cmd\netpilot }
+# 2. Build net-merge CLI and windowless net-merge-tray
+Write-Host "Building net-merge and net-merge-tray..."
+New-Item -ItemType Directory -Force internal\netmerge\embedded\bin | Out-Null
+Invoke-Native 'build net-merge' { go build -trimpath -ldflags "-s -w -X main.version=$Version" -o dist\net-merge.exe .\cmd\net-merge }
+Invoke-Native 'build net-merge-tray' { go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$Version -X main.defaultCmd=tray" -o dist\net-merge-tray.exe .\cmd\net-merge }
 
-# 3. Pull latest official net-merge release binaries from net-merge/net-merge
-Write-Host "Fetching latest official net-merge binaries..."
+# 3. Pull official wintun.dll from net-merge/net-merge release
+Write-Host "Fetching official Wintun driver from net-merge/net-merge..."
 $tempDir = Join-Path $env:TEMP "net-merge-dl"
 if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
 New-Item -ItemType Directory $tempDir | Out-Null
@@ -38,12 +40,19 @@ gh release download --repo net-merge/net-merge --pattern 'net-merge-portable.zip
 Expand-Archive -Path net-merge-portable.zip -DestinationPath extracted -Force
 Pop-Location
 
-Copy-Item "$tempDir\extracted\net-merge.exe" dist\net-merge.exe -Force
-Copy-Item "$tempDir\extracted\net-merge-tray.exe" dist\net-merge-tray.exe -Force
 Copy-Item "$tempDir\extracted\wintun.dll" dist\wintun.dll -Force
 Copy-Item "$tempDir\extracted\wintun-LICENSE.txt" dist\wintun-LICENSE.txt -Force
 Copy-Item packaging\netpilot.ico dist\netpilot.ico -Force
 Remove-Item $tempDir -Recurse -Force
+
+# Embed net-merge.exe, net-merge-tray.exe, and wintun.dll directly into NetPilot
+Copy-Item dist\net-merge.exe internal\netmerge\embedded\bin\net-merge.exe -Force
+Copy-Item dist\net-merge-tray.exe internal\netmerge\embedded\bin\net-merge-tray.exe -Force
+Copy-Item dist\wintun.dll internal\netmerge\embedded\bin\wintun.dll -Force
+
+# 4. Build NetPilot GUI (-H=windowsgui)
+Write-Host "Building NetPilot GUI binary with embedded net-merge + tray..."
+Invoke-Native 'build netpilot' { go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$Version" -o dist\netpilot.exe .\cmd\netpilot }
 
 # 4. Inno Setup installer (.exe)
 $iscc = $env:ISCC
