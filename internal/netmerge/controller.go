@@ -15,6 +15,7 @@ import (
 
 	"netpilot/internal/engine"
 	"netpilot/internal/execx"
+	"netpilot/internal/logx"
 	"netpilot/internal/netmerge/embedded"
 	"netpilot/internal/nics"
 	"netpilot/internal/platform"
@@ -164,21 +165,42 @@ func (c *Controller) parseIncludes() []string {
 	return inc
 }
 
-func (c *Controller) discover() []nics.Nic {
+func (c *Controller) discover() ([]nics.Nic, error) {
 	inc := c.parseIncludes()
-	found, _ := nics.DiscoverNics(inc, c.config.Weights)
+	found, err := nics.DiscoverNics(inc, c.config.Weights)
+	if err != nil {
+		return nil, fmt.Errorf("discover network adapters: %w", err)
+	}
 	if len(found) == 0 && len(inc) == 0 {
-		// Fallback for virtualized environments where default hardware filter skips eth0
-		ifaces, _ := net.Interfaces()
+		// Fallback for virtualized environments where default hardware filter skips eth0.
+		// Preserve enumeration errors: an empty successful scan means "remove old adapters",
+		// while a failed scan must leave the current scheduler state untouched.
+		ifaces, err := net.Interfaces()
+		if err != nil {
+			return nil, fmt.Errorf("enumerate interfaces for fallback discovery: %w", err)
+		}
 		var allNames []string
 		for _, ifc := range ifaces {
 			if ifc.Flags&net.FlagUp != 0 && ifc.Flags&net.FlagLoopback == 0 && ifc.Name != "net-merge" {
 				allNames = append(allNames, ifc.Name)
 			}
 		}
-		found, _ = nics.DiscoverNics(allNames, c.config.Weights)
+		found, err = nics.DiscoverNics(allNames, c.config.Weights)
+		if err != nil {
+			return nil, fmt.Errorf("discover fallback adapters: %w", err)
+		}
 	}
-	return found
+	return found, nil
+}
+
+// updateSchedulerFromDiscovery applies only successful scans. In particular, an empty
+// successful result is meaningful and removes vanished adapters; an error must not do so.
+func updateSchedulerFromDiscovery(sched *engine.Scheduler, found []nics.Nic, discoveryErr error) error {
+	if discoveryErr != nil {
+		return discoveryErr
+	}
+	sched.Update(found)
+	return nil
 }
 
 func (c *Controller) applySchedulerModeLocked() {
@@ -194,7 +216,11 @@ func (c *Controller) applySchedulerModeLocked() {
 }
 
 func (c *Controller) initScheduler() {
-	initial := c.discover()
+	initial, err := c.discover()
+	if err != nil {
+		logx.Printf("warning: initial adapter discovery failed: %v\\n", err)
+		initial = nil
+	}
 	c.sched = engine.NewScheduler(initial)
 	if c.config.PrimaryAdapter == "" && len(initial) > 0 {
 		c.config.PrimaryAdapter = initial[0].Name
@@ -224,9 +250,9 @@ func (c *Controller) initScheduler() {
 			case <-c.stopCh:
 				return
 			case <-rescanTicker.C:
-				found := c.discover()
-				if len(found) > 0 {
-					c.sched.Update(found)
+				found, err := c.discover()
+				if err := updateSchedulerFromDiscovery(c.sched, found, err); err != nil {
+					logx.Printf("warning: adapter rescan failed: %v\\n", err)
 				}
 			case now := <-tickTicker.C:
 				c.sched.Tick(now.Sub(last))
