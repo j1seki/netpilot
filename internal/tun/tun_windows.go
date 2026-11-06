@@ -174,7 +174,12 @@ func startStrongHost(tunIdx int) {
 }
 
 func syncStrongHost(stop chan struct{}) {
-	found, _ := nics.DiscoverNics(nil, nil)
+	found, err := nics.DiscoverNics(nil, nil)
+	if err != nil {
+		logx.Printf("warning: could not discover adapters for weak-host configuration: %v\\n", err)
+		return
+	}
+
 	strongHost.mu.Lock()
 	defer strongHost.mu.Unlock()
 	if strongHost.stop != stop {
@@ -183,48 +188,97 @@ func syncStrongHost(stop chan struct{}) {
 	var idx []string
 	for _, n := range found {
 		if !strongHost.checked[n.Index] {
-			strongHost.checked[n.Index] = true
 			idx = append(idx, strconv.Itoa(n.Index))
 		}
 	}
 	if len(idx) == 0 {
 		return
 	}
-	// Get-NetIPInterface prints enum names, which unlike netsh's output are not translated.
-	// HideWindow: without it, every new adapter flashes a PowerShell console (#10).
-	ps := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
-		"Get-NetIPInterface -InterfaceIndex "+strings.Join(idx, ",")+" -ErrorAction SilentlyContinue | "+
-			"Where-Object { $_.WeakHostSend -eq 'Enabled' -or $_.Forwarding -eq 'Enabled' } | "+
-			"ForEach-Object { '{0} {1} {2} {3}' -f $_.AddressFamily, $_.InterfaceIndex, $_.WeakHostSend, $_.Forwarding }")
+
+	// Do not mark indexes complete until the query and every required update have
+	// succeeded. A failed query leaves every index eligible for the next sync.
+	command := "$ErrorActionPreference = 'Stop'; try { " +
+		"Get-NetIPInterface -InterfaceIndex " + strings.Join(idx, ",") +
+		" | Where-Object { $_.WeakHostSend -eq 'Enabled' -or $_.Forwarding -eq 'Enabled' } | " +
+		"ForEach-Object { '{0} {1} {2} {3}' -f $_.AddressFamily, $_.InterfaceIndex, $_.WeakHostSend, $_.Forwarding }" +
+		" } catch { [Console]::Error.WriteLine($_); exit 1 }"
+	ps := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", command)
 	ps.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: windows.CREATE_NO_WINDOW,
 	}
 	out, err := ps.Output()
 	if err != nil {
-		logx.Printf("warning: could not check the adapters' weak host setting: %v\n", err)
+		logx.Printf("warning: could not check the adapters' weak host setting: %v\\n", err)
 		return
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+
+	// A successful query means indexes absent from the result already have safe
+	// settings. Mark those complete now; indexes represented below are only marked
+	// after their individual netsh updates succeed.
+	for _, value := range idx {
+		index, parseErr := strconv.Atoi(value)
+		if parseErr == nil {
+			strongHost.checked[index] = true
+		}
+	}
+	failed := make(map[int]bool)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\\n") {
 		f := strings.Fields(line) // IPv4 14 Enabled Disabled
 		if len(f) != 4 {
+			if strings.TrimSpace(line) != "" {
+				logx.Printf("warning: unexpected weak-host query output %q; retrying adapter sync\\n", line)
+			}
 			continue
 		}
 		fam := strings.ToLower(f[0])
 		if fam != "ipv4" && fam != "ipv6" {
 			continue
 		}
-		if err := run("netsh", "interface", fam, "set", "interface", "interface="+f[1],
-			"weakhostsend=disabled", "forwarding=disabled", "store=active"); err != nil {
-			logx.Printf("warning: %v\n", err)
+		index, parseErr := strconv.Atoi(f[1])
+		if parseErr != nil {
 			continue
 		}
-		strongHost.restore = append(strongHost.restore, fmt.Sprintf("%s %s weakhostsend=%s forwarding=%s",
-			fam, f[1], strings.ToLower(f[2]), strings.ToLower(f[3])))
+		restoreLine := fmt.Sprintf("%s %s weakhostsend=%s forwarding=%s",
+			fam, f[1], strings.ToLower(f[2]), strings.ToLower(f[3]))
+		if !containsRestoreEntry(strongHost.restore, restoreLine) {
+			strongHost.restore = append(strongHost.restore, restoreLine)
+			if err := persistStrongHostRestoreLocked(); err != nil {
+				// Do not modify networking until the original settings are safely recorded.
+				strongHost.restore = strongHost.restore[:len(strongHost.restore)-1]
+				failed[index] = true
+				logx.Printf("warning: could not persist weak-host restoration state: %v\\n", err)
+				continue
+			}
+		}
+		if err := run("netsh", "interface", fam, "set", "interface", "interface="+f[1],
+			"weakhostsend=disabled", "forwarding=disabled", "store=active"); err != nil {
+				failed[index] = true
+				logx.Printf("warning: %v\\n", err)
+				continue
+		}
 		logx.Printf("note: turned off weak host send and forwarding on adapter %s (%s) while merging; "+
-			"Windows ignores pinned connections there. Sharing its connection (Mobile Hotspot) pauses until net-merge is off.\n", f[1], f[0])
+			"Windows ignores pinned connections there. Sharing its connection (Mobile Hotspot) pauses until net-merge is off.\\n", f[1], f[0])
 	}
-	os.WriteFile(strongHostFile, []byte(strings.Join(strongHost.restore, "\n")), 0o600)
+	for index := range failed {
+		delete(strongHost.checked, index)
+	}
+}
+
+// containsRestoreEntry prevents a retry or a multi-family query from recording the same
+// original interface settings more than once.
+func containsRestoreEntry(entries []string, entry string) bool {
+	for _, existing := range entries {
+		if existing == entry {
+			return true
+		}
+	}
+	return false
+}
+
+// persistStrongHostRestoreLocked writes the recovery journal while strongHost.mu is held.
+func persistStrongHostRestoreLocked() error {
+	return os.WriteFile(strongHostFile, []byte(strings.Join(strongHost.restore, "\\n")), 0o600)
 }
 
 func stopStrongHost() {
