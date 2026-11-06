@@ -286,6 +286,7 @@ func markWeakHostIndexesFailed(failed map[int]bool, indexes []string) {
 			failed[index] = true
 		}
 	}
+}
 
 // persistStrongHostRestoreLocked writes the recovery journal while strongHost.mu is held.
 func persistStrongHostRestoreLocked() error {
