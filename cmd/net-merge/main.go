@@ -57,19 +57,16 @@ func (w weightFlags) Set(v string) error {
 }
 
 type common struct {
-	include   string
-	weights   weightFlags
-	rescan    time.Duration
-	stats     time.Duration
-	auto      bool
-	logFile   string
-	stateDir  string
-	ipv6      string
-	mtu       int
-	pprof     string
-	mode      string
-	primary   string
-	secondary string
+	include  string
+	weights  weightFlags
+	rescan   time.Duration
+	stats    time.Duration
+	auto     bool
+	logFile  string
+	stateDir string
+	ipv6     string
+	mtu      int
+	pprof    string
 }
 
 func (c *common) register(fs *flag.FlagSet) {
@@ -84,9 +81,6 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.pprof, "pprof", "", "serve Go's profiler on this loopback address, e.g. 127.0.0.1:6060")
 	fs.StringVar(&c.logFile, "log", "", "write output to this file instead of the console")
 	fs.StringVar(&c.stateDir, "state-dir", state.DefaultDir(), "where status/off marker files live")
-	fs.StringVar(&c.mode, "mode", "speed", "routing mode: speed (use all adapters for more speed) or backup (use primary adapter, switch to secondary only on failure)")
-	fs.StringVar(&c.primary, "primary", "", "primary adapter name when -mode=backup")
-	fs.StringVar(&c.secondary, "secondary", "", "secondary/backup adapter name when -mode=backup")
 }
 
 func (c *common) nicsDetailed() ([]nics.Nic, []nics.Skip, error) {
@@ -141,11 +135,6 @@ func (c *common) boot(mode func() string) (*engine.Scheduler, *engine.Balancer, 
 	}
 	sched := engine.NewScheduler(nics)
 	sched.SetAuto(c.auto && len(c.weights) == 0)
-	if strings.EqualFold(c.mode, "backup") {
-		sched.SetMode(engine.ModeBackup, c.primary, c.secondary)
-	} else {
-		sched.SetMode(engine.ModeSpeed, c.primary, c.secondary)
-	}
 	if limits, err := state.LoadLimits(c.stateDir); err != nil {
 		logx.Printf("warning: %v (ignored)\n", err) // a bad limits file must not stop merging
 	} else {
@@ -181,17 +170,6 @@ func (c *common) boot(mode func() string) (*engine.Scheduler, *engine.Balancer, 
 			last = now
 			if mode != nil {
 				if m := mode(); m != "" {
-					rm, pri, sec := sched.Mode()
-					if rm == engine.ModeBackup {
-						m = m + " [backup"
-						if pri != "" {
-							m += ":" + pri
-						}
-						if sec != "" {
-							m += "->" + sec
-						}
-						m += "]"
-					}
 					state.Write(c.stateDir, state.Status{PID: os.Getpid(), Mode: m, V6: bal.V6State(), Since: since, Updated: now, NICs: sched.Snapshot()})
 				}
 			}

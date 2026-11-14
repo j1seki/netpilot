@@ -9,7 +9,7 @@ import {
   UsagePeriod,
 } from '../api/wails';
 import { DonutChart, MonthlyBarChart } from '../components/Charts';
-import { ArrowDown, ArrowUp, Calendar, Download, FileSpreadsheet } from 'lucide-react';
+import { ArrowDown, ArrowUp, Calendar, Download, FileSpreadsheet, RotateCcw, Trash2 } from 'lucide-react';
 
 const PERIODS: { id: UsagePeriod; label: string; hint: string }[] = [
   { id: 'today', label: 'Today', hint: 'Today (00:00 → now)' },
@@ -44,6 +44,7 @@ export const Analytics: React.FC = () => {
   const [nmStatus, setNmStatus] = useState<NetMergeStatus | null>(null);
   const [period, setPeriod] = useState<UsagePeriod>('month');
   const [isExporting, setIsExporting] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
@@ -133,6 +134,26 @@ export const Analytics: React.FC = () => {
       URL.revokeObjectURL(url);
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleResetUsage = async (scope: 'adapter' | 'daily' | 'monthly' | 'all') => {
+    const prompts: Record<'adapter' | 'daily' | 'monthly' | 'all', string> = {
+      adapter: 'Reset the data-used counters for all adapters? History is kept.',
+      daily: 'Delete all daily usage history? Monthly totals are kept.',
+      monthly: 'Delete all monthly usage history? Daily totals are kept.',
+      all: 'Delete all recorded usage counters and history? This cannot be undone.',
+    };
+    if (!window.confirm(prompts[scope])) return;
+    setResetBusy(true);
+    try {
+      const result = await api.resetDataUsage(scope, '');
+      setErrorMsg('');
+      alert(`Usage reset complete — ${result.adapterCounters} adapter counters, ${result.dailyRows} daily rows, ${result.monthlyRows} monthly rows updated/removed.`);
+    } catch (err: any) {
+      setErrorMsg(`Could not reset usage: ${err?.message || String(err)}`);
+    } finally {
+      setResetBusy(false);
     }
   };
 
@@ -256,6 +277,28 @@ export const Analytics: React.FC = () => {
             >
               <Download size={12} />
               {isExporting ? 'Exporting...' : 'Export CSV'}
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => handleResetUsage('adapter')}
+              disabled={resetBusy}
+              style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', padding: '5px 10px' }}
+              title="Reset adapter data-used counters without deleting history"
+            >
+              <RotateCcw size={12} />
+              Reset Counters
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => handleResetUsage('all')}
+              disabled={resetBusy}
+              style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', padding: '5px 10px', color: '#fb7185' }}
+              title="Delete all recorded usage counters and history"
+            >
+              <Trash2 size={12} />
+              Clear History
             </button>
           </div>
         </div>
