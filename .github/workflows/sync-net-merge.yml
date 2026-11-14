@@ -67,7 +67,7 @@ jobs:
         run: |
           CGO_ENABLED=0 go vet ./internal/... ./cmd/net-merge/...
           CGO_ENABLED=0 go test ./internal/engine/... ./internal/state/... ./internal/nics/... ./tests/common/... ./tests/scenarios/...
-          CGO_ENABLED=0 go build ./cmd/net-merge
+          CGO_ENABLED=0 go build -o "${RUNNER_TEMP}/net-merge" ./cmd/net-merge
 
       - name: Open or update sync pull request
         if: steps.check.outputs.changed == 'true'
@@ -87,7 +87,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
-          git add -A
+          git add internal/ cmd/net-merge/
+          if git diff --cached --quiet; then
+            echo "net-merge v${ver} produced no tracked changes."
+            exit 0
+          fi
           git commit -m "chore(net-merge): sync engine to v${ver}"
           git push -f origin "$branch"
 
