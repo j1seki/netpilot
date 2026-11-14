@@ -13,6 +13,14 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-net-merge
+  cancel-in-progress: false
+
+env:
+  BASE_BRANCH: dev
 
 jobs:
   sync:
@@ -20,15 +28,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: dev
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
 
       - name: Check latest net-merge release
         id: check
@@ -53,34 +58,63 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Sync net-merge source and build frontend
+      - name: Apply net-merge engine updates
         if: steps.check.outputs.changed == 'true'
-        run: |
-          bash scripts/sync-net-merge.sh "${{ steps.check.outputs.latest }}"
-          cd frontend
-          npm ci || npm install
-          npm run build
+        run: bash scripts/sync-net-merge.sh "${{ steps.check.outputs.latest }}"
 
-      - name: Verify engine tests
+      - name: Verify the synced engine
         if: steps.check.outputs.changed == 'true'
         run: |
           CGO_ENABLED=0 go vet ./internal/... ./cmd/net-merge/...
-          CGO_ENABLED=0 go test ./internal/engine/... ./internal/state/... ./tests/common/... ./tests/scenarios/...
+          CGO_ENABLED=0 go test ./internal/engine/... ./internal/state/... ./internal/nics/... ./tests/common/... ./tests/scenarios/...
+          CGO_ENABLED=0 go build ./cmd/net-merge
 
-      - name: Commit, tag, and trigger NetPilot release rebuild
+      - name: Open or update sync pull request
         if: steps.check.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           ver="${{ steps.check.outputs.latest }}"
+          old="${{ steps.check.outputs.current }}"
+          branch="chore/net-merge-v${ver}"
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "net-merge v${ver} requires no engine changes."
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add internal/ cmd/net-merge/ frontend/dist/
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(net-merge): sync and embed net-merge v${ver} + net-merge-tray"
-            git push origin HEAD:main
+          git checkout -B "$branch"
+          git add -A
+          git commit -m "chore(net-merge): sync engine to v${ver}"
+          git push -f origin "$branch"
+
+          existing=$(gh pr list --head "$branch" --base "$BASE_BRANCH" --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Updated existing pull request #${existing}"
+            exit 0
           fi
-          tag="v${ver}"
-          git tag -f "$tag"
-          git push -f origin "$tag"
-          gh workflow run release.yml -f tag="$tag" || true
+
+          body=$(cat <<EOF
+          Automated sync of the vendored net-merge engine from **v${old}** to **v${ver}**.
+
+          The sync uses a three-way merge (base v${old}, NetPilot working tree, upstream
+          v${ver}) so NetPilot's local engine changes are preserved. Conflicting
+          changes fail the workflow instead of being overwritten.
+
+          Verification run on this branch:
+          - \`go vet ./internal/... ./cmd/net-merge/...\`
+          - \`go test ./internal/engine/... ./internal/state/... ./internal/nics/...\`
+          - \`go build ./cmd/net-merge\`
+
+          Review the diff and merge into \`${BASE_BRANCH}\`. This workflow never pushes
+          to \`main\` and never creates a NetPilot release tag.
+          EOF
+          )
+
+          gh pr create --base "$BASE_BRANCH" --head "$branch" \
+            --title "chore(net-merge): sync engine to v${ver}" \
+            --body "$body"
