@@ -5,6 +5,27 @@ entry here before pushing a version tag.
 
 ## [Unreleased]
 
+### Added
+- **Tools page.** Ping (ICMP), DNS lookup (A/AAAA/CNAME/MX/NS/TXT/PTR), TCP port checks and
+  Wake-on-LAN, with per-run latency and packet-loss summaries. Hosts are validated before reaching
+  the platform `ping` binary.
+- **Adapter friendly names.** Give any adapter a recognizable label from Tools; the system name is
+  still used for routing rules and the net-merge engine, and labels are shown on the Dashboard.
+- **Usage maintenance.** Reset adapter data-used counters or clear daily/monthly history from the
+  Metrics page without touching routing configuration.
+- **Configuration backup & restore.** Export rules, adapter caps, friendly names and net-merge
+  settings as one portable JSON file from Settings; imports are validated before anything is written.
+
+### Fixed
+- Monthly usage CSV export now quotes interface and application names that contain commas, quotes or
+  newlines instead of producing malformed columns.
+- Dashboard/Metrics throughput labels now say Mbps/Kbps; the values were already megabits per second
+  but were labelled MB/s and KB/s (an 8x unit error).
+- Daily, monthly and rule queries now propagate row iteration errors instead of silently returning
+  partial results.
+- DNS lookups accept bracketed IPv6 literals, and adapter labels can be cleared by saving an empty
+  value.
+
 ## [0.3.11] - 2026-11-06
 
 ### Fixed

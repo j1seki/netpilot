@@ -316,8 +316,8 @@ export const DashboardView: React.FC = () => {
             {interfaces.map((iface) => {
               const rx = iface.rxMbps || 0;
               const tx = iface.txMbps || 0;
-              const rxStr = rx >= 1 ? `${rx.toFixed(2)} MB/s` : `${(rx * 1000).toFixed(0)} KB/s`;
-              const txStr = tx >= 1 ? `${tx.toFixed(2)} MB/s` : `${(tx * 1000).toFixed(0)} KB/s`;
+              const rxStr = rx >= 1 ? `${rx.toFixed(2)} Mbps` : `${(rx * 1000).toFixed(0)} Kbps`;
+              const txStr = tx >= 1 ? `${tx.toFixed(2)} Mbps` : `${(tx * 1000).toFixed(0)} Kbps`;
 
               const nmSlot = (nmStatus?.nics || []).find(s => s.Name === iface.name);
               const weightPct = nmSlot ? Math.round((nmSlot.Weight || 1) * 100) : 100;
@@ -364,7 +364,12 @@ export const DashboardView: React.FC = () => {
                       <span className={`beszel-dot ${iface.isUp ? 'online' : 'down'}`} />
                       <div>
                         <div style={{ fontWeight: 600, fontSize: '13px', color: '#fafafa', display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
-                          <span>{iface.name}</span>
+                          <span>{iface.displayName || iface.name}</span>
+                          {iface.label && iface.label !== iface.name && (
+                            <span className="font-mono" style={{ fontSize: '9.5px', color: '#71717a', fontWeight: 500 }}>
+                              ({iface.name})
+                            </span>
+                          )}
                           {iface.isDefault && (
                             <span className="status-pill pass" style={{ fontSize: '9px', padding: '1px 5px' }} title="Adapter carrying the OS default route">
                               OS DEFAULT

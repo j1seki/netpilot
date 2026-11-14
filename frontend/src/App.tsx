@@ -12,6 +12,7 @@ import { TTLView } from './views/TTLView';
 import { RoutingRules } from './views/RoutingRules';
 import { Analytics } from './views/Analytics';
 import { TestDebug } from './views/TestDebug';
+import { Tools } from './views/Tools';
 import { Settings } from './views/Settings';
 import {
   GitMerge,
@@ -23,6 +24,7 @@ import {
   Bug,
   Settings as SettingsIcon,
   ShieldCheck,
+  Wrench,
   Zap,
   ShieldAlert,
 } from 'lucide-react';
@@ -33,10 +35,11 @@ export type MainTab =
   | 'ttl'
   | 'rules'
   | 'usage'
+  | 'tools'
   | 'test-suite'
   | 'settings';
 
-const MAIN_TABS: MainTab[] = ['dashboard', 'netmerge', 'ttl', 'rules', 'usage', 'test-suite', 'settings'];
+const MAIN_TABS: MainTab[] = ['dashboard', 'netmerge', 'ttl', 'rules', 'usage', 'tools', 'test-suite', 'settings'];
 
 function initialTab(): MainTab {
   // Deep links are handy for docs and for jumping straight to a page:
@@ -57,6 +60,7 @@ export const App: React.FC = () => {
     ttl: startTab === 'ttl',
     rules: startTab === 'rules',
     usage: startTab === 'usage',
+    tools: startTab === 'tools',
     'test-suite': startTab === 'test-suite',
     settings: startTab === 'settings',
   });
@@ -93,8 +97,8 @@ export const App: React.FC = () => {
 
   const totalRx = interfaces.reduce((acc, i) => acc + (i.rxMbps || 0), 0);
   const totalTx = interfaces.reduce((acc, i) => acc + (i.txMbps || 0), 0);
-  const activeRxStr = totalRx >= 1 ? `${totalRx.toFixed(2)} MB/s` : `${(totalRx * 1000).toFixed(0)} KB/s`;
-  const activeTxStr = totalTx >= 1 ? `${totalTx.toFixed(2)} MB/s` : `${(totalTx * 1000).toFixed(0)} KB/s`;
+  const activeRxStr = totalRx >= 1 ? `${totalRx.toFixed(2)} Mbps` : `${(totalRx * 1000).toFixed(0)} Kbps`;
+  const activeTxStr = totalTx >= 1 ? `${totalTx.toFixed(2)} Mbps` : `${(totalTx * 1000).toFixed(0)} Kbps`;
 
   const isMergeRunning = netMergeStatus?.isRunning ?? false;
   const routingMode = netMergeStatus?.routingMode || netMergeStatus?.config?.routingMode || 'speed';
@@ -106,6 +110,7 @@ export const App: React.FC = () => {
     { id: 'rules', label: 'Rules', icon: <Split size={13} /> },
     { id: 'ttl', label: 'TTL', icon: <ShieldCheck size={13} /> },
     { id: 'usage', label: 'Metrics', icon: <BarChart2 size={13} /> },
+    { id: 'tools', label: 'Tools', icon: <Wrench size={13} /> },
     { id: 'test-suite', label: 'Diagnostics', icon: <Bug size={13} /> },
     { id: 'settings', label: 'Settings', icon: <SettingsIcon size={13} /> },
   ];
@@ -290,6 +295,11 @@ export const App: React.FC = () => {
         {visitedTabs.usage && (
           <div style={{ display: currentTab === 'usage' ? 'block' : 'none' }}>
             <Analytics />
+          </div>
+        )}
+        {visitedTabs.tools && (
+          <div style={{ display: currentTab === 'tools' ? 'block' : 'none' }}>
+            <Tools />
           </div>
         )}
         {visitedTabs['test-suite'] && (
