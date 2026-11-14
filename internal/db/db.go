@@ -114,6 +114,12 @@ func (d *Database) migrate() error {
 		UNIQUE(day, interface_name, app_name)
 	);
 
+	CREATE TABLE IF NOT EXISTS adapter_labels (
+		interface_name TEXT PRIMARY KEY,
+		label TEXT NOT NULL,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
 	CREATE TABLE IF NOT EXISTS operations (
 		id TEXT PRIMARY KEY,
 		correlation_id TEXT NOT NULL,
@@ -231,6 +237,9 @@ func (d *Database) ListRules() ([]RuleRecord, error) {
 		}
 		r.Enabled = enabledInt == 1
 		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -371,6 +380,9 @@ func (d *Database) GetAdapterCaps() ([]AdapterCapRecord, error) {
 		ac.Enabled = enabledInt == 1
 		list = append(list, ac)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return list, nil
 }
 
@@ -393,6 +405,150 @@ func (d *Database) GetAdapterCap(name string) (*AdapterCapRecord, error) {
 	}
 	ac.Enabled = enabledInt == 1
 	return &ac, nil
+}
+
+// AdapterLabelRecord is a user-assigned friendly name for a network adapter.
+type AdapterLabelRecord struct {
+	InterfaceName string    `json:"interfaceName"`
+	Label         string    `json:"label"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// ListAdapterLabels returns all friendly adapter names.
+func (d *Database) ListAdapterLabels() ([]AdapterLabelRecord, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	rows, err := d.db.Query(`
+		SELECT interface_name, label, updated_at
+		FROM adapter_labels
+		ORDER BY interface_name ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := make([]AdapterLabelRecord, 0, 8)
+	for rows.Next() {
+		var rec AdapterLabelRecord
+		if err := rows.Scan(&rec.InterfaceName, &rec.Label, &rec.UpdatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, rec)
+	}
+	return list, rows.Err()
+}
+
+// SaveAdapterLabel sets a friendly name. An empty label removes the alias so the
+// adapter falls back to its system name.
+func (d *Database) SaveAdapterLabel(name, label string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	name = strings.TrimSpace(name)
+	label = strings.TrimSpace(label)
+	if name == "" {
+		return fmt.Errorf("adapter name is required")
+	}
+	if label == "" {
+		_, err := d.db.Exec("DELETE FROM adapter_labels WHERE interface_name = ?", name)
+		return err
+	}
+	_, err := d.db.Exec(`
+		INSERT INTO adapter_labels (interface_name, label, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(interface_name) DO UPDATE SET
+			label = excluded.label,
+			updated_at = CURRENT_TIMESTAMP;
+	`, name, label)
+	return err
+}
+
+// DeleteAdapterLabel removes a friendly name.
+func (d *Database) DeleteAdapterLabel(name string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.db.Exec("DELETE FROM adapter_labels WHERE interface_name = ?", name)
+	return err
+}
+
+// ResetUsageResult reports how many rows/counters a reset touched.
+type ResetUsageResult struct {
+	AdapterCounters int64 `json:"adapterCounters"`
+	DailyRows       int64 `json:"dailyRows"`
+	MonthlyRows     int64 `json:"monthlyRows"`
+}
+
+// ResetUsage clears recorded usage. Scope is one of "adapter" (reset the data_used
+// counters), "daily", "monthly" or "all". When interfaceName is non-empty the
+// operation is limited to that adapter.
+func (d *Database) ResetUsage(scope, interfaceName string) (ResetUsageResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	interfaceName = strings.TrimSpace(interfaceName)
+	if scope == "" {
+		scope = "all"
+	}
+	switch scope {
+	case "adapter", "daily", "monthly", "all":
+	default:
+		return ResetUsageResult{}, fmt.Errorf("invalid reset scope %q", scope)
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return ResetUsageResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var res ResetUsageResult
+	exec := func(query string, args ...interface{}) (int64, error) {
+		result, err := tx.Exec(query, args...)
+		if err != nil {
+			return 0, err
+		}
+		n, _ := result.RowsAffected()
+		return n, nil
+	}
+
+	if scope == "adapter" || scope == "all" {
+		if interfaceName != "" {
+			res.AdapterCounters, err = exec("UPDATE adapter_caps SET data_used_mb = 0, updated_at = CURRENT_TIMESTAMP WHERE interface_name = ?", interfaceName)
+		} else {
+			res.AdapterCounters, err = exec("UPDATE adapter_caps SET data_used_mb = 0, updated_at = CURRENT_TIMESTAMP")
+		}
+		if err != nil {
+			return ResetUsageResult{}, err
+		}
+	}
+	if scope == "daily" || scope == "all" {
+		if interfaceName != "" {
+			res.DailyRows, err = exec("DELETE FROM daily_history WHERE interface_name = ?", interfaceName)
+		} else {
+			res.DailyRows, err = exec("DELETE FROM daily_history")
+		}
+		if err != nil {
+			return ResetUsageResult{}, err
+		}
+	}
+	if scope == "monthly" || scope == "all" {
+		if interfaceName != "" {
+			res.MonthlyRows, err = exec("DELETE FROM monthly_history WHERE interface_name = ?", interfaceName)
+		} else {
+			res.MonthlyRows, err = exec("DELETE FROM monthly_history")
+		}
+		if err != nil {
+			return ResetUsageResult{}, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return ResetUsageResult{}, err
+	}
+	return res, nil
 }
 
 // MonthlyUsageRecord captures aggregate monthly network usage.
@@ -503,7 +659,7 @@ func (d *Database) GetDailyHistory(fromDay, toDay string) ([]DailyUsageRecord, e
 		}
 		list = append(list, rec)
 	}
-	return list, nil
+	return list, rows.Err()
 }
 
 // GetMonthlyHistory retrieves historical entries for a month or all months if empty.
@@ -545,7 +701,7 @@ func (d *Database) GetMonthlyHistory(yearMonth string) ([]MonthlyUsageRecord, er
 		rec.TotalMB = rec.RxMB + rec.TxMB
 		list = append(list, rec)
 	}
-	return list, nil
+	return list, rows.Err()
 }
 
 // GetAllMonthlySummaries returns monthly totals across all recorded months.
@@ -579,7 +735,7 @@ func (d *Database) GetAllMonthlySummaries() ([]MonthlySummary, error) {
 		s.TotalMB = s.TotalRxMB + s.TotalTxMB
 		summaries = append(summaries, s)
 	}
-	return summaries, nil
+	return summaries, rows.Err()
 }
 
 // ExportMonthlyCSV formats historical records as spreadsheet-safe CSV.
