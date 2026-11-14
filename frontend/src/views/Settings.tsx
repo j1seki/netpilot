@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   api,
   BrandingInfo,
@@ -17,6 +17,9 @@ import {
   Minimize2,
   PowerOff,
   Box,
+  Download,
+  Upload,
+  HardDrive,
 } from 'lucide-react';
 
 export const Settings: React.FC = () => {
@@ -31,6 +34,8 @@ export const Settings: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [successMsg, setSuccessMsg] = useState<string>('');
   const [savingPath, setSavingPath] = useState<boolean>(false);
+  const [configBusy, setConfigBusy] = useState<boolean>(false);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadAll = async () => {
     try {
@@ -137,6 +142,53 @@ export const Settings: React.FC = () => {
     } catch (err: any) {
       setShowConsole(previous);
       setErrorMsg(`Could not change console visibility: ${err?.message || String(err)}`);
+    }
+  };
+
+  const handleExportConfig = async () => {
+    setConfigBusy(true);
+    setErrorMsg('');
+    try {
+      const bundle = await api.exportConfigBundle();
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `netpilot-config-${new Date().toISOString().slice(0, 10)}.json`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      flashSuccess(`Exported ${bundle.rules.length} rules, ${bundle.adapterCaps.length} adapter caps and ${bundle.adapterLabels?.length || 0} labels.`);
+    } catch (err: any) {
+      setErrorMsg(`Configuration export failed: ${err?.message || String(err)}`);
+    } finally {
+      setConfigBusy(false);
+    }
+  };
+
+  const handleImportFile = async (file: File | null) => {
+    if (!file) return;
+    setConfigBusy(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const text = await file.text();
+      const bundle = JSON.parse(text);
+      if (!bundle || typeof bundle !== 'object' || !Array.isArray(bundle.rules) || !Array.isArray(bundle.adapterCaps)) {
+        throw new Error('This file is not a NetPilot configuration export.');
+      }
+      const result = await api.importConfigBundle(bundle);
+      await loadAll();
+      flashSuccess(
+        `Restored ${result.rulesImported} rules, ${result.adapterCapsImported} adapter caps, ${result.labelsImported} labels` +
+        (result.netMergeImported ? ' and net-merge settings.' : '.')
+      );
+    } catch (err: any) {
+      setErrorMsg(`Configuration import failed: ${err?.message || String(err)}`);
+    } finally {
+      setConfigBusy(false);
+      if (importInputRef.current) importInputRef.current.value = '';
     }
   };
 
@@ -386,6 +438,52 @@ export const Settings: React.FC = () => {
             </button>
           </div>
         )}
+      </div>
+
+      {/* Configuration Backup & Restore */}
+      <div className="card" style={{ marginBottom: 0 }}>
+        <div className="card-title">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <HardDrive size={15} color="#c084fc" />
+            <span>Configuration Backup & Restore</span>
+          </div>
+          <span className="status-pill pass">PORTABLE JSON</span>
+        </div>
+
+        <p style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '12px' }}>
+          Export routing rules, adapter speed caps, friendly adapter names and net-merge settings as a single JSON file.
+          Import it on another machine or after a reinstall to restore your setup.
+        </p>
+
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={handleExportConfig}
+            disabled={configBusy}
+            style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
+          >
+            <Download size={12} />
+            {configBusy ? 'Working...' : 'Export Configuration'}
+          </button>
+
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => importInputRef.current?.click()}
+            disabled={configBusy}
+            style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
+          >
+            <Upload size={12} />
+            Import Configuration
+          </button>
+
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            style={{ display: 'none' }}
+            onChange={e => handleImportFile(e.target.files?.[0] || null)}
+          />
+        </div>
       </div>
 
       {/* Windows Console & Execution Mode */}
