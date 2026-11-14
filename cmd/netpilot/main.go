@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -153,19 +152,19 @@ func main() {
 	// directly, but WebView2/WKWebView can block the cross-origin loopback fetch, so the
 	// CORS headers below keep that fallback usable instead of leaving the UI empty.
 	go func() {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-			if r.Method == http.MethodOptions {
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api")
-			service.ServeHTTP(w, r)
-		})
-		_ = http.ListenAndServe("127.0.0.1:4545", mux)
+		server := &http.Server{
+			Addr:              localAPIAddress,
+			Handler:           newLocalAPIHandler(service),
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       30 * time.Second,
+		}
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			ringLog.Log(logger.LogEntry{
+				Level:     logger.LevelError,
+				Component: "LocalAPI",
+				Message:   fmt.Sprintf("Loopback API listener failed: %v", err),
+			})
+		}
 	}()
 
 	// CLI execution paths
