@@ -40,10 +40,14 @@ jobs:
           # True single-binary: netpilot itself implements all net-merge subcommands (see cmd/netpilot/subcommands.go).
           # Build net-merge CLI only if needed for wintun source; do NOT ship or embed separate net-merge binaries.
 
-          # Fetch wintun.dll from latest net-merge release
-          $dl = Join-Path $env:TEMP "nm-win"
+          # Fetch the Wintun package for the exact net-merge version vendored in
+          # internal/netmerge/VERSION. Using "latest" here made releases depend on
+          # whatever upstream published that day; a new or broken upstream release
+          # could silently change the runtime shipped by NetPilot.
+          $nmVersion = (Get-Content internal/netmerge/VERSION -Raw).Trim()
+          $dl = Join-Path $env:TEMP "nm-win-$nmVersion"
           New-Item -ItemType Directory -Force $dl | Out-Null
-          gh release download --repo net-merge/net-merge --pattern 'net-merge-portable.zip' --dir $dl --clobber
+          gh release download "v$nmVersion" --repo net-merge/net-merge --pattern 'net-merge-portable.zip' --dir $dl --clobber
           Expand-Archive -Path "$dl/net-merge-portable.zip" -DestinationPath "$dl/extracted" -Force
           Copy-Item "$dl/extracted/wintun.dll" dist/wintun.dll -Force
           if (Test-Path "$dl/extracted/wintun-LICENSE.txt") {
