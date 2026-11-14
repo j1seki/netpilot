@@ -209,15 +209,60 @@ func TestIPv6Destination(t *testing.T) {
 
 func TestUDPAssociateRefusedCleanly(t *testing.T) {
 	_, proxy := startProxy(t, []nics.Nic{nic("a", "127.0.0.2", 1)})
-	c, _ := net.Dial("tcp4", proxy)
+	c, err := net.Dial("tcp4", proxy)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(3 * time.Second))
-	c.Write([]byte{5, 1, 0})
-	io.ReadFull(c, make([]byte, 2))
-	c.Write([]byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0})
+	if _, err := c.Write([]byte{5, 1, 0}); err != nil {
+		t.Fatal(err)
+	}
+	greeting := make([]byte, 2)
+	if _, err := io.ReadFull(c, greeting); err != nil || greeting[0] != 5 || greeting[1] != 0 {
+		t.Fatalf("invalid greeting response %v err=%v", greeting, err)
+	}
+	request := []byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0}
+	if _, err := c.Write(request); err != nil {
+		t.Fatal(err)
+	}
 	resp := make([]byte, 10)
 	if _, err := io.ReadFull(c, resp); err != nil || resp[1] != repCmdUnsupported {
 		t.Fatalf("want rep=7, got %v err=%v", resp, err)
+	}
+}
+
+func TestBindCommandRefusedAfterReadingDomainAddress(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go ServeSocks5(ln, NewBalancer(NewScheduler(nil)))
+
+	c, err := net.Dial("tcp4", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c.Write([]byte{5, 1, 0}); err != nil {
+		t.Fatal(err)
+	}
+	greeting := make([]byte, 2)
+	if _, err := io.ReadFull(c, greeting); err != nil || greeting[0] != 5 || greeting[1] != 0 {
+		t.Fatalf("invalid greeting response %v err=%v", greeting, err)
+	}
+
+	host := []byte("example.test")
+	request := append([]byte{5, 2, 0, 3, byte(len(host))}, host...)
+	request = append(request, 0x01, 0xbb) // port 443
+	if _, err := c.Write(request); err != nil {
+		t.Fatal(err)
+	}
+	resp := make([]byte, 10)
+	if _, err := io.ReadFull(c, resp); err != nil || resp[1] != repCmdUnsupported {
+		t.Fatalf("want BIND rep=7 after full request, got %v err=%v", resp, err)
 	}
 }
 
@@ -249,7 +294,7 @@ func TestSocksRejectsNonzeroReservedByte(t *testing.T) {
 	}
 }
 
-func TestUnsupportedSocksCommandDoesNotWaitForDestination(t *testing.T) {
+func TestUnsupportedSocksCommandDoesNotDialDestination(t *testing.T) {
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +314,7 @@ func TestUnsupportedSocksCommandDoesNotWaitForDestination(t *testing.T) {
 	if _, err := io.ReadFull(c, make([]byte, 2)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Write([]byte{5, 3, 0, 1}); err != nil {
+	if _, err := c.Write([]byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
 		t.Fatal(err)
 	}
 	reply := make([]byte, 10)
