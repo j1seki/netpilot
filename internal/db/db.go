@@ -3,7 +3,9 @@
 package db
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/csv"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -736,37 +738,67 @@ func (d *Database) GetAllMonthlySummaries() ([]MonthlySummary, error) {
 	return summaries, rows.Err()
 }
 
-// csvField quotes a value when it contains a comma, quote or newline. Interface
-// and application names are user-controlled (and Windows adapter descriptions can
-// contain commas), so they must not be written verbatim.
-func csvField(value string) string {
-	if !strings.ContainsAny(value, ",\"\n\r") {
-		return value
-	}
-	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
-}
-
-// ExportMonthlyCSV formats historical records as CSV.
+// ExportMonthlyCSV formats historical records as spreadsheet-safe CSV.
+// Text columns are escaped both for CSV syntax and to prevent formula execution
+// when users open an export in Excel or another spreadsheet application.
 func (d *Database) ExportMonthlyCSV(yearMonth string) (string, error) {
 	records, err := d.GetMonthlyHistory(yearMonth)
 	if err != nil {
 		return "", err
 	}
 
-	var sb strings.Builder
-	sb.WriteString("YearMonth,Interface,Application,BytesIn,BytesOut,RxMB,TxMB,TotalMB,LastUpdated\n")
-	for _, r := range records {
-		sb.WriteString(fmt.Sprintf("%s,%s,%s,%d,%d,%.2f,%.2f,%.2f,%s\n",
-			csvField(r.YearMonth),
-			csvField(r.InterfaceName),
-			csvField(r.AppName),
-			r.BytesIn,
-			r.BytesOut,
-			r.RxMB,
-			r.TxMB,
-			r.TotalMB,
-			csvField(r.UpdatedAt.Format("2006-01-02 15:04:05")),
-		))
+	var out bytes.Buffer
+	writer := csv.NewWriter(&out)
+	writer.UseCRLF = true
+	if err := writer.Write([]string{
+		"YearMonth", "Interface", "Application", "BytesIn", "BytesOut",
+		"RxMB", "TxMB", "TotalMB", "LastUpdated",
+	}); err != nil {
+		return "", err
 	}
-	return sb.String(), nil
+
+	for _, r := range records {
+		row := []string{
+			spreadsheetSafeCell(r.YearMonth),
+			spreadsheetSafeCell(r.InterfaceName),
+			spreadsheetSafeCell(r.AppName),
+			fmt.Sprintf("%d", r.BytesIn),
+			fmt.Sprintf("%d", r.BytesOut),
+			fmt.Sprintf("%.2f", r.RxMB),
+			fmt.Sprintf("%.2f", r.TxMB),
+			fmt.Sprintf("%.2f", r.TotalMB),
+			r.UpdatedAt.Format("2006-01-02 15:04:05"),
+		}
+		if err := writer.Write(row); err != nil {
+			return "", err
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
+// spreadsheetSafeCell neutralizes formula-leading characters in untrusted text
+// while leaving ordinary names unchanged. csv.Writer handles delimiters, quotes,
+// and embedded newlines separately.
+func spreadsheetSafeCell(value string) string {
+	trimmed := strings.TrimLeft(value, " \t\r\n")
+	if trimmed == "" {
+		return value
+	}
+	switch {
+	case strings.HasPrefix(trimmed, "="),
+		strings.HasPrefix(trimmed, "+"),
+		strings.HasPrefix(trimmed, "-"),
+		strings.HasPrefix(trimmed, "@"),
+		strings.HasPrefix(trimmed, "＝"),
+		strings.HasPrefix(trimmed, "＋"),
+		strings.HasPrefix(trimmed, "－"),
+		strings.HasPrefix(trimmed, "＠"):
+		return "'" + value
+	default:
+		return value
+	}
 }
