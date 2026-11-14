@@ -25,6 +25,7 @@ import (
 	"netpilot/internal/logger"
 	"netpilot/internal/mode"
 	"netpilot/internal/netmerge"
+	"netpilot/internal/nettools"
 	"netpilot/internal/nics"
 	"netpilot/internal/rules"
 	"netpilot/internal/scenarios"
@@ -178,15 +179,17 @@ func (s *NetPilotService) DeleteRule(id string) error {
 
 // InterfaceInfo summarizes an adapter's status.
 type InterfaceInfo struct {
-	Name        string    `json:"name"`
-	IP          string    `json:"ip"`
-	WanIP       string    `json:"wanIp"`
-	ISP         string    `json:"isp,omitempty"`
-	Location    string    `json:"location,omitempty"`
+	Name            string    `json:"name"`
+	Label           string    `json:"label,omitempty"`
+	DisplayName     string    `json:"displayName"`
+	IP              string    `json:"ip"`
+	WanIP           string    `json:"wanIp"`
+	ISP             string    `json:"isp,omitempty"`
+	Location        string    `json:"location,omitempty"`
 	IsUp            bool      `json:"isUp"`
 	IsHardware      bool      `json:"isHardware"`
-	IsDefault       bool      `json:"isDefault"`  // carries the OS default route
-	IsVirtual       bool      `json:"isVirtual"`  // VPN / tunnel / software adapter
+	IsDefault       bool      `json:"isDefault"` // carries the OS default route
+	IsVirtual       bool      `json:"isVirtual"` // VPN / tunnel / software adapter
 	LatencyRouterMs float64   `json:"latencyRouterMs"`
 	LatencyWebMs    float64   `json:"latencyWebMs"`
 	RxMbps          float64   `json:"rxMbps"`
@@ -504,6 +507,15 @@ func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 		capsMap[c.InterfaceName] = c
 	}
 
+	// Friendly names are purely presentational; the system adapter name remains
+	// the stable identifier used by rules and the net-merge engine.
+	labelMap := make(map[string]string)
+	if labels, err := s.database.ListAdapterLabels(); err == nil {
+		for _, l := range labels {
+			labelMap[l.InterfaceName] = l.Label
+		}
+	}
+
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return out
@@ -592,8 +604,16 @@ func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 		}
 		routerMs, webMs := s.lookupLatency(ifc.Name)
 
+		label := labelMap[ifc.Name]
+		displayName := ifc.Name
+		if label != "" {
+			displayName = label
+		}
+
 		out = append(out, InterfaceInfo{
 			Name:            ifc.Name,
+			Label:           label,
+			DisplayName:     displayName,
 			IP:              ipStr,
 			WanIP:           wanIP,
 			ISP:             isp,
@@ -1117,6 +1137,233 @@ func (s *NetPilotService) GetTTLHistory() ([]ttlmgr.Event, error) {
 	return hist, err
 }
 
+// Network tools
+
+// PingHost runs an ICMP echo probe against a validated host.
+func (s *NetPilotService) PingHost(host string, count int, timeoutMs int) nettools.PingResult {
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	if timeout > 5*time.Second {
+		timeout = 5 * time.Second
+	}
+	if count <= 0 {
+		count = 4
+	}
+	if count > 20 {
+		count = 20
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(count)*timeout+10*time.Second)
+	defer cancel()
+	return nettools.Ping(ctx, host, count, timeout)
+}
+
+// LookupDNS resolves a hostname for a specific record type.
+func (s *NetPilotService) LookupDNS(host, recordType string) nettools.DNSResult {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return nettools.LookupDNS(ctx, host, recordType)
+}
+
+// CheckTCPPort tests whether a remote TCP port accepts connections.
+func (s *NetPilotService) CheckTCPPort(host string, port int, timeoutMs int) nettools.PortResult {
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	if timeout > 30*time.Second {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+2*time.Second)
+	defer cancel()
+	return nettools.CheckPort(ctx, host, port, timeout)
+}
+
+// SendWakeOnLAN broadcasts a Wake-on-LAN magic packet for the given MAC address.
+func (s *NetPilotService) SendWakeOnLAN(macAddress, broadcast string, port int) error {
+	mac, err := nettools.ParseMAC(macAddress)
+	if err != nil {
+		return err
+	}
+	s.ringLog.Log(logger.LogEntry{
+		Level:     logger.LevelInfo,
+		Component: "NetworkTools",
+		Message:   fmt.Sprintf("Sending Wake-on-LAN packet to %s", mac.String()),
+	})
+	return nettools.WakeOnLAN(mac, broadcast, port)
+}
+
+// Adapter labels
+
+// ListAdapterLabels returns all user-assigned adapter friendly names.
+func (s *NetPilotService) ListAdapterLabels() ([]db.AdapterLabelRecord, error) {
+	labels, err := s.database.ListAdapterLabels()
+	if labels == nil {
+		labels = []db.AdapterLabelRecord{}
+	}
+	return labels, err
+}
+
+// SaveAdapterLabel persists a friendly name for an adapter. An empty label clears it.
+func (s *NetPilotService) SaveAdapterLabel(interfaceName, label string) error {
+	return s.database.SaveAdapterLabel(interfaceName, label)
+}
+
+// DeleteAdapterLabel removes a friendly name for an adapter.
+func (s *NetPilotService) DeleteAdapterLabel(interfaceName string) error {
+	return s.database.DeleteAdapterLabel(interfaceName)
+}
+
+// Usage reset
+
+// ResetDataUsage clears recorded usage counters/history. Scope is one of
+// "adapter", "daily", "monthly" or "all"; an empty interface name means all adapters.
+func (s *NetPilotService) ResetDataUsage(scope, interfaceName string) (db.ResetUsageResult, error) {
+	s.ringLog.Log(logger.LogEntry{
+		Level:     logger.LevelWarn,
+		Component: "Analytics",
+		Message:   fmt.Sprintf("Resetting usage data (scope=%s, interface=%s)", scope, interfaceName),
+	})
+	return s.database.ResetUsage(scope, interfaceName)
+}
+
+// Configuration backup & restore
+
+// ConfigBundleSchema identifies a portable NetPilot configuration export.
+const ConfigBundleSchema = "netpilot.config/v1"
+
+// ConfigBundle is a portable snapshot of user configuration.
+type ConfigBundle struct {
+	Schema        string                  `json:"schema"`
+	Version       int                     `json:"version"`
+	ExportedAt    time.Time               `json:"exportedAt"`
+	AppVersion    string                  `json:"appVersion"`
+	Rules         []db.RuleRecord         `json:"rules"`
+	AdapterCaps   []db.AdapterCapRecord   `json:"adapterCaps"`
+	AdapterLabels []db.AdapterLabelRecord `json:"adapterLabels,omitempty"`
+	NetMerge      *netmerge.Config        `json:"netMerge,omitempty"`
+}
+
+// ConfigImportResult reports what a restore changed.
+type ConfigImportResult struct {
+	RulesImported       int  `json:"rulesImported"`
+	AdapterCapsImported int  `json:"adapterCapsImported"`
+	LabelsImported      int  `json:"labelsImported"`
+	NetMergeImported    bool `json:"netMergeImported"`
+}
+
+// ExportConfigBundle returns all user configuration as a portable JSON document.
+func (s *NetPilotService) ExportConfigBundle() (ConfigBundle, error) {
+	rules, err := s.database.ListRules()
+	if err != nil {
+		return ConfigBundle{}, err
+	}
+	caps, err := s.database.GetAdapterCaps()
+	if err != nil {
+		return ConfigBundle{}, err
+	}
+	labels, err := s.database.ListAdapterLabels()
+	if err != nil {
+		return ConfigBundle{}, err
+	}
+	bundle := ConfigBundle{
+		Schema:        ConfigBundleSchema,
+		Version:       1,
+		ExportedAt:    time.Now(),
+		AppVersion:    branding.AppVersion,
+		Rules:         rules,
+		AdapterCaps:   caps,
+		AdapterLabels: labels,
+	}
+	if s.netmergeCtrl != nil {
+		cfg := s.netmergeCtrl.GetConfig()
+		bundle.NetMerge = &cfg
+	}
+	if bundle.Rules == nil {
+		bundle.Rules = []db.RuleRecord{}
+	}
+	if bundle.AdapterCaps == nil {
+		bundle.AdapterCaps = []db.AdapterCapRecord{}
+	}
+	if bundle.AdapterLabels == nil {
+		bundle.AdapterLabels = []db.AdapterLabelRecord{}
+	}
+	return bundle, nil
+}
+
+// ImportConfigBundle validates and applies a configuration snapshot. Nothing is
+// written until every rule has passed validation, so a bad file cannot leave the
+// database half-restored.
+func (s *NetPilotService) ImportConfigBundle(bundle ConfigBundle) (ConfigImportResult, error) {
+	var result ConfigImportResult
+
+	if bundle.Schema != "" && bundle.Schema != ConfigBundleSchema {
+		return result, fmt.Errorf("unsupported configuration schema %q", bundle.Schema)
+	}
+
+	for _, rule := range bundle.Rules {
+		rule.ID = strings.TrimSpace(rule.ID)
+		rule.AppName = strings.TrimSpace(rule.AppName)
+		rule.PreferredInterface = strings.TrimSpace(rule.PreferredInterface)
+		if err := s.ruleEngine.ValidateRule(rule); err != nil {
+			return result, fmt.Errorf("invalid rule %q: %w", rule.ID, err)
+		}
+	}
+	for _, cap := range bundle.AdapterCaps {
+		if strings.TrimSpace(cap.InterfaceName) == "" {
+			return result, fmt.Errorf("adapter cap is missing an interface name")
+		}
+		if cap.RxLimitMbps < 0 || cap.TxLimitMbps < 0 || cap.DataQuotaMB < 0 || cap.DataUsedMB < 0 {
+			return result, fmt.Errorf("adapter cap %q contains a negative value", cap.InterfaceName)
+		}
+	}
+	for _, label := range bundle.AdapterLabels {
+		if strings.TrimSpace(label.InterfaceName) == "" {
+			return result, fmt.Errorf("adapter label is missing an interface name")
+		}
+	}
+	if bundle.NetMerge != nil && bundle.NetMerge.SocksAddress != "" {
+		if _, _, err := net.SplitHostPort(bundle.NetMerge.SocksAddress); err != nil {
+			return result, fmt.Errorf("invalid SOCKS5 address %q: %w", bundle.NetMerge.SocksAddress, err)
+		}
+	}
+
+	for _, rule := range bundle.Rules {
+		if err := s.database.SaveRule(rule); err != nil {
+			return result, err
+		}
+		result.RulesImported++
+	}
+	for _, cap := range bundle.AdapterCaps {
+		if err := s.database.SaveAdapterCap(cap); err != nil {
+			return result, err
+		}
+		result.AdapterCapsImported++
+	}
+	for _, label := range bundle.AdapterLabels {
+		if err := s.database.SaveAdapterLabel(label.InterfaceName, label.Label); err != nil {
+			return result, err
+		}
+		result.LabelsImported++
+	}
+	if bundle.NetMerge != nil && s.netmergeCtrl != nil {
+		if err := s.netmergeCtrl.SaveConfig(*bundle.NetMerge); err != nil {
+			return result, err
+		}
+		result.NetMergeImported = true
+	}
+	if err := s.ruleEngine.Reload(); err != nil {
+		return result, err
+	}
+	s.ringLog.Log(logger.LogEntry{
+		Level:     logger.LevelInfo,
+		Component: "Config",
+		Message:   fmt.Sprintf("Imported configuration: %d rules, %d adapter caps, %d labels", result.RulesImported, result.AdapterCapsImported, result.LabelsImported),
+	})
+	return result, nil
+}
+
 // ExportMonthlyCSV returns CSV string representation of monthly network usage.
 func (s *NetPilotService) ExportMonthlyCSV(yearMonth string) (string, error) {
 	return s.database.ExportMonthlyCSV(yearMonth)
@@ -1482,6 +1729,118 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			hist = []ttlmgr.Event{}
 		}
 		_ = json.NewEncoder(w).Encode(hist)
+
+	case path == "tools/ping":
+		var body struct {
+			Host      string `json:"host"`
+			Count     int    `json:"count"`
+			TimeoutMs int    `json:"timeoutMs"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewEncoder(w).Encode(s.PingHost(body.Host, body.Count, body.TimeoutMs))
+
+	case path == "tools/dns":
+		var body struct {
+			Host       string `json:"host"`
+			RecordType string `json:"type"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewEncoder(w).Encode(s.LookupDNS(body.Host, body.RecordType))
+
+	case path == "tools/port":
+		var body struct {
+			Host      string `json:"host"`
+			Port      int    `json:"port"`
+			TimeoutMs int    `json:"timeoutMs"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewEncoder(w).Encode(s.CheckTCPPort(body.Host, body.Port, body.TimeoutMs))
+
+	case path == "tools/wol":
+		var body struct {
+			MAC       string `json:"mac"`
+			Broadcast string `json:"broadcast"`
+			Port      int    `json:"port"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if err := s.SendWakeOnLAN(body.MAC, body.Broadcast, body.Port); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
+
+	case path == "adapter-labels":
+		switch r.Method {
+		case http.MethodPost:
+			var body struct {
+				InterfaceName string `json:"interfaceName"`
+				Label         string `json:"label"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if err := s.SaveAdapterLabel(body.InterfaceName, body.Label); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
+		case http.MethodDelete:
+			name := r.URL.Query().Get("interface")
+			if err := s.DeleteAdapterLabel(name); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+		default:
+			labels, err := s.ListAdapterLabels()
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(labels)
+		}
+
+	case path == "usage/reset":
+		var body struct {
+			Scope     string `json:"scope"`
+			Interface string `json:"interface"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		res, err := s.ResetDataUsage(body.Scope, body.Interface)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(res)
+
+	case path == "config/export":
+		bundle, err := s.ExportConfigBundle()
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", `attachment; filename="netpilot-config.json"`)
+		_ = json.NewEncoder(w).Encode(bundle)
+
+	case path == "config/import":
+		var bundle ConfigBundle
+		if err := json.NewDecoder(r.Body).Decode(&bundle); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		res, err := s.ImportConfigBundle(bundle)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(res)
 
 	default:
 		w.WriteHeader(http.StatusNotFound)

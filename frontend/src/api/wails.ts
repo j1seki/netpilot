@@ -47,6 +47,8 @@ export interface ExecutionModeState {
 
 export interface InterfaceInfo {
   name: string;
+  label?: string;
+  displayName?: string;
   ip: string;
   wanIp?: string;
   isp?: string;
@@ -390,6 +392,65 @@ export interface AnalyticsSnapshot {
   history: TimeSeriesPoint[];
 }
 
+export interface PingResult {
+  host: string;
+  sent: number;
+  received: number;
+  packetLoss: number;
+  minMs: number;
+  avgMs: number;
+  maxMs: number;
+  durationMs: number;
+  output?: string;
+  error?: string;
+}
+
+export interface DNSResult {
+  host: string;
+  type: string;
+  records: string[];
+  durationMs: number;
+  error?: string;
+}
+
+export interface PortResult {
+  host: string;
+  port: number;
+  open: boolean;
+  latencyMs: number;
+  error?: string;
+}
+
+export interface AdapterLabelRecord {
+  interfaceName: string;
+  label: string;
+  updatedAt?: string;
+}
+
+export interface ResetUsageResult {
+  adapterCounters: number;
+  dailyRows: number;
+  monthlyRows: number;
+}
+
+export interface ConfigImportResult {
+  rulesImported: number;
+  adapterCapsImported: number;
+  labelsImported: number;
+  netMergeImported: boolean;
+}
+
+export interface ConfigBundle {
+  schema: string;
+  version: number;
+  exportedAt: string;
+  appVersion: string;
+  rules: RuleRecord[];
+  adapterCaps: AdapterCapRecord[];
+  adapterLabels?: AdapterLabelRecord[];
+  netMerge?: NetMergeConfig;
+}
+
 // Fetch from Wails backend HTTP router (/api/...) or local loopback daemon (http://127.0.0.1:4545/api/...)
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T | null> {
   const urls = [`/api/${endpoint}`, `http://127.0.0.1:4545/api/${endpoint}`];
@@ -688,6 +749,87 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ show }),
     });
+  },
+
+  // Network tools (ping, DNS, TCP port check, Wake-on-LAN)
+  async pingHost(host: string, count: number = 4, timeoutMs: number = 1000): Promise<PingResult> {
+    const res = await fetchApi<PingResult>('tools/ping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host, count, timeoutMs }),
+    });
+    return requireApi(res, 'tools/ping');
+  },
+
+  async lookupDns(host: string, recordType: string = 'A'): Promise<DNSResult> {
+    const res = await fetchApi<DNSResult>('tools/dns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host, type: recordType }),
+    });
+    return requireApi(res, 'tools/dns');
+  },
+
+  async checkTcpPort(host: string, port: number, timeoutMs: number = 3000): Promise<PortResult> {
+    const res = await fetchApi<PortResult>('tools/port', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host, port, timeoutMs }),
+    });
+    return requireApi(res, 'tools/port');
+  },
+
+  async wakeOnLan(mac: string, broadcast: string = '', port: number = 9): Promise<void> {
+    await fetchApi<void>('tools/wol', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac, broadcast, port }),
+    });
+  },
+
+  // Adapter friendly names
+  async getAdapterLabels(): Promise<AdapterLabelRecord[]> {
+    const res = await fetchApi<AdapterLabelRecord[]>('adapter-labels');
+    return requireApi(res, 'adapter-labels');
+  },
+
+  async saveAdapterLabel(interfaceName: string, label: string): Promise<void> {
+    await fetchApi<void>('adapter-labels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interfaceName, label }),
+    });
+  },
+
+  async deleteAdapterLabel(interfaceName: string): Promise<void> {
+    await fetchApi<void>(`adapter-labels?interface=${encodeURIComponent(interfaceName)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // Usage maintenance
+  async resetDataUsage(scope: 'adapter' | 'daily' | 'monthly' | 'all', interfaceName: string = ''): Promise<ResetUsageResult> {
+    const res = await fetchApi<ResetUsageResult>('usage/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, interface: interfaceName }),
+    });
+    return requireApi(res, 'usage/reset');
+  },
+
+  // Configuration backup & restore
+  async exportConfigBundle(): Promise<ConfigBundle> {
+    const res = await fetchApi<ConfigBundle>('config/export');
+    return requireApi(res, 'config/export');
+  },
+
+  async importConfigBundle(bundle: ConfigBundle): Promise<ConfigImportResult> {
+    const res = await fetchApi<ConfigImportResult>('config/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bundle),
+    });
+    return requireApi(res, 'config/import');
   },
 
   // TTL & Hop Limit Management
