@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+func TestEmbeddedVersionMatchesVERSIONFile(t *testing.T) {
+	b, err := os.ReadFile("VERSION")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.TrimSpace(string(b))
+	if want == "" {
+		t.Fatal("VERSION is empty")
+	}
+	if got := EmbeddedVersion(); got != want {
+		t.Fatalf("EmbeddedVersion() = %q, want %q (VERSION file)", got, want)
+	}
+}
+
 // TestBinaryResolutionAndValidation tests:
 // 1. Validation of the real net-merge binary.
 // 2. Resolution when net-merge is located in a different location via CustomPath.

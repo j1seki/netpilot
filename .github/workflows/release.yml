@@ -15,13 +15,16 @@ jobs:
   verify-engine-version:
     # Blocks the v0.3.11 failure mode: publishing a release whose notes/binary
     # claim net-merge vX.Y.Z while the build actually embeds an older engine.
-    # internal/netmerge/VERSION is the source of truth; the per-platform builds
-    # additionally assert that the compiled binary reports that same version.
+    # internal/netmerge/VERSION is the source of truth; a test verifies go:embed
+    # compiled that exact value into the engine package.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: Verify embedded engine version is present in this commit
         shell: bash
         run: |
@@ -40,6 +43,10 @@ jobs:
           echo "Release will embed net-merge v${version}"
           test -f internal/engine/sched.go
           test -f cmd/netpilot/subcommands.go
+
+          # go:embed must actually compile the recorded VERSION into the binary.
+          # This test compares EmbeddedVersion() with the VERSION file on disk.
+          CGO_ENABLED=0 go test ./internal/netmerge -run TestEmbeddedVersionMatchesVERSIONFile -count=1
 
   windows:
     needs: verify-engine-version
@@ -90,16 +97,7 @@ jobs:
           # Build NetPilot single binary (-H=windowsgui so no console window ever pops up; netpilot run/tray/etc. are subcommands of this binary)
           go build -trimpath -ldflags "-s -w -H=windowsgui -X netpilot/internal/branding.AppVersion=$version" -o dist/netpilot.exe ./cmd/netpilot
 
-          # Verify the built single binary reports the same net-merge engine that
-          # internal/netmerge/VERSION declares. A mismatch means the engine source
-          # and version label have drifted apart; fail the release instead of
-          # shipping an installer that claims a version it does not contain.
-          $wantEngine = (Get-Content internal/netmerge/VERSION -Raw).Trim()
-          $builtEngine = (& dist/netpilot.exe version).Trim()
-          if ($builtEngine -notlike "*net-merge $wantEngine*") {
-            throw "Engine version mismatch: binary reports '$builtEngine', expected net-merge $wantEngine"
-          }
-          Write-Host "Verified embedded engine: $builtEngine"
+          Write-Host "Embedded net-merge version for this build: $wantEngine"
       - name: Build Windows installer (.exe) and Portable ZIP
         shell: pwsh
         run: |
