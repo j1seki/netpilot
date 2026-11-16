@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"netpilot/internal/nics"
 )
@@ -18,6 +19,11 @@ type slotConn struct {
 	s        *Scheduler
 	once     sync.Once
 	activity *flowActivity
+	limiter  *flowLimiter
+	appName  string
+	usageIn  atomic.Int64
+	usageOut atomic.Int64
+	onClose  func(appName string, in, out int64)
 }
 
 func (c *slotConn) Read(p []byte) (int, error) {
@@ -27,17 +33,21 @@ func (c *slotConn) Read(p []byte) (int, error) {
 	n, err := c.TCPConn.Read(p)
 	if n > 0 {
 		c.sl.bytesIn[c.fam].Add(int64(n))
+		c.usageIn.Add(int64(n))
 		if c.activity != nil {
 			c.activity.bytes.Add(int64(n))
 		}
 		c.sl.throttle(true, n)
+		c.limiter.read(n)
 	}
 	return n, err
 }
 
 func (c *slotConn) Write(p []byte) (int, error) {
+	c.limiter.write(len(p))
 	n, err := c.sl.writePaced(c.TCPConn, p, false)
 	c.sl.bytesOut[c.fam].Add(int64(n))
+	c.usageOut.Add(int64(n))
 	if c.activity != nil {
 		c.activity.bytes.Add(int64(n))
 	}
@@ -51,6 +61,9 @@ func (c *slotConn) release() {
 	c.once.Do(func() {
 		c.s.untrack(c.sl, c.fam, c.activity)
 		c.s.ReleaseFor(c.sl, c.fam)
+		if c.onClose != nil {
+			c.onClose(c.appName, c.usageIn.Load(), c.usageOut.Load())
+		}
 	})
 }
 

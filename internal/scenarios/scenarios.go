@@ -62,11 +62,11 @@ type ScenarioDefinition struct {
 
 // ScenarioContext provides simulated subsystems for scenario execution.
 type ScenarioContext struct {
-	RuleEngine   *rules.Engine
-	FailoverSM   *failover.StateMachine
-	Database     *db.Database
-	Logger       *logger.RingLogger
-	Logs         []string
+	RuleEngine *rules.Engine
+	FailoverSM *failover.StateMachine
+	Database   *db.Database
+	Logger     *logger.RingLogger
+	Logs       []string
 }
 
 func (c *ScenarioContext) Logf(format string, args ...interface{}) {
@@ -126,11 +126,11 @@ func (e *Engine) Run(id string) ScenarioResult {
 
 	if !ok {
 		return ScenarioResult{
-			ID:          id,
-			Name:        "Unknown",
-			Status:      StatusBlocked,
-			Error:       fmt.Sprintf("scenario %q not found", id),
-			RanAt:       time.Now(),
+			ID:     id,
+			Name:   "Unknown",
+			Status: StatusBlocked,
+			Error:  fmt.Sprintf("scenario %q not found", id),
+			RanAt:  time.Now(),
 		}
 	}
 

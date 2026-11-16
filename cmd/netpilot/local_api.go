@@ -10,16 +10,16 @@ const localAPIAddress = "127.0.0.1:4545"
 var localAPIAllowedOrigins = map[string]struct{}{
 	// Wails uses its custom origin on WebKit-based platforms and the localhost
 	// origin on Windows WebView2. Do not add arbitrary localhost origins here.
-	"wails://wails":      {},
+	"wails://wails":          {},
 	"http://wails.localhost": {},
 }
 
 var localAPIAllowedMethods = map[string]struct{}{
-	http.MethodGet:     {},
-	http.MethodPost:    {},
-	http.MethodPut:     {},
-	http.MethodPatch:   {},
-	http.MethodDelete:  {},
+	http.MethodGet:    {},
+	http.MethodPost:   {},
+	http.MethodPut:    {},
+	http.MethodPatch:  {},
+	http.MethodDelete: {},
 }
 
 const localAPIAllowMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"

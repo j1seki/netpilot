@@ -256,9 +256,9 @@ func syncStrongHost(stop chan struct{}) {
 		}
 		if err := run("netsh", "interface", fam, "set", "interface", "interface="+f[1],
 			"weakhostsend=disabled", "forwarding=disabled", "store=active"); err != nil {
-				failed[index] = true
-				logx.Printf("warning: %v\n", err)
-				continue
+			failed[index] = true
+			logx.Printf("warning: %v\n", err)
+			continue
 		}
 		logx.Printf("note: turned off weak host send and forwarding on adapter %s (%s) while merging; "+
 			"Windows ignores pinned connections there. Sharing its connection (Mobile Hotspot) pauses until net-merge is off.\n", f[1], f[0])

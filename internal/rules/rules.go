@@ -19,6 +19,7 @@ type MatchDecision struct {
 	AppName            string        `json:"appName"`
 	Destination        string        `json:"destination"`
 	SelectedInterface  string        `json:"selectedInterface"`
+	FallbackInterface  string        `json:"fallbackInterface,omitempty"`
 	IsFallback         bool          `json:"isFallback"`
 	FallbackReason     string        `json:"fallbackReason,omitempty"`
 	BandwidthLimitMbps float64       `json:"bandwidthLimitMbps"`
@@ -84,6 +85,38 @@ func (e *Engine) UpdateNICHealth(health map[string]bool) {
 	e.healthyNICs = make(map[string]bool, len(health))
 	for k, v := range health {
 		e.healthyNICs[k] = v
+	}
+}
+
+// RecordUsage adds a finished flow's byte counts to every matching rule that has a data
+// quota. Rules without a quota are skipped so high-frequency flow accounting never turns
+// into a database write per connection.
+func (e *Engine) RecordUsage(appName string, bytesIn, bytesOut int64) {
+	total := bytesIn + bytesOut
+	if total <= 0 || strings.TrimSpace(appName) == "" {
+		return
+	}
+	mb := float64(total) / (1024 * 1024)
+	norm := strings.ToLower(strings.TrimSpace(appName))
+
+	e.mu.Lock()
+	var changed []db.RuleRecord
+	for i := range e.rules {
+		r := &e.rules[i]
+		if !r.Enabled || r.DataQuotaMB <= 0 || r.AppName == "" {
+			continue
+		}
+		ruleName := strings.ToLower(r.AppName)
+		if norm != ruleName && !strings.Contains(norm, ruleName) {
+			continue
+		}
+		r.DataUsedMB += mb
+		changed = append(changed, *r)
+	}
+	e.mu.Unlock()
+
+	for _, r := range changed {
+		_ = e.database.SaveRule(r)
 	}
 }
 
@@ -163,6 +196,7 @@ func (e *Engine) Evaluate(appName, appPath, destination string, defaultInterface
 			decision.DataQuotaMB = r.DataQuotaMB
 			decision.DataUsedMB = r.DataUsedMB
 			decision.CustomDNS = r.CustomDNS
+			decision.FallbackInterface = r.FallbackInterface
 
 			// Check quota
 			if r.DataQuotaMB > 0 && r.DataUsedMB >= r.DataQuotaMB {

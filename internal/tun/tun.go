@@ -24,6 +24,7 @@ import (
 
 	"netpilot/internal/engine"
 	"netpilot/internal/logx"
+	"netpilot/internal/procnet"
 )
 
 const (
@@ -122,7 +123,18 @@ var (
 type tunProxy struct{ b *engine.Balancer }
 
 func (p tunProxy) DialContext(ctx context.Context, m *M.Metadata) (net.Conn, error) {
-	return p.b.DialPinned(ctx, m.DstIP.Unmap().String(), int(m.DstPort))
+	dst := m.DstIP.Unmap().String()
+	appName, appPath := "", ""
+	if m.SrcIP.IsValid() && m.DstIP.IsValid() {
+		srcIP := net.IP(m.SrcIP.AsSlice())
+		dstIP := net.IP(m.DstIP.AsSlice())
+		if pid, ok := procnet.LookupPID("tcp", srcIP, m.SrcPort, dstIP, m.DstPort); ok {
+			id := procnet.Identify(pid)
+			appName, appPath = id.Name, id.Path
+		}
+	}
+	policy := p.b.ResolvePolicy(appName, appPath, dst)
+	return p.b.DialPinnedFor(ctx, dst, int(m.DstPort), policy)
 }
 
 func (p tunProxy) DialUDP(m *M.Metadata) (net.PacketConn, error) {

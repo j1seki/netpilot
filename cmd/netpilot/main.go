@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -146,6 +147,8 @@ func main() {
 	go func() {
 		_ = service.GetInterfaces()
 	}()
+
+	service.StartMonitors(context.Background())
 
 	// Start local loopback HTTP API listener for live inspection & testing.
 	// It is also the fallback transport for the desktop webview: Wails serves /api/*

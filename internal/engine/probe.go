@@ -8,7 +8,7 @@ import (
 )
 
 // Internet reachability probes: a TCP connect to a well-known anycast IP, bound to the NIC.
-var probeTargets = [2][]string{
+var probeTargetsDefault = [2][]string{
 	Fam4: {"1.1.1.1:443", "8.8.8.8:443"},
 	Fam6: {"[2606:4700:4700::1111]:443", "[2001:4860:4860::8888]:443"},
 }
@@ -19,23 +19,25 @@ const (
 	probeEveryDown = 4 * time.Second
 )
 
-func probe(sl *Slot, f Family) bool {
+func probe(sl *Slot, f Family, targets []string) (bool, time.Duration) {
 	ip := sl.ip(f)
 	if ip == nil {
-		return false
+		return false, 0
 	}
 	network := "tcp4"
 	if f == Fam6 {
 		network = "tcp6"
 	}
-	for _, t := range probeTargets[f] {
+	for _, t := range targets {
 		d := net.Dialer{LocalAddr: &net.TCPAddr{IP: ip}, Control: nics.ForceEgress(sl.Index, f == Fam6), Timeout: probeTimeout}
+		start := time.Now()
 		if c, err := d.Dial(network, t); err == nil {
+			rtt := time.Since(start)
 			c.Close()
-			return true
+			return true, rtt
 		}
 	}
-	return false
+	return false, 0
 }
 
 type probeJob struct {
@@ -59,7 +61,9 @@ func (s *Scheduler) RunProbes(stop <-chan struct{}) {
 		for _, j := range s.probeDue() {
 			go func() {
 				defer j.sl.probing[j.f].Store(false)
-				s.SetState(j.sl, j.f, probe(j.sl, j.f))
+				targets := s.probeTargets(j.f)
+				up, rtt := probe(j.sl, j.f, targets)
+				s.RecordProbe(j.sl, j.f, up, rtt)
 			}()
 		}
 	}

@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"time"
+
+	"netpilot/internal/procnet"
 )
 
 func ServeSocks5(ln net.Listener, b *Balancer) error {
@@ -26,6 +28,11 @@ func socksReply(c net.Conn, rep byte) {
 
 func (b *Balancer) handleSocks5(c net.Conn) {
 	c.SetDeadline(time.Now().Add(15 * time.Second))
+
+	app := procnet.Identity{}
+	if pid, ok := procnet.PeerPID(c); ok {
+		app = procnet.Identify(pid)
+	}
 
 	var hdr [2]byte
 	if _, err := io.ReadFull(c, hdr[:]); err != nil || hdr[0] != 0x05 || hdr[1] == 0 {
@@ -100,7 +107,8 @@ func (b *Balancer) handleSocks5(c net.Conn) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	up, sl, fam, err := b.DialTCP(ctx, host, port)
+	policy := b.resolvePolicy(app.Name, app.Path, host)
+	up, sl, fam, err := b.DialTCPFor(ctx, host, port, policy)
 	if err != nil {
 		rep := byte(repFailure)
 		var de *dialError
@@ -113,5 +121,6 @@ func (b *Balancer) handleSocks5(c net.Conn) {
 	}
 	c.SetDeadline(time.Time{})
 	socksReply(c, repOK)
-	Relay(c, up, sl, fam, b.S)
+	in, out := Relay(c, up, sl, fam, b.S)
+	b.reportUsage(policy.AppName, in, out)
 }

@@ -18,24 +18,24 @@ import (
 
 // NICMetric holds current rates and total byte counts for an adapter.
 type NICMetric struct {
-	Name            string    `json:"name"`
-	BytesIn         int64     `json:"bytesIn"`
-	BytesOut        int64     `json:"bytesOut"`
-	CurrentRxMbps   float64   `json:"currentRxMbps"`
-	CurrentTxMbps   float64   `json:"currentTxMbps"`
-	PeakRxMbps      float64   `json:"peakRxMbps"`
-	PeakTxMbps      float64   `json:"peakTxMbps"`
-	LastSampleTime  time.Time `json:"lastSampleTime"`
+	Name           string    `json:"name"`
+	BytesIn        int64     `json:"bytesIn"`
+	BytesOut       int64     `json:"bytesOut"`
+	CurrentRxMbps  float64   `json:"currentRxMbps"`
+	CurrentTxMbps  float64   `json:"currentTxMbps"`
+	PeakRxMbps     float64   `json:"peakRxMbps"`
+	PeakTxMbps     float64   `json:"peakTxMbps"`
+	LastSampleTime time.Time `json:"lastSampleTime"`
 }
 
 // AppMetric holds usage statistics for a specific application.
 type AppMetric struct {
-	AppName         string    `json:"appName"`
-	BytesIn         int64     `json:"bytesIn"`
-	BytesOut        int64     `json:"bytesOut"`
-	CurrentRxMbps   float64   `json:"currentRxMbps"`
-	CurrentTxMbps   float64   `json:"currentTxMbps"`
-	LastActive      time.Time `json:"lastActive"`
+	AppName       string    `json:"appName"`
+	BytesIn       int64     `json:"bytesIn"`
+	BytesOut      int64     `json:"bytesOut"`
+	CurrentRxMbps float64   `json:"currentRxMbps"`
+	CurrentTxMbps float64   `json:"currentTxMbps"`
+	LastActive    time.Time `json:"lastActive"`
 }
 
 // Collector records bandwidth samples and computes rolling throughput.

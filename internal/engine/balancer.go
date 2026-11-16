@@ -21,6 +21,9 @@ type Balancer struct {
 	ConnectTimeout time.Duration
 	FailCooldown   time.Duration
 	v6mode         atomic.Int32
+
+	policyMu sync.RWMutex
+	policy   PolicyResolver
 }
 
 // V6Mode decides what happens to IPv6 flows entering the TUN.
@@ -132,43 +135,67 @@ func classify(err error) dialClass {
 // DialTCP connects to host:port over one NIC, failing over to the others on link-level errors.
 // On success the caller owns the returned slot and must Relay or Release it.
 func (b *Balancer) DialTCP(ctx context.Context, host string, port int) (net.Conn, *Slot, Family, error) {
+	appName, appPath := appFromContext(ctx)
+	return b.DialTCPFor(ctx, host, port, FlowPolicy{AppName: appName, AppPath: appPath})
+}
+
+// DialTCPFor is DialTCP with a per-application policy. A preferred adapter is tried alone
+// first, then the fallback, and only then the normal pool, so an app that must stay on one
+// link never silently leaks onto another. Quota-exceeded flows are refused before dialing.
+func (b *Balancer) DialTCPFor(ctx context.Context, host string, port int, policy FlowPolicy) (net.Conn, *Slot, Family, error) {
 	// The destination's family decides which NIC address is used; a host name stays IPv4.
 	f, network := Fam4, "tcp4"
 	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
 		f, network = Fam6, "tcp6"
 	}
+	if policy.QuotaExceeded {
+		return nil, nil, f, &dialError{rep: repFailure, err: errors.New("application data quota exceeded")}
+	}
+
+	var attempts []map[string]struct{}
+	if policy.PreferredNIC != "" {
+		attempts = append(attempts, map[string]struct{}{policy.PreferredNIC: {}})
+	}
+	if policy.FallbackNIC != "" && policy.FallbackNIC != policy.PreferredNIC {
+		attempts = append(attempts, map[string]struct{}{policy.FallbackNIC: {}})
+	}
+	attempts = append(attempts, nil)
+
 	tried := map[string]struct{}{}
 	rep := byte(repFailure)
 	var lastErr error = errors.New("no usable network adapter")
 	if f == Fam6 {
 		rep, lastErr = repNetUnreachable, errors.New("no usable IPv6 adapter")
 	}
-	for {
-		sl := b.S.AcquireFor(f, tried)
-		if sl == nil {
-			return nil, nil, f, &dialError{rep: rep, err: lastErr}
-		}
-		tried[sl.key] = struct{}{}
-		d := net.Dialer{
-			LocalAddr: &net.TCPAddr{IP: sl.ip(f)},            // binding the source IP pins the flow to this NIC
-			Control:   nics.ForceEgress(sl.Index, f == Fam6), // and this forces egress even if the TUN's routes match
-			Timeout:   b.ConnectTimeout,
-			KeepAlive: 30 * time.Second,
-		}
-		conn, err := d.DialContext(ctx, network, net.JoinHostPort(host, strconv.Itoa(port)))
-		if err == nil {
-			return conn, sl, f, nil
-		}
-		b.S.ReleaseFor(sl, f)
-		c := classify(err)
-		if c.linkDown {
-			b.S.Fail(sl, f, b.FailCooldown)
-		}
-		rep, lastErr = c.rep, err
-		if !c.retry || ctx.Err() != nil {
-			return nil, nil, f, &dialError{rep: rep, err: err}
+	for _, allowed := range attempts {
+		for {
+			sl := b.S.AcquireForAllowed(f, allowed, tried)
+			if sl == nil {
+				break
+			}
+			tried[sl.key] = struct{}{}
+			d := net.Dialer{
+				LocalAddr: &net.TCPAddr{IP: sl.ip(f)},            // binding the source IP pins the flow to this NIC
+				Control:   nics.ForceEgress(sl.Index, f == Fam6), // and this forces egress even if the TUN's routes match
+				Timeout:   b.ConnectTimeout,
+				KeepAlive: 30 * time.Second,
+			}
+			conn, err := d.DialContext(ctx, network, net.JoinHostPort(host, strconv.Itoa(port)))
+			if err == nil {
+				return maybeLimited(conn, policy.BandwidthLimitMbps), sl, f, nil
+			}
+			b.S.ReleaseFor(sl, f)
+			c := classify(err)
+			if c.linkDown {
+				b.S.Fail(sl, f, b.FailCooldown)
+			}
+			rep, lastErr = c.rep, err
+			if !c.retry || ctx.Err() != nil {
+				return nil, nil, f, &dialError{rep: rep, err: err}
+			}
 		}
 	}
+	return nil, nil, f, &dialError{rep: rep, err: lastErr}
 }
 
 type dialError struct {
@@ -183,8 +210,9 @@ var bufPool = sync.Pool{New: func() any { b := make([]byte, 128<<10); return &b 
 
 // Relay copies both directions until both sides finish, counting bytes on the slot, then
 // closes both conns and releases the slot. Half-close is honoured so request/response
-// protocols that shut down their write side still receive the reply.
-func Relay(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler) {
+// protocols that shut down their write side still receive the reply. It returns bytes
+// received from the peer (in) and bytes sent to it (out) for per-application accounting.
+func Relay(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler) (in, out int64) {
 	activity := s.track(sl, f)
 	var wg sync.WaitGroup
 	var once sync.Once
@@ -197,29 +225,44 @@ func Relay(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		pump(upstream, client, &sl.bytesOut[f], sl, false, activity)
+		n, err := pump(upstream, client, &sl.bytesOut[f], sl, false, activity)
+		out = n
+		if isLinkDown(err) {
+			s.Fail(sl, f, relayFailCooldown)
+		}
 		release()
 	}()
-	pump(client, upstream, &sl.bytesIn[f], sl, true, activity)
+	var err error
+	in, err = pump(client, upstream, &sl.bytesIn[f], sl, true, activity)
+	if isLinkDown(err) {
+		s.Fail(sl, f, relayFailCooldown)
+	}
 	release()
 	wg.Wait()
 	client.Close()
 	upstream.Close()
+	return in, out
 }
 
-func pump(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activity *flowActivity) {
+func isLinkDown(err error) bool {
+	return err != nil && err != io.EOF && classify(err).linkDown
+}
+
+func pump(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activity *flowActivity) (int64, error) {
 	bp := bufPool.Get().(*[]byte)
 	defer bufPool.Put(bp)
 	buf := *bp
+	var total int64
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
+			total += int64(n)
 			activity.bytes.Add(int64(n))
 			counter.Add(int64(n))
 			if _, werr := sl.writePaced(dst, buf[:n], down); werr != nil {
 				dst.Close()
 				src.Close()
-				return
+				return total, werr
 			}
 		}
 		if err != nil {
@@ -233,7 +276,7 @@ func pump(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activit
 				dst.Close()
 				src.Close()
 			}
-			return
+			return total, err
 		}
 	}
 }

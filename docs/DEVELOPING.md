@@ -98,7 +98,10 @@ without it (`scripts\release-notes.ps1 -Version X.Y.Z` previews them).
 Layout: `cmd/net-merge` is the command line; `internal/engine` the scheduler, balancer, probes and
 SOCKS5 front-end; `internal/nics` adapter discovery, counters and egress pinning; `internal/tun` the
 system-wide front-end; `internal/tray` the tray icon; `internal/platform` privileges, single instance
-and autostart. OS-specific code lives in `_windows.go` / `_linux.go` / `_darwin.go` files next to the shared code. The
+and autostart. Desktop-side features live in `internal/hotspot` (tether detection and profiles),
+`internal/speedtest` (pinned per-adapter and merged benchmarks), `internal/profiles` (saved
+connection profiles), `internal/notify` (native notifications) and `internal/procnet` (process-to-socket
+attribution for per-app policy). OS-specific code lives in `_windows.go` / `_linux.go` / `_darwin.go` files next to the shared code. The
 Nix package and NixOS module are in `nix/`; after changing Go dependencies, update `vendorHash` in
 `nix/package.nix` (`nix build` prints the new one).
 

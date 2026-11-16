@@ -186,6 +186,12 @@ export interface NetMergeSlotStats {
   RateOut: number;
   LinkIn: number;
   LinkOut: number;
+  LinkBytesIn?: number;
+  LinkBytesOut?: number;
+  BytesIn?: number;
+  BytesOut?: number;
+  LatencyMs?: number;
+  JitterMs?: number;
   Failed: number;
   LimitMbps: number;
 }
@@ -219,6 +225,9 @@ export interface NetMergeConfig {
   primaryAdapter?: string;
   secondaryAdapter?: string;
   closeAction?: 'minimize' | 'close';
+  scheduling?: 'balanced' | 'low-latency';
+  probeTargetsV4?: string[];
+  probeTargetsV6?: string[];
 }
 
 export interface NetMergeStatus {
@@ -494,6 +503,83 @@ function requireApi<T>(res: T | null, endpoint: string): T {
     throw new Error(`Backend returned no data for '${endpoint}' (refusing to return dummy data)`);
   }
   return res;
+}
+
+export interface HotspotState {
+  enabled: boolean;
+  autoApply: boolean;
+  profile: string;
+  adapters: string[];
+  mtu: number;
+  appliedAt?: string;
+  note?: string;
+  prevMtu?: number;
+  prevIpv6?: string;
+}
+
+export interface HotspotProfile {
+  id: string;
+  name: string;
+  description: string;
+  bumpIpv4: number;
+  bumpIpv6: number;
+  mtu: number;
+  ipv6Mode: string;
+}
+
+export interface HotspotStatus {
+  status: HotspotState;
+  adapters: string[];
+  profiles: HotspotProfile[];
+  available: boolean;
+}
+
+export interface SpeedtestResult {
+  adapter: string;
+  downMbps: number;
+  upMbps: number;
+  idleMs: number;
+  loadedMs: number;
+  bufferbloatMs: number;
+  grade: string;
+  error?: string;
+}
+
+export interface SpeedtestRequest {
+  durationSec?: number;
+  streams?: number;
+  downUrl?: string;
+  upUrl?: string;
+  pingUrl?: string;
+  maxMB?: number;
+  includeMerged?: boolean;
+}
+
+export interface ConnectionProfile {
+  id: string;
+  name: string;
+  description?: string;
+  netMerge: NetMergeConfig;
+  hotspotProfile?: string;
+  builtin?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface UpdateStatus {
+  current: string;
+  latest: string;
+  updateAvailable: boolean;
+  releasesUrl: string;
+  checkedAt: string;
+  error?: string;
+}
+
+export interface TelemetryPayload {
+  at: string;
+  interfaces: InterfaceInfo[];
+  netMerge: NetMergeStatus;
+  hotspot: HotspotState;
 }
 
 export const api = {
@@ -866,4 +952,123 @@ export const api = {
     const res = await fetchApi<any[]>('ttl/history');
     return requireApi(res, 'ttl/history');
   },
+
+  // Hotspot / tethering
+  async getHotspotStatus(): Promise<HotspotStatus> {
+    const res = await fetchApi<HotspotStatus>('hotspot');
+    return requireApi(res, 'hotspot');
+  },
+
+  async applyHotspot(profile: string, dryRun: boolean = false, adapters: string[] = []): Promise<HotspotState> {
+    const res = await fetchApi<HotspotState>('hotspot/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile, dryRun, adapters }),
+    });
+    return requireApi(res, 'hotspot/apply');
+  },
+
+  async revertHotspot(): Promise<HotspotState> {
+    const res = await fetchApi<HotspotState>('hotspot/revert', { method: 'POST' });
+    return requireApi(res, 'hotspot/revert');
+  },
+
+  async setHotspotAuto(enabled: boolean): Promise<HotspotState> {
+    const res = await fetchApi<HotspotState>('hotspot/auto', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    return requireApi(res, 'hotspot/auto');
+  },
+
+  // Speedtest
+  async runSpeedtest(req: SpeedtestRequest = {}): Promise<SpeedtestResult[]> {
+    const res = await fetchApi<SpeedtestResult[]>('speedtest/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    return requireApi(res, 'speedtest/run');
+  },
+
+  // Connection profiles
+  async getProfiles(): Promise<ConnectionProfile[]> {
+    const res = await fetchApi<ConnectionProfile[]>('profiles');
+    return requireApi(res, 'profiles');
+  },
+
+  async saveProfile(profile: ConnectionProfile): Promise<ConnectionProfile> {
+    const res = await fetchApi<ConnectionProfile>('profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile),
+    });
+    return requireApi(res, 'profiles');
+  },
+
+  async deleteProfile(id: string): Promise<void> {
+    await fetchApi<void>(`profiles?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
+  async applyProfile(id: string): Promise<void> {
+    await fetchApi<void>('profiles/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+  },
+
+  // Updates & notifications
+  async checkForUpdate(): Promise<UpdateStatus> {
+    const res = await fetchApi<UpdateStatus>('update/check');
+    return requireApi(res, 'update/check');
+  },
+
+  async sendTestNotification(): Promise<void> {
+    await fetchApi<void>('notifications/test', { method: 'POST' });
+  },
 };
+
+// subscribeTelemetry opens the Server-Sent Events stream that pushes adapter and net-merge
+// state once per second. EventSource reconnects on its own; the returned function closes it.
+export function subscribeTelemetry(
+  onEvent: (payload: TelemetryPayload) => void,
+  onError?: (ev: Event) => void,
+): () => void {
+  if (typeof EventSource === 'undefined') {
+    return () => {};
+  }
+  let url = '/api/events';
+  let triedFallback = false;
+  let es: EventSource | null = null;
+  let closed = false;
+
+  const open = () => {
+    es = new EventSource(url);
+    es.addEventListener('telemetry', (ev) => {
+      try {
+        onEvent(JSON.parse((ev as MessageEvent).data) as TelemetryPayload);
+      } catch (_) {
+        // Ignore a malformed frame; the next one arrives in a second.
+      }
+    });
+    es.onerror = (ev) => {
+      if (closed) return;
+      if (!triedFallback) {
+        triedFallback = true;
+        es?.close();
+        url = 'http://127.0.0.1:4545/api/events';
+        open();
+        return;
+      }
+      if (onError) onError(ev);
+    };
+  };
+  open();
+
+  return () => {
+    closed = true;
+    es?.close();
+  };
+}

@@ -3,9 +3,27 @@
 What changed in each release. Each version's section becomes its GitHub release notes, so add the
 entry here before pushing a version tag.
 
-## [Unreleased]
+## [0.4.0-beta.1] - 2026-11-16
+
+Prerelease of the connectivity and reliability work. This is the first NetPilot build to ship the
+vendored **net-merge v0.3.7** engine; earlier published releases still embedded v0.3.6.
 
 ### Added
+- **Mobile & Connectivity page.** Detects tether/cellular adapters, applies Hotspot Bypass /
+  IPv4-only / Metered Saver TTL+MTU profiles, optionally auto-applies them when a tether appears,
+  and exposes per-adapter and merged-pool speedtests with bufferbloat grades.
+- **Connection profiles.** Save the current routing mode, scheduling, MTU, IPv6 and adapter weights
+  as a named profile, plus built-in Max Download, Low Latency, Backup Failover and Hotspot Saver
+  presets.
+- **Latency-aware scheduling and custom probe targets.** The scheduler can prefer the lowest
+  RTT/jitter adapter instead of least-busy flows, and the IPv4/IPv6 reachability probe hosts are
+  configurable for carriers that block the defaults.
+- **Quota guard.** Per-adapter quotas are fed from the OS's cumulative byte counters and exceedances
+  throttle the adapter; per-app rule quotas are fed from real flow bytes and block new flows.
+- **Live telemetry stream.** `/api/events` pushes adapters, net-merge status and hotspot state once
+  per second over Server-Sent Events, with polling retained as a fallback.
+- **Desktop notifications and update check.** Native notifications for connection start/stop,
+  adapter switches, link flapping and quota events, plus a GitHub release check in the UI.
 - **Tools page.** Ping (ICMP), DNS lookup (A/AAAA/CNAME/MX/NS/TXT/PTR), TCP port checks and
   Wake-on-LAN, with per-run latency and packet-loss summaries. Hosts are validated before reaching
   the platform `ping` binary.
@@ -17,6 +35,48 @@ entry here before pushing a version tag.
   settings as one portable JSON file from Settings; imports are validated before anything is written.
 
 ### Fixed
+- **Release builds can no longer ship a stale net-merge engine.** A release job now verifies that `internal/netmerge/VERSION` is set and that every built binary reports the matching engine at runtime (`net-merge 0.3.7`), so a version-label-only sync like the one that produced the v0.3.11 release (which still embedded v0.3.6) fails the build.
+- **Windows console flashes regression fixed.** All child processes added by the connectivity work (per-app process lookup via `netstat`/`tasklist`, toast notifications via PowerShell, and startup latency `ping` probes) now go through `execx.PrepareCommand` so they run with `CREATE_NO_WINDOW`, matching the silent-execution fix from v0.3.9.
+- Monthly usage CSV export now quotes interface and application names that contain commas, quotes or
+  newlines instead of producing malformed columns.
+- Dashboard/Metrics throughput labels now say Mbps/Kbps; the values were already megabits per second
+  but were labelled MB/s and KB/s (an 8x unit error).
+- Daily, monthly and rule queries now propagate row iteration errors instead of silently returning
+  partial results.
+- DNS lookups accept bracketed IPv6 literals, and adapter labels can be cleared by saving an empty
+  value.
+
+## [Unreleased]
+
+### Added
+- **Mobile & Connectivity page.** Detects tether/cellular adapters, applies Hotspot Bypass /
+  IPv4-only / Metered Saver TTL+MTU profiles, optionally auto-applies them when a tether appears,
+  and exposes per-adapter and merged-pool speedtests with bufferbloat grades.
+- **Connection profiles.** Save the current routing mode, scheduling, MTU, IPv6 and adapter weights
+  as a named profile, plus built-in Max Download, Low Latency, Backup Failover and Hotspot Saver
+  presets.
+- **Latency-aware scheduling and custom probe targets.** The scheduler can prefer the lowest
+  RTT/jitter adapter instead of least-busy flows, and the IPv4/IPv6 reachability probe hosts are
+  configurable for carriers that block the defaults.
+- **Quota guard.** Per-adapter quotas are fed from the OS's cumulative byte counters and exceedances
+  throttle the adapter; per-app rule quotas are fed from real flow bytes and block new flows.
+- **Live telemetry stream.** `/api/events` pushes adapters, net-merge status and hotspot state once
+  per second over Server-Sent Events, with polling retained as a fallback.
+- **Desktop notifications and update check.** Native notifications for connection start/stop,
+  adapter switches, link flapping and quota events, plus a GitHub release check in the UI.
+- **Tools page.** Ping (ICMP), DNS lookup (A/AAAA/CNAME/MX/NS/TXT/PTR), TCP port checks and
+  Wake-on-LAN, with per-run latency and packet-loss summaries. Hosts are validated before reaching
+  the platform `ping` binary.
+- **Adapter friendly names.** Give any adapter a recognizable label from Tools; the system name is
+  still used for routing rules and the net-merge engine, and labels are shown on the Dashboard.
+- **Usage maintenance.** Reset adapter data-used counters or clear daily/monthly history from the
+  Metrics page without touching routing configuration.
+- **Configuration backup & restore.** Export rules, adapter caps, friendly names and net-merge
+  settings as one portable JSON file from Settings; imports are validated before anything is written.
+
+### Fixed
+- **Release builds can no longer ship a stale net-merge engine.** A release job now verifies that `internal/netmerge/VERSION` is set and that every built binary reports the matching engine at runtime (`net-merge 0.3.7`), so a version-label-only sync like the one that produced the v0.3.11 release (which still embedded v0.3.6) fails the build.
+- **Windows console flashes regression fixed.** All child processes added by the connectivity work (per-app process lookup via `netstat`/`tasklist`, toast notifications via PowerShell, and startup latency `ping` probes) now go through `execx.PrepareCommand` so they run with `CREATE_NO_WINDOW`, matching the silent-execution fix from v0.3.9.
 - Monthly usage CSV export now quotes interface and application names that contain commas, quotes or
   newlines instead of producing malformed columns.
 - Dashboard/Metrics throughput labels now say Mbps/Kbps; the values were already megabits per second

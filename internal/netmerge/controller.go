@@ -41,6 +41,9 @@ type Config struct {
 	PrimaryAdapter   string             `json:"primaryAdapter"`   // primary NIC name in backup mode
 	SecondaryAdapter string             `json:"secondaryAdapter"` // secondary/failover NIC name in backup mode
 	CloseAction      string             `json:"closeAction"`      // "minimize" (default) or "close"
+	Scheduling       string             `json:"scheduling"`       // "balanced" (default) or "low-latency"
+	ProbeTargetsV4   []string           `json:"probeTargetsV4,omitempty"`
+	ProbeTargetsV6   []string           `json:"probeTargetsV6,omitempty"`
 }
 
 // StatusInfo represents the runtime state of net-merge.
@@ -104,6 +107,7 @@ func NewController(stateDir string) *Controller {
 		EngineSource: "builtin",
 		RoutingMode:  "speed",
 		CloseAction:  "minimize",
+		Scheduling:   "balanced",
 	}
 
 	if b, err := os.ReadFile(cfgPath); err == nil {
@@ -151,6 +155,9 @@ func normalizeConfig(cfg Config) Config {
 	}
 	if cfg.CloseAction != "close" {
 		cfg.CloseAction = "minimize"
+	}
+	if cfg.Scheduling != "low-latency" {
+		cfg.Scheduling = "balanced"
 	}
 	return cfg
 }
@@ -208,6 +215,8 @@ func (c *Controller) applySchedulerModeLocked() {
 		return
 	}
 	c.sched.SetAuto(c.config.AutoWeight && len(c.config.Weights) == 0)
+	c.sched.SetLatencyAware(c.config.Scheduling == "low-latency")
+	c.sched.SetProbeTargets(c.config.ProbeTargetsV4, c.config.ProbeTargetsV6)
 	if c.config.RoutingMode == "backup" {
 		c.sched.SetMode(engine.ModeBackup, c.config.PrimaryAdapter, c.config.SecondaryAdapter)
 	} else {
@@ -351,6 +360,39 @@ func (c *Controller) SetRoutingMode(mode, primary, secondary string) error {
 	}
 	c.applySchedulerModeLocked()
 	return c.saveConfigLocked()
+}
+
+// SetScheduling switches between even load balancing and latency-aware scheduling.
+func (c *Controller) SetScheduling(profile string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if strings.EqualFold(strings.TrimSpace(profile), "low-latency") {
+		c.config.Scheduling = "low-latency"
+	} else {
+		c.config.Scheduling = "balanced"
+	}
+	c.applySchedulerModeLocked()
+	return c.saveConfigLocked()
+}
+
+// SetProbeTargets changes the reachability probe hosts. Empty lists restore the defaults.
+func (c *Controller) SetProbeTargets(v4, v6 []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.config.ProbeTargetsV4 = append([]string(nil), v4...)
+	c.config.ProbeTargetsV6 = append([]string(nil), v6...)
+	c.applySchedulerModeLocked()
+	return c.saveConfigLocked()
+}
+
+// SetPolicyResolver wires the per-application rule engine into the live balancer.
+func (c *Controller) SetPolicyResolver(r engine.PolicyResolver) {
+	c.mu.RLock()
+	b := c.balancer
+	c.mu.RUnlock()
+	if b != nil {
+		b.SetPolicyResolver(r)
+	}
 }
 
 func resolveActiveAdapter(isRunning bool, cfg Config, snap []engine.SlotStats) string {

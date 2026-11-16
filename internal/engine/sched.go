@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,6 +61,13 @@ type Slot struct {
 	rateIn, rateOut [2]float64 // bytes/s over the last tick
 	peak            [2]float64 // observed capacity: max recent rateIn+rateOut
 	flows           [2]map[*flowActivity]struct{}
+
+	// Internet-probe timing, used by the latency-aware scheduler. rttOK is false until the
+	// first successful probe, so a brand-new adapter is not penalised for having no sample.
+	rttEWMA    [2]float64
+	jitterEWMA [2]float64
+	lastRTT    [2]float64
+	rttOK      [2]bool
 
 	// The adapter's total traffic from the OS's counters (all apps, not only net-merge's flows).
 	linkIn, linkOut         uint64
@@ -126,8 +134,13 @@ type SlotStats struct {
 	BytesIn, BytesOut int64
 	RateIn, RateOut   float64 // through net-merge, both families summed (bytes/s)
 	LinkIn, LinkOut   float64 // through the adapter by any app, from the OS's counters (bytes/s)
+	LinkBytesIn       uint64  // cumulative bytes through the adapter by any app
+	LinkBytesOut      uint64
 	Peak, Peak6       float64
 	LimitMbps         float64 // cap in Mbit/s, 0 = unlimited
+
+	LatencyMs float64 // smoothed internet-probe RTT, 0 until the first successful probe
+	JitterMs  float64 // smoothed variation between probe RTTs
 }
 
 // RoutingMode controls how the scheduler selects across healthy adapters:
@@ -155,6 +168,10 @@ type Scheduler struct {
 	backupNIC  string
 	limits     map[string]float64 // adapter name -> Mbit/s, 0 or absent = unlimited
 	now        func() time.Time
+
+	latencyAware bool
+	probe4       []string
+	probe6       []string
 }
 
 func NewScheduler(nics []nics.Nic) *Scheduler {
@@ -191,6 +208,102 @@ func (s *Scheduler) SetAuto(on bool) {
 	s.mu.Lock()
 	s.auto = on
 	s.mu.Unlock()
+}
+
+// SetLatencyAware makes new flows prefer adapters with lower probe RTT and jitter. It is
+// deliberately opt-in: aggressive latency preference can leave a fast but high-latency link
+// under-used for bulk transfers, which is the opposite of what Speed mode is for.
+func (s *Scheduler) SetLatencyAware(on bool) {
+	s.mu.Lock()
+	s.latencyAware = on
+	s.mu.Unlock()
+}
+
+// LatencyAware reports whether new flows prefer low-latency adapters.
+func (s *Scheduler) LatencyAware() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.latencyAware
+}
+
+// SetProbeTargets replaces the reachability probe endpoints per address family. Empty lists
+// keep the defaults. A user behind a captive portal or a firewall that blocks one anycast
+// address can point the probe at a host that is reachable on their network.
+func (s *Scheduler) SetProbeTargets(v4, v6 []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.probe4 = cleanTargets(v4)
+	s.probe6 = cleanTargets(v6)
+}
+
+func (s *Scheduler) probeTargets(f Family) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list := s.probe4
+	if f == Fam6 {
+		list = s.probe6
+	}
+	if len(list) == 0 {
+		return probeTargetsDefault[f]
+	}
+	return append([]string(nil), list...)
+}
+
+// RecordProbe stores a reachability result and its round-trip time. Successful probes feed
+// the smoothed RTT and jitter estimates used by latency-aware scheduling.
+func (s *Scheduler) RecordProbe(sl *Slot, f Family, up bool, rtt time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if up {
+		sl.state[f] = stateUp
+		sl.downUntil[f] = time.Time{}
+		ms := float64(rtt) / float64(time.Millisecond)
+		if ms < 0 {
+			ms = 0
+		}
+		if sl.rttOK[f] {
+			delta := ms - sl.lastRTT[f]
+			if delta < 0 {
+				delta = -delta
+			}
+			sl.jitterEWMA[f] = 0.8*sl.jitterEWMA[f] + 0.2*delta
+			sl.rttEWMA[f] = 0.7*sl.rttEWMA[f] + 0.3*ms
+		} else {
+			sl.rttEWMA[f] = ms
+			sl.jitterEWMA[f] = 0
+			sl.rttOK[f] = true
+		}
+		sl.lastRTT[f] = ms
+		return
+	}
+	sl.state[f] = stateDown
+}
+
+func cleanTargets(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, t := range in {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, normalizeTarget(t))
+		}
+	}
+	return out
+}
+
+// normalizeTarget accepts "host", "host:port", "1.2.3.4" and "[2001:db8::1]" and returns a
+// dialable address, defaulting the port to 443. A user typing a bare address in the UI should
+// not silently produce a probe that always fails.
+func normalizeTarget(t string) string {
+	if _, _, err := net.SplitHostPort(t); err == nil {
+		return t
+	}
+	host := t
+	if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
+		host = t[1 : len(t)-1]
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return net.JoinHostPort(host, "443")
+	}
+	return net.JoinHostPort(t, "443")
 }
 
 // SetLimit caps an adapter at mbitPerSec Mbit/s across all of its flows and both address families;
@@ -439,6 +552,13 @@ func (s *Scheduler) Release(sl *Slot)                       { s.ReleaseFor(sl, F
 
 // AcquireFor picks a NIC that has an address of the given family.
 func (s *Scheduler) AcquireFor(f Family, skip map[string]struct{}) *Slot {
+	return s.AcquireForAllowed(f, nil, skip)
+}
+
+// AcquireForAllowed is AcquireFor restricted to adapter names in allowed. A nil or empty
+// allowed set means every adapter. It backs per-application adapter pinning: the caller
+// offers the preferred adapter first, then the fallback, then the full pool.
+func (s *Scheduler) AcquireForAllowed(f Family, allowed, skip map[string]struct{}) *Slot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -449,6 +569,11 @@ func (s *Scheduler) AcquireFor(f Family, skip map[string]struct{}) *Slot {
 	for _, sl := range s.slots {
 		if !sl.present || sl.ip(f) == nil {
 			continue
+		}
+		if len(allowed) > 0 {
+			if _, ok := allowed[sl.key]; !ok {
+				continue
+			}
 		}
 		if _, no := skip[sl.key]; no {
 			continue
@@ -512,7 +637,14 @@ func (s *Scheduler) AcquireFor(f Family, skip map[string]struct{}) *Slot {
 		if s.auto {
 			load = sl.busy(f)
 		}
-		if score := float64(load+1) / sl.weight[f]; score < bestScore {
+		score := float64(load+1) / sl.weight[f]
+		if s.latencyAware && sl.rttOK[f] {
+			// One flow-equivalent per 20 ms of smoothed RTT, plus half weight for jitter:
+			// latency-sensitive flows avoid a congested cellular link without starving it
+			// when it is genuinely the only low-load option.
+			score += (sl.rttEWMA[f] + 0.5*sl.jitterEWMA[f]) / 20
+		}
+		if score < bestScore {
 			best, bestScore = sl, score
 		}
 	}
@@ -595,8 +727,13 @@ func (s *Scheduler) Snapshot() []SlotStats {
 			BytesOut: sl.bytesOut[Fam4].Load() + sl.bytesOut[Fam6].Load(),
 			RateIn:   sl.rateIn[Fam4] + sl.rateIn[Fam6], RateOut: sl.rateOut[Fam4] + sl.rateOut[Fam6],
 			LinkIn: sl.linkRateIn, LinkOut: sl.linkRateOut,
+			LinkBytesIn: sl.linkIn, LinkBytesOut: sl.linkOut,
 			Peak: sl.peak[Fam4], Peak6: sl.peak[Fam6],
 			LimitMbps: sl.limitMbps(),
+		}
+		if sl.rttOK[Fam4] {
+			st.LatencyMs = sl.rttEWMA[Fam4]
+			st.JitterMs = sl.jitterEWMA[Fam4]
 		}
 		if a.ip4 != nil {
 			st.IP, st.State = a.ip4.String(), sl.state[Fam4].String()

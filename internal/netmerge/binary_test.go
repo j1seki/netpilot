@@ -193,4 +193,3 @@ func TestBuiltinVsExternalEngineModesAndInactiveStandby(t *testing.T) {
 		t.Fatalf("expected CloseAction='minimize', got %q", ctrl.GetCloseAction())
 	}
 }
-

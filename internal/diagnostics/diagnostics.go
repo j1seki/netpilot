@@ -18,27 +18,27 @@ import (
 
 // ReportBundle represents the complete one-click diagnostic output.
 type ReportBundle struct {
-	GeneratedAt       time.Time                  `json:"generatedAt"`
-	Application       ApplicationInfo            `json:"application"`
-	Environment       capability.EnvironmentDetails `json:"environment"`
-	ExecutionMode     mode.State                 `json:"executionMode"`
-	Capabilities      []capability.CapabilityItem `json:"capabilities"`
-	RecentOperations  []logger.LogEntry          `json:"recentOperations"`
-	RecentTestRuns    []db.TestRunRecord         `json:"recentTestRuns"`
-	KnownLimitations  []string                   `json:"knownLimitations"`
-	ActiveRules       []db.RuleRecord            `json:"activeRules"`
+	GeneratedAt      time.Time                     `json:"generatedAt"`
+	Application      ApplicationInfo               `json:"application"`
+	Environment      capability.EnvironmentDetails `json:"environment"`
+	ExecutionMode    mode.State                    `json:"executionMode"`
+	Capabilities     []capability.CapabilityItem   `json:"capabilities"`
+	RecentOperations []logger.LogEntry             `json:"recentOperations"`
+	RecentTestRuns   []db.TestRunRecord            `json:"recentTestRuns"`
+	KnownLimitations []string                      `json:"knownLimitations"`
+	ActiveRules      []db.RuleRecord               `json:"activeRules"`
 }
 
 // ApplicationInfo summarizes application build and version facts.
 type ApplicationInfo struct {
-	Name        string `json:"name"`
-	AppID       string `json:"appId"`
-	Version     string `json:"version"`
-	GoVersion   string `json:"goVersion"`
-	Compiler    string `json:"compiler"`
-	Platform    string `json:"platform"`
-	Arch        string `json:"arch"`
-	Vendor      string `json:"vendor"`
+	Name      string `json:"name"`
+	AppID     string `json:"appId"`
+	Version   string `json:"version"`
+	GoVersion string `json:"goVersion"`
+	Compiler  string `json:"compiler"`
+	Platform  string `json:"platform"`
+	Arch      string `json:"arch"`
+	Vendor    string `json:"vendor"`
 }
 
 // Generator builds diagnostic reports.

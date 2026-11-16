@@ -33,19 +33,19 @@ type InterfaceHealth struct {
 
 // Config tunes the hysteresis thresholds.
 type Config struct {
-	FailThreshold     int           // Failures before declaring DOWN (default 3)
-	RecoverThreshold  int           // Successes before declaring UP (default 3)
-	DegradedRTT       time.Duration // RTT threshold for DEGRADED (default 400ms)
-	FlapWindow        time.Duration // Time window to count rapid flaps (default 60s)
-	FlapLimit         int           // Max transitions in window before freezing (default 5)
+	FailThreshold    int           // Failures before declaring DOWN (default 3)
+	RecoverThreshold int           // Successes before declaring UP (default 3)
+	DegradedRTT      time.Duration // RTT threshold for DEGRADED (default 400ms)
+	FlapWindow       time.Duration // Time window to count rapid flaps (default 60s)
+	FlapLimit        int           // Max transitions in window before freezing (default 5)
 }
 
 // StateMachine coordinates link health for all adapters.
 type StateMachine struct {
-	mu        sync.RWMutex
-	config    Config
-	health    map[string]*InterfaceHealth
-	onState   func(iface string, oldState, newState LinkState)
+	mu      sync.RWMutex
+	config  Config
+	health  map[string]*InterfaceHealth
+	onState func(iface string, oldState, newState LinkState)
 }
 
 // NewStateMachine creates a new failover manager.

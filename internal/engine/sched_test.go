@@ -31,6 +31,78 @@ func acquireN(s *Scheduler, n int) []*Slot {
 	return out
 }
 
+func TestAcquireForAllowedPinsToNamedAdapter(t *testing.T) {
+	s := NewScheduler([]nics.Nic{nic("A", "10.0.0.1", 1), nic("B", "10.0.0.2", 1)})
+	allowed := map[string]struct{}{"B": {}}
+	for i := 0; i < 20; i++ {
+		sl := s.AcquireForAllowed(Fam4, allowed, nil)
+		if sl == nil || sl.Name != "B" {
+			t.Fatalf("AcquireForAllowed picked %v, want B", sl)
+		}
+		s.ReleaseFor(sl, Fam4)
+	}
+}
+
+func TestLatencyAwarePrefersLowerRTT(t *testing.T) {
+	s := NewScheduler([]nics.Nic{nic("A", "10.0.0.1", 1), nic("B", "10.0.0.2", 1)})
+	a, b := s.slots[0], s.slots[1]
+	s.RecordProbe(a, Fam4, true, 120*time.Millisecond)
+	s.RecordProbe(b, Fam4, true, 5*time.Millisecond)
+	s.SetLatencyAware(true)
+
+	counts := map[string]int{}
+	for i := 0; i < 100; i++ {
+		sl := s.Acquire(nil)
+		counts[sl.Name]++
+		s.Release(sl)
+	}
+	if counts["B"] < 90 {
+		t.Fatalf("latency-aware scheduler should prefer the 5 ms link, got %v", counts)
+	}
+}
+
+func TestRecordProbeTracksJitter(t *testing.T) {
+	s := NewScheduler([]nics.Nic{nic("A", "10.0.0.1", 1)})
+	sl := s.slots[0]
+	s.RecordProbe(sl, Fam4, true, 40*time.Millisecond)
+	s.RecordProbe(sl, Fam4, true, 60*time.Millisecond)
+	st := s.Snapshot()[0]
+	if st.LatencyMs <= 0 {
+		t.Fatalf("latency not recorded: %+v", st)
+	}
+	if st.JitterMs <= 0 {
+		t.Fatalf("jitter not recorded: %+v", st)
+	}
+}
+
+func TestProbeTargetsCanBeOverridden(t *testing.T) {
+	s := NewScheduler(nil)
+	s.SetProbeTargets([]string{" 192.0.2.1:443 ", ""}, nil)
+	got := s.probeTargets(Fam4)
+	if len(got) != 1 || got[0] != "192.0.2.1:443" {
+		t.Fatalf("probe targets = %v", got)
+	}
+	if len(s.probeTargets(Fam6)) == 0 {
+		t.Fatal("IPv6 should fall back to the built-in targets")
+	}
+}
+
+func TestProbeTargetsGetADefaultPort(t *testing.T) {
+	s := NewScheduler(nil)
+	s.SetProbeTargets([]string{"1.1.1.1", "[2606:4700:4700::1111]", "example.com"}, []string{"2606:4700:4700::1001"})
+	v4 := s.probeTargets(Fam4)
+	want4 := []string{"1.1.1.1:443", "[2606:4700:4700::1111]:443", "example.com:443"}
+	for i := range want4 {
+		if v4[i] != want4[i] {
+			t.Fatalf("v4 targets = %v, want %v", v4, want4)
+		}
+	}
+	v6 := s.probeTargets(Fam6)
+	if len(v6) != 1 || v6[0] != "[2606:4700:4700::1001]:443" {
+		t.Fatalf("v6 targets = %v", v6)
+	}
+}
+
 func TestEqualWeightsSpreadEvenly(t *testing.T) {
 	s := NewScheduler([]nics.Nic{nic("A", "10.0.0.1", 1), nic("B", "10.0.0.2", 1)})
 	p := acquireN(s, 6)
@@ -272,16 +344,13 @@ func TestProbeAgainstLocalListener(t *testing.T) {
 			c.Close()
 		}
 	}()
-	old := probeTargets[Fam4]
-	defer func() { probeTargets[Fam4] = old }()
-	probeTargets[Fam4] = []string{ln.Addr().String()}
-
 	s := NewScheduler([]nics.Nic{nic("A", "127.0.0.2", 1)})
-	if !probe(s.slots[0], Fam4) {
+	s.SetProbeTargets([]string{ln.Addr().String()}, nil)
+	if up, _ := probe(s.slots[0], Fam4, s.probeTargets(Fam4)); !up {
 		t.Fatal("probe should pass against a reachable target")
 	}
 	ln.Close()
-	if probe(s.slots[0], Fam4) {
+	if up, _ := probe(s.slots[0], Fam4, s.probeTargets(Fam4)); up {
 		t.Fatal("probe should fail once the target is gone")
 	}
 }
@@ -521,7 +590,6 @@ func TestBackupModeFailoverAndRecovery(t *testing.T) {
 		t.Fatalf("after primary recovery, flow went to %s, want Primary", got.Name)
 	}
 }
-
 
 func TestUpdateRefreshesInterfaceIndexAndResetsLinkSampling(t *testing.T) {
 	s := NewScheduler([]nics.Nic{{Name: "Ethernet", Index: 4, IP: net.ParseIP("192.0.2.10"), Weight: 1}})

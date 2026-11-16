@@ -12,7 +12,37 @@ permissions:
   contents: write
 
 jobs:
+  verify-engine-version:
+    # Blocks the v0.3.11 failure mode: publishing a release whose notes/binary
+    # claim net-merge vX.Y.Z while the build actually embeds an older engine.
+    # internal/netmerge/VERSION is the source of truth; the per-platform builds
+    # additionally assert that the compiled binary reports that same version.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify embedded engine version is present in this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Guard against the v0.3.11 failure mode: a release whose notes/binary
+          # claim net-merge vX.Y.Z while the build actually embeds an older engine.
+          # The VERSION file is the single source of truth. Confirm it exists, is
+          # a plausible version, and that the engine source referenced by the
+          # single binary is present in this checkout. The post-build step below
+          # verifies the compiled binary reports the same version at runtime.
+          version=$(tr -d '[:space:]' < internal/netmerge/VERSION)
+          if [ -z "$version" ]; then
+            echo "::error::internal/netmerge/VERSION is empty"
+            exit 1
+          fi
+          echo "Release will embed net-merge v${version}"
+          test -f internal/engine/sched.go
+          test -f cmd/netpilot/subcommands.go
+
   windows:
+    needs: verify-engine-version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +89,17 @@ jobs:
 
           # Build NetPilot single binary (-H=windowsgui so no console window ever pops up; netpilot run/tray/etc. are subcommands of this binary)
           go build -trimpath -ldflags "-s -w -H=windowsgui -X netpilot/internal/branding.AppVersion=$version" -o dist/netpilot.exe ./cmd/netpilot
+
+          # Verify the built single binary reports the same net-merge engine that
+          # internal/netmerge/VERSION declares. A mismatch means the engine source
+          # and version label have drifted apart; fail the release instead of
+          # shipping an installer that claims a version it does not contain.
+          $wantEngine = (Get-Content internal/netmerge/VERSION -Raw).Trim()
+          $builtEngine = (& dist/netpilot.exe version).Trim()
+          if ($builtEngine -notlike "*net-merge $wantEngine*") {
+            throw "Engine version mismatch: binary reports '$builtEngine', expected net-merge $wantEngine"
+          }
+          Write-Host "Verified embedded engine: $builtEngine"
       - name: Build Windows installer (.exe) and Portable ZIP
         shell: pwsh
         run: |
@@ -78,6 +119,7 @@ jobs:
           if-no-files-found: error
 
   macos:
+    needs: verify-engine-version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -103,6 +145,13 @@ jobs:
           done
           lipo -create -output dist/netpilot dist/netpilot-amd64 dist/netpilot-arm64
           codesign --force --sign - dist/netpilot
+
+          want_engine=$(tr -d '[:space:]' < internal/netmerge/VERSION)
+          built_engine=$(dist/netpilot version 2>/dev/null || true)
+          case "$built_engine" in
+            *"net-merge $want_engine"*) echo "Verified embedded engine: $built_engine" ;;
+            *) echo "::error::Engine version mismatch: binary reports '$built_engine', expected net-merge $want_engine"; exit 1 ;;
+          esac
       - name: Build macOS DMG
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
@@ -168,6 +217,7 @@ jobs:
           if-no-files-found: error
 
   linux:
+    needs: verify-engine-version
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -198,6 +248,15 @@ jobs:
           # True single-binary: no separate net-merge binaries on Linux.
 
           CGO_ENABLED=1 go build -tags gtk3 -trimpath -ldflags "-s -w -X netpilot/internal/branding.AppVersion=$v" -o dist/netpilot ./cmd/netpilot
+
+          # Build-time proof that the binary embeds the recorded engine version.
+          # `version` is a pure CLI subcommand (no webview), so it is safe to run here.
+          want_engine=$(tr -d '[:space:]' < internal/netmerge/VERSION)
+          built_engine=$(./dist/netpilot version 2>/dev/null || true)
+          case "$built_engine" in
+            *"net-merge $want_engine"*) echo "Verified embedded engine: $built_engine" ;;
+            *) echo "::error::Engine version mismatch: binary reports '$built_engine', expected net-merge $want_engine"; exit 1 ;;
+          esac
       - name: Build Universal Portable AppImage (All Desktop Environments)
         run: |
           set -euo pipefail
@@ -258,6 +317,7 @@ jobs:
   linux-arm64:
     # Native arm64 runner: Wails needs cgo + arm64 GTK/WebKit, so cross-compiling the
     # AppImage on the amd64 runner is not possible without a full sysroot.
+    needs: verify-engine-version
     runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -286,6 +346,13 @@ jobs:
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
           mkdir -p dist internal/netmerge/embedded/bin
           CGO_ENABLED=1 GOARCH=arm64 go build -tags gtk3 -trimpath -ldflags "-s -w -X netpilot/internal/branding.AppVersion=$v" -o dist/netpilot ./cmd/netpilot
+
+          want_engine=$(tr -d '[:space:]' < internal/netmerge/VERSION)
+          built_engine=$(./dist/netpilot version 2>/dev/null || true)
+          case "$built_engine" in
+            *"net-merge $want_engine"*) echo "Verified embedded engine: $built_engine" ;;
+            *) echo "::error::Engine version mismatch: binary reports '$built_engine', expected net-merge $want_engine"; exit 1 ;;
+          esac
       - name: Build arm64 Portable AppImage
         run: |
           set -euo pipefail
@@ -376,12 +443,20 @@ jobs:
           EOF
           )
 
+          # Semver prereleases (e.g. v0.4.0-beta.1) must not take the "Latest" badge
+          # away from the stable release (v0.3.9). Detect any -<pre> suffix.
+          prerelease=false
+          case "$tag" in
+            *-*) prerelease=true ;;
+          esac
+
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" out/* --clobber
-            gh release edit "$tag" --title "NetPilot $tag" --notes "$notes"
+            gh release edit "$tag" --title "NetPilot $tag" --notes "$notes" --prerelease="$prerelease"
           else
-            gh release create "$tag" out/* \
-              --title "NetPilot $tag" \
-              --notes "$notes" \
-              --latest
+            if [ "$prerelease" = "true" ]; then
+              gh release create "$tag" out/* --title "NetPilot $tag" --notes "$notes" --prerelease
+            else
+              gh release create "$tag" out/* --title "NetPilot $tag" --notes "$notes" --latest
+            fi
           fi

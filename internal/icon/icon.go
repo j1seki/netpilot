@@ -59,9 +59,9 @@ func draw(on bool, size int) *image.NRGBA {
 		accentCol = [3]float64{56, 189, 248} // #38bdf8 sky cyan accent
 		fgCol = [3]float64{250, 250, 250}    // crisp white
 	} else {
-		topBg = [3]float64{30, 30, 36}       // zinc-800
-		botBg = [3]float64{18, 18, 22}       // zinc-950
-		borderCol = [3]float64{82, 82, 91}   // zinc-600
+		topBg = [3]float64{30, 30, 36}     // zinc-800
+		botBg = [3]float64{18, 18, 22}     // zinc-950
+		borderCol = [3]float64{82, 82, 91} // zinc-600
 		accentCol = [3]float64{113, 113, 122}
 		fgCol = [3]float64{161, 161, 170}
 	}

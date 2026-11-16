@@ -53,6 +53,14 @@ Customize window close behavior (**Minimize to System Tray** by default vs. **Qu
   All background health probes, PowerShell/netsh queries, and `net-merge` operations run with `CREATE_NO_WINDOW` — no flashing CMD windows ever.
 - 🎯 **Per-App Routing, TTL Manager & Monthly Analytics**
   Pin specific apps or games to specific adapters, customize IPv4/IPv6 Hop Limits (TTL) for hotspot carrier bypass, and track historical bandwidth usage per adapter and application.
+- 📱 **Hotspot & Mobile Connectivity**
+  - Detects phone-tether and cellular adapters by their OS naming conventions and applies a one-click TTL/MTU profile (Hotspot Bypass, IPv4-only, Metered Saver), optionally automatically when a tether appears.
+  - Built-in speedtest measures each adapter in isolation and the merged pool, including upload, idle latency and bufferbloat (A–F) grades.
+  - Saved connection profiles switch routing mode, latency scheduling, MTU and IPv6 policy in one action.
+- ⏱️ **Low-Latency Scheduling & Custom Probes**
+  Choose **Balanced** (least-busy flows) or **Low-Latency** (RTT/jitter-aware) scheduling, and override the IPv4/IPv6 reachability probe targets when a carrier blocks the defaults.
+- 🛡️ **Quota Guard & Live Events**
+  Quotas on adapters and per-app rules are enforced from real OS/flow counters, adapters are throttled when a quota is reached, and a Server-Sent Events stream keeps the UI current without polling every view.
 
 ---
 

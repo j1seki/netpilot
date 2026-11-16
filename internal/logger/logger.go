@@ -28,44 +28,44 @@ const (
 type Phase string
 
 const (
-	PhaseRequested            Phase = "REQUESTED"
-	PhaseValidationStarted    Phase = "VALIDATION_STARTED"
-	PhaseValidationCompleted  Phase = "VALIDATION_COMPLETED"
-	PhaseCapabilityStarted    Phase = "CAPABILITY_CHECK_STARTED"
-	PhaseCapabilityCompleted  Phase = "CAPABILITY_CHECK_COMPLETED"
-	PhasePolicyStarted        Phase = "POLICY_EVAL_STARTED"
-	PhasePolicyCompleted      Phase = "POLICY_EVAL_COMPLETED"
-	PhaseBackendStarted       Phase = "BACKEND_OP_STARTED"
-	PhaseBackendCompleted     Phase = "BACKEND_OP_COMPLETED"
-	PhaseVerificationStarted  Phase = "VERIFICATION_STARTED"
+	PhaseRequested             Phase = "REQUESTED"
+	PhaseValidationStarted     Phase = "VALIDATION_STARTED"
+	PhaseValidationCompleted   Phase = "VALIDATION_COMPLETED"
+	PhaseCapabilityStarted     Phase = "CAPABILITY_CHECK_STARTED"
+	PhaseCapabilityCompleted   Phase = "CAPABILITY_CHECK_COMPLETED"
+	PhasePolicyStarted         Phase = "POLICY_EVAL_STARTED"
+	PhasePolicyCompleted       Phase = "POLICY_EVAL_COMPLETED"
+	PhaseBackendStarted        Phase = "BACKEND_OP_STARTED"
+	PhaseBackendCompleted      Phase = "BACKEND_OP_COMPLETED"
+	PhaseVerificationStarted   Phase = "VERIFICATION_STARTED"
 	PhaseVerificationCompleted Phase = "VERIFICATION_COMPLETED"
-	PhaseFinalized            Phase = "FINALIZED"
-	PhaseFailed               Phase = "FAILED"
-	PhaseRollbackStarted      Phase = "ROLLBACK_STARTED"
-	PhaseRollbackCompleted    Phase = "ROLLBACK_COMPLETED"
+	PhaseFinalized             Phase = "FINALIZED"
+	PhaseFailed                Phase = "FAILED"
+	PhaseRollbackStarted       Phase = "ROLLBACK_STARTED"
+	PhaseRollbackCompleted     Phase = "ROLLBACK_COMPLETED"
 )
 
 // LogEntry is the primary structured log item.
 type LogEntry struct {
-	Timestamp     time.Time              `json:"timestamp"`
-	MonotonicNs   int64                  `json:"monotonicNs"`
-	Level         Level                  `json:"level"`
-	OperationID   string                 `json:"operationId,omitempty"`
-	CorrelationID string                 `json:"correlationId,omitempty"`
-	ParentOpID    string                 `json:"parentOpId,omitempty"`
-	Component     string                 `json:"component"`
-	OperationName string                 `json:"operationName,omitempty"`
-	Phase         Phase                  `json:"phase,omitempty"`
-	Platform      string                 `json:"platform"`
-	ExecutionMode string                 `json:"executionMode"`
-	Message       string                 `json:"message"`
-	Result        string                 `json:"result,omitempty"`
-	ErrorCategory string                 `json:"errorCategory,omitempty"`
-	ErrorMessage  string                 `json:"errorMessage,omitempty"`
-	RecoveryAction string                `json:"recoveryAction,omitempty"`
-	RollbackStatus string                `json:"rollbackStatus,omitempty"`
-	DurationMs    float64                `json:"durationMs,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	Timestamp      time.Time              `json:"timestamp"`
+	MonotonicNs    int64                  `json:"monotonicNs"`
+	Level          Level                  `json:"level"`
+	OperationID    string                 `json:"operationId,omitempty"`
+	CorrelationID  string                 `json:"correlationId,omitempty"`
+	ParentOpID     string                 `json:"parentOpId,omitempty"`
+	Component      string                 `json:"component"`
+	OperationName  string                 `json:"operationName,omitempty"`
+	Phase          Phase                  `json:"phase,omitempty"`
+	Platform       string                 `json:"platform"`
+	ExecutionMode  string                 `json:"executionMode"`
+	Message        string                 `json:"message"`
+	Result         string                 `json:"result,omitempty"`
+	ErrorCategory  string                 `json:"errorCategory,omitempty"`
+	ErrorMessage   string                 `json:"errorMessage,omitempty"`
+	RecoveryAction string                 `json:"recoveryAction,omitempty"`
+	RollbackStatus string                 `json:"rollbackStatus,omitempty"`
+	DurationMs     float64                `json:"durationMs,omitempty"`
+	Metadata       map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // FilterOptions sets criteria for log queries.
@@ -86,11 +86,11 @@ var (
 
 // RingLogger stores a bounded circular buffer of structured logs.
 type RingLogger struct {
-	mu       sync.RWMutex
-	capacity int
-	entries  []LogEntry
-	cursor   int
-	full     bool
+	mu          sync.RWMutex
+	capacity    int
+	entries     []LogEntry
+	cursor      int
+	full        bool
 	subscribers map[chan LogEntry]struct{}
 }
 
@@ -216,11 +216,11 @@ func RandomID() string {
 
 // OperationLifecycle tracks a single operation from start to finish.
 type OperationLifecycle struct {
-	logger        *RingLogger
-	entry         LogEntry
-	startTime     time.Time
-	startMono     int64
-	phaseTimers   map[Phase]time.Time
+	logger      *RingLogger
+	entry       LogEntry
+	startTime   time.Time
+	startMono   int64
+	phaseTimers map[Phase]time.Time
 }
 
 // OperationID returns the tracked operation ID.

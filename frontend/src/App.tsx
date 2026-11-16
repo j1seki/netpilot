@@ -4,10 +4,12 @@ import {
   BrandingInfo,
   InterfaceInfo,
   NetMergeStatus,
+  subscribeTelemetry,
 } from './api/wails';
 import { Sparkline } from './components/Charts';
 import { DashboardView } from './views/DashboardView';
 import { NetMergeView } from './views/NetMergeView';
+import { ConnectivityView } from './views/ConnectivityView';
 import { TTLView } from './views/TTLView';
 import { RoutingRules } from './views/RoutingRules';
 import { Analytics } from './views/Analytics';
@@ -27,6 +29,7 @@ import {
   Wrench,
   Zap,
   ShieldAlert,
+  Smartphone,
 } from 'lucide-react';
 
 export type MainTab =
@@ -37,9 +40,10 @@ export type MainTab =
   | 'usage'
   | 'tools'
   | 'test-suite'
-  | 'settings';
+  | 'settings'
+  | 'connectivity';
 
-const MAIN_TABS: MainTab[] = ['dashboard', 'netmerge', 'ttl', 'rules', 'usage', 'tools', 'test-suite', 'settings'];
+const MAIN_TABS: MainTab[] = ['dashboard', 'netmerge', 'ttl', 'rules', 'usage', 'tools', 'test-suite', 'settings', 'connectivity'];
 
 function initialTab(): MainTab {
   // Deep links are handy for docs and for jumping straight to a page:
@@ -63,6 +67,7 @@ export const App: React.FC = () => {
     tools: startTab === 'tools',
     'test-suite': startTab === 'test-suite',
     settings: startTab === 'settings',
+    connectivity: startTab === 'connectivity',
   });
 
   // Real aggregate rolling history for top-bar sparkline
@@ -90,6 +95,21 @@ export const App: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Live telemetry from the backend's Server-Sent Events stream. The polling effect above
+  // is a fallback for environments where EventSource cannot reach /api/events.
+  useEffect(() => {
+    return subscribeTelemetry(payload => {
+      if (payload.interfaces) {
+        setInterfaces(payload.interfaces);
+        const totalRx = payload.interfaces.reduce((acc, i) => acc + (i.rxMbps || 0), 0);
+        setGlobalRxHist(prev => [...prev.slice(1), totalRx]);
+      }
+      if (payload.netMerge) {
+        setNetMergeStatus(payload.netMerge);
+      }
+    });
+  }, []);
+
   const switchTab = (tab: MainTab) => {
     setCurrentTab(tab);
     setVisitedTabs(prev => ({ ...prev, [tab]: true }));
@@ -107,6 +127,7 @@ export const App: React.FC = () => {
   const navItems: { id: MainTab; label: string; icon: React.ReactNode }[] = [
     { id: 'dashboard', label: 'Systems', icon: <LayoutDashboard size={13} /> },
     { id: 'netmerge', label: 'Net-Merge', icon: <GitMerge size={13} /> },
+    { id: 'connectivity', label: 'Mobile', icon: <Smartphone size={13} /> },
     { id: 'rules', label: 'Rules', icon: <Split size={13} /> },
     { id: 'ttl', label: 'TTL', icon: <ShieldCheck size={13} /> },
     { id: 'usage', label: 'Metrics', icon: <BarChart2 size={13} /> },
@@ -280,6 +301,11 @@ export const App: React.FC = () => {
         {visitedTabs.netmerge && (
           <div style={{ display: currentTab === 'netmerge' ? 'block' : 'none' }}>
             <NetMergeView />
+          </div>
+        )}
+        {visitedTabs.connectivity && (
+          <div style={{ display: currentTab === 'connectivity' ? 'block' : 'none' }}>
+            <ConnectivityView />
           </div>
         )}
         {visitedTabs.ttl && (
