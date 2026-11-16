@@ -102,10 +102,16 @@ jobs:
         shell: pwsh
         run: |
           $version = '${{ inputs.tag || github.ref_name }}'.TrimStart('v')
+          # Inno Setup's VersionInfoVersion must be numeric X.Y.Z.W. Derive it from
+          # the leading version numbers, e.g. 0.4.0-beta.1 -> 0.4.0.0.
+          $numericVersion = '0.0.0.0'
+          if ($version -match '^(\d+)\.(\d+)\.(\d+)') {
+            $numericVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+          }
           Copy-Item packaging/netpilot.ico dist/netpilot.ico -Force
           $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path $iscc)) { $iscc = (Get-Command ISCC.exe).Source }
-          & $iscc "/DVersion=$version" installer/netpilot.iss
+          & $iscc "/DVersion=$version" "/DNumericVersion=$numericVersion" installer/netpilot.iss
           Compress-Archive -Path dist/netpilot.exe, dist/wintun.dll, dist/netpilot.ico, LICENSE, THIRD-PARTY-NOTICES.md, README.md -DestinationPath dist/netpilot-windows-amd64-portable.zip -Force
           Get-ChildItem dist/*.exe, dist/*.zip
       - uses: actions/upload-artifact@v4

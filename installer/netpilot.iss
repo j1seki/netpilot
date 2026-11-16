@@ -2,6 +2,12 @@
 #ifndef Version
   #define Version "0.1.0"
 #endif
+; Windows file version metadata must be numeric (X.Y.Z.W). Prerelease tags such as
+; "0.4.0-beta.1" are valid display/app versions but not valid VersionInfoVersion.
+; Derive a numeric build version from the leading X.Y.Z numbers.
+#ifndef NumericVersion
+  #define NumericVersion "0.4.0.0"
+#endif
 
 [Setup]
 AppId={{9C1E8F2A-5B3D-4E7A-9C41-2D6B8E0F7B24}
@@ -14,7 +20,7 @@ AppPublisherURL={#RepoUrl}
 AppSupportURL={#RepoUrl}/issues
 AppUpdatesURL={#RepoUrl}/releases
 #endif
-VersionInfoVersion={#Version}
+VersionInfoVersion={#NumericVersion}
 DefaultDirName={autopf}\NetPilot
 DefaultGroupName=NetPilot
 DisableProgramGroupPage=yes
