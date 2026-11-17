@@ -63,8 +63,7 @@ func TestFlowLimiterIsOptional(t *testing.T) {
 }
 
 func TestDialPinnedForWithBandwidthCapKeepsTCPConn(t *testing.T) {
-	needLoopbackAliases(t)
-	target, err := net.Listen("tcp4", "127.0.0.2:0")
+	target, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,13 +76,16 @@ func TestDialPinnedForWithBandwidthCapKeepsTCPConn(t *testing.T) {
 		}
 	}()
 
-	ip := net.ParseIP("127.0.0.2")
+	loopback, err := net.InterfaceByName("lo")
+	if err != nil {
+		t.Skipf("loopback interface lookup unavailable: %v", err)
+	}
 	port := target.Addr().(*net.TCPAddr).Port
-	sched := NewScheduler([]nics.Nic{{Name: "loopback", Index: 1, IP: ip, Weight: 1}})
+	sched := NewScheduler([]nics.Nic{{Name: "loopback", Index: loopback.Index, IP: net.ParseIP("127.0.0.1"), Weight: 1}})
 	b := NewBalancer(sched)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	conn, err := b.DialPinnedFor(ctx, "127.0.0.2", port, FlowPolicy{BandwidthLimitMbps: 10})
+	conn, err := b.DialPinnedFor(ctx, "127.0.0.1", port, FlowPolicy{BandwidthLimitMbps: 10})
 	if err != nil {
 		t.Fatalf("DialPinnedFor with a per-app cap: %v", err)
 	}
