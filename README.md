@@ -19,19 +19,19 @@ Combine Wi-Fi, Ethernet, 5G Tethering, and VPNs into a single fast connection �
 
 ## 🖥️ Interface Overview
 
-Redesigned with an ultra-clean, dark telemetry aesthetic inspired by **[Beszel](https://beszel.dev/)**, NetPilot gives you real-time visibility and one-click control over every network adapter on your machine.
+Redesigned with an ultra-clean, dark telemetry aesthetic inspired by **[Beszel](https://beszel.dev/)**, NetPilot gives you real-time visibility and one-click control over every network adapter on your machine. The short demo below covers the main flow — watch it once, then use the section explanations as a quick reference.
 
-### Systems & Adapter Telemetry
-Monitor live download/upload load meters, WAN/LAN addresses, per-application routing policies, and active processes at a glance:
-![NetPilot Systems Dashboard](docs/screenshots/dashboard.png)
+![NetPilot demo — dashboard, net-merge controls and settings](docs/demo.gif)
 
-### Net-Merge Engine · Speed Mode vs. Backup Mode
-Switch effortlessly between **Speed Mode** (simultaneous multi-link aggregation) and **Backup Mode** (active-passive failover), tune per-adapter speed caps, or run a zero-privilege SOCKS5 multi-link balancer:
-![NetPilot Net-Merge Engine](docs/screenshots/netmerge.png)
+### How to read the interface
 
-### System Tray, Engine Source & Silent Execution Settings
-Customize window close behavior (**Minimize to System Tray** by default vs. **Quit Application**), toggle between the **Built-in Embedded `net-merge` + `net-merge-tray`** or an **External Binary**, and run completely silently on Windows without console popups:
-![NetPilot Settings](docs/screenshots/settings.png)
+- **Systems & Adapter Telemetry** — The dashboard shows live download/upload load meters, WAN/LAN addresses, latency, per-application routing policies, and active processes at a glance. Each adapter row reflects real OS counters and health probes, not estimates.
+- **Net-Merge Engine · Speed vs. Backup** — Use the Net-Merge tab to switch between **Speed Mode** (simultaneous multi-link aggregation with weighted least-busy-flows scheduling) and **Backup Mode** (primary adapter with automatic failover to the secondary). Tune per-adapter speed caps or start a zero-privilege SOCKS5 multi-link balancer without touching the system routing table.
+- **Mobile & Connectivity** — Detects phone-tether/cellular adapters and applies a one-click TTL + MTU profile, runs per-adapter and merged speedtests with bufferbloat grades, and saves named connection profiles for instant switching.
+- **TTL, Rules, Metrics & Tools** — Pin apps or games to adapters, customize IPv4/IPv6 Hop Limits, review historical bandwidth per adapter/application, and run ping/DNS/port/Wake-on-LAN diagnostics.
+- **System Tray & Silent Execution** — The window close button minimizes to the tray by default; a single tray menu controls start/stop, Speed/Backup modes, per-adapter caps, and autostart. On Windows, all child processes run with `CREATE_NO_WINDOW`, so no console flashes.
+
+Full-resolution stills are kept in [`docs/screenshots/`](docs/screenshots/): [dashboard](docs/screenshots/dashboard.png), [net-merge](docs/screenshots/netmerge.png), [settings](docs/screenshots/settings.png).
 
 ---
 
@@ -98,9 +98,11 @@ chmod +x netpilot-linux-arm64.AppImage
 
 ## 🔄 Automated `net-merge` Sync & Release Pipeline
 
-NetPilot stays automatically synchronized with upstream **[net-merge/net-merge](https://github.com/net-merge/net-merge)**:
-- A scheduled GitHub Actions workflow (`.github/workflows/sync-net-merge.yml`) checks for new `net-merge` releases every 6 hours.
-- Whenever a new `net-merge` version is published, GitHub Actions automatically syncs the engine, embeds both `net-merge` and `net-merge-tray`, and builds a fresh NetPilot release for Windows, macOS, and Linux.
+NetPilot tracks upstream **[net-merge/net-merge](https://github.com/net-merge/net-merge)** without automatically publishing releases:
+
+- A scheduled workflow (`.github/workflows/sync-net-merge.yml`) checks for new `net-merge` releases every 6 hours and three-way merges the vendored engine packages, preserving NetPilot's local changes (Speed/Backup routing, platform probes).
+- A sync opens or updates a **pull request** against `main`; it never pushes directly to `main`, never force-tags NetPilot with the upstream version, and never triggers a release on its own. Conflicting engine changes fail the workflow for a human to resolve.
+- Releases are cut explicitly by pushing a NetPilot version tag (e.g. `v0.4.0-beta.1`). A gating job verifies the engine version recorded in `internal/netmerge/VERSION` is really compiled into every binary, so a version-label-only sync cannot ship a stale engine again. Semver prereleases are marked as such and never take the "Latest" badge from the stable release.
 
 ---
 
@@ -122,17 +124,14 @@ npm ci
 npm run build
 cd ..
 
-# 4. Build and embed net-merge + net-merge-tray
-mkdir -p dist internal/netmerge/embedded/bin
-go build -trimpath -ldflags "-s -w" -o dist/net-merge ./cmd/net-merge
-go build -trimpath -ldflags "-s -w -X main.defaultCmd=tray" -o dist/net-merge-tray ./cmd/net-merge
-cp dist/net-merge internal/netmerge/embedded/bin/
-cp dist/net-merge-tray internal/netmerge/embedded/bin/
+# 4. Build the single NetPilot binary (GUI + net-merge CLI + tray in one file)
+#    On Linux add -tags gtk3; on Windows add -ldflags "-H=windowsgui" to hide the console.
+go build -trimpath -ldflags "-s -w" -o dist/netpilot ./cmd/netpilot
 
-# 5. Build NetPilot Desktop
-go build -tags gtk3 -trimpath -ldflags "-s -w" -o dist/netpilot ./cmd/netpilot
+# The net-merge subcommands are built in: `dist/netpilot version`, `list`, `run`, etc.
+# `internal/netmerge/VERSION` is embedded via go:embed; keep it in sync with the engine.
 
-# 6. Run the test suite
+# 5. Run the test suite
 go test ./internal/... ./tests/common ./tests/scenarios
 ```
 
