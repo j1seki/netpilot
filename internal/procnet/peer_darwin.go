@@ -15,25 +15,32 @@ import (
 
 func peerPID(conn net.Conn) (int, bool) {
 	sc, ok := conn.(syscall.Conn)
-	if !ok {
-		return 0, false
-	}
-	raw, err := sc.SyscallConn()
-	if err != nil {
-		return 0, false
-	}
-	var pid int
-	var got bool
-	err = raw.Control(func(fd uintptr) {
-		v, err := unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID)
-		if err == nil && v > 0 {
-			pid, got = v, true
+	if ok {
+		if raw, err := sc.SyscallConn(); err == nil {
+			var pid int
+			var got bool
+			_ = raw.Control(func(fd uintptr) {
+				// LOCAL_PEERPID is only supported for AF_UNIX sockets. Keep it
+				// for local transports, but the SOCKS listener is TCP and must
+				// fall back to matching its endpoints in lsof's TCP table.
+				v, err := unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID)
+				if err == nil && v > 0 {
+					pid, got = v, true
+				}
+			})
+			if got {
+				return pid, true
+			}
 		}
-	})
-	if err != nil {
+	}
+	local, okL := conn.LocalAddr().(*net.TCPAddr)
+	remote, okR := conn.RemoteAddr().(*net.TCPAddr)
+	if !okL || !okR {
 		return 0, false
 	}
-	return pid, got
+	// On the accepted side, the client's local endpoint is our remote endpoint;
+	// the client's remote endpoint is our local endpoint.
+	return lookupPID("tcp", remote.IP, uint16(remote.Port), local.IP, uint16(local.Port))
 }
 
 func processInfo(pid int) (string, string) {
@@ -130,9 +137,13 @@ func atoi(s string) int {
 }
 
 func lookupPID(network string, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16) (int, bool) {
+	return lookupRows(lsofRows(network), localIP, localPort, remoteIP, remotePort)
+}
+
+func lookupRows(rows []flowRow, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16) (int, bool) {
 	wantLocal := endpointString(localIP, localPort)
 	wantRemote := endpointString(remoteIP, remotePort)
-	for _, row := range lsofRows(network) {
+	for _, row := range rows {
 		if !strings.EqualFold(row.local, wantLocal) {
 			continue
 		}
