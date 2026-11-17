@@ -421,15 +421,34 @@ jobs:
         with:
           path: artifacts
       - name: Collect packages
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
+          set -euo pipefail
+          version="${TAG#v}"
           mkdir -p out
-          find artifacts -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.AppImage' \) -exec cp {} out/ \;
+          # Every downloadable asset carries the release version in its name,
+          # e.g. netpilot-0.4.0-beta.1-setup.exe. The filename is derived here in
+          # the publish step so the per-platform build jobs stay unchanged.
+          while IFS= read -r -d '' file; do
+            base=$(basename "$file")
+            case "$base" in
+              netpilot-setup.exe)                  name="netpilot-${version}-setup.exe" ;;
+              netpilot-windows-amd64-portable.zip) name="netpilot-${version}-windows-amd64-portable.zip" ;;
+              netpilot-macos-universal.dmg)        name="netpilot-${version}-macos-universal.dmg" ;;
+              netpilot-linux-amd64.AppImage)       name="netpilot-${version}-linux-amd64.AppImage" ;;
+              netpilot-linux-arm64.AppImage)       name="netpilot-${version}-linux-arm64.AppImage" ;;
+              *) echo "::error::Unexpected artifact filename: $base"; exit 1 ;;
+            esac
+            cp "$file" "out/$name"
+          done < <(find artifacts -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.AppImage' \) -print0)
           ls -lh out
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
+          ver="${tag#v}"
           nm_ver=$(tr -d '[:space:]' < internal/netmerge/VERSION || echo "0.3.6")
           notes=$(cat <<EOF
           NetPilot $tag — Multi-Adapter Network Control Center (single-binary NetPilot incl. net-merge engine v${nm_ver}; no separate net-merge binaries).
@@ -440,10 +459,10 @@ jobs:
           - Single-binary NetPilot (GUI + net-merge CLI + tray in one binary; auto-extracts wintun.dll on Windows)
           - Silent Windows execution (no console popups) & minimize-to-tray support across Windows, macOS, and Linux Desktop Environments
 
-          Packages:
-          - Linux: netpilot-linux-amd64.AppImage & netpilot-linux-arm64.AppImage (portable across all Linux desktop environments)
-          - macOS: netpilot-macos-universal.dmg (Intel & Apple Silicon)
-          - Windows: netpilot-setup.exe (installer) & netpilot-windows-amd64-portable.zip
+          Packages (all include version ${ver}):
+          - Linux: netpilot-${ver}-linux-amd64.AppImage & netpilot-${ver}-linux-arm64.AppImage (portable across all Linux desktop environments)
+          - macOS: netpilot-${ver}-macos-universal.dmg (Intel & Apple Silicon)
+          - Windows: netpilot-${ver}-setup.exe (installer) & netpilot-${ver}-windows-amd64-portable.zip
           EOF
           )
 
