@@ -87,10 +87,14 @@ func lsofRows(network string) []flowRow {
 		return tableCache.row
 	}
 	proto := "-iTCP"
+	args := []string{"-nP"}
 	if network == "udp" {
 		proto = "-iUDP"
+		args = append(args, proto, "-F", "pcn")
+	} else {
+		args = append(args, proto, "-sTCP:ESTABLISHED", "-F", "pcn")
 	}
-	out, err := exec.Command("lsof", "-nP", proto, "-sTCP:ESTABLISHED", "-F", "pcn").Output()
+	out, err := exec.Command("lsof", args...).Output()
 	var rows []flowRow
 	if err == nil {
 		pid := 0

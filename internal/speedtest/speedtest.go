@@ -243,18 +243,20 @@ func downloadStream(ctx context.Context, client *http.Client, url string, total 
 	var latencyTotal float64
 	var latencyN int
 	for i := 0; ctx.Err() == nil; i++ {
-		left := atomic.LoadInt64(budget)
-		if left <= 0 {
+		reserved := reserveBudget(budget, 1<<20)
+		if reserved <= 0 {
 			break
 		}
 		start := time.Now()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, withBuster(url, i), nil)
 		if err != nil {
+			atomic.AddInt64(budget, reserved)
 			break
 		}
 		req.Header.Set("Cache-Control", "no-store")
 		resp, err := client.Do(req)
 		if err != nil {
+			atomic.AddInt64(budget, reserved)
 			break
 		}
 		if ctx.Err() == nil {
@@ -263,12 +265,15 @@ func downloadStream(ctx context.Context, client *http.Client, url string, total 
 		}
 		if resp.StatusCode >= 400 {
 			resp.Body.Close()
+			atomic.AddInt64(budget, reserved)
 			break
 		}
-		n, _ := io.Copy(io.Discard, io.LimitReader(resp.Body, left))
+		n, _ := io.Copy(io.Discard, io.LimitReader(resp.Body, reserved))
 		resp.Body.Close()
 		total.Add(n)
-		atomic.AddInt64(budget, -n)
+		// Return unused reserved bytes. The bytes actually received remain
+		// consumed from the shared budget, so concurrent streams cannot exceed it.
+		atomic.AddInt64(budget, reserved-n)
 		if n == 0 {
 			break
 		}
@@ -297,22 +302,26 @@ func (c countingReader) Read(p []byte) (int, error) {
 func uploadStream(ctx context.Context, client *http.Client, url string, budget *int64) int64 {
 	var sent atomic.Int64
 	for ctx.Err() == nil {
-		left := atomic.LoadInt64(budget)
-		if left <= 0 {
+		reserved := reserveBudget(budget, 1<<20)
+		if reserved <= 0 {
 			break
 		}
-		body := io.LimitReader(zeroReader{}, left)
+		body := io.LimitReader(zeroReader{}, reserved)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, withBuster(url, int(sent.Load())), nil)
 		if err != nil {
+			atomic.AddInt64(budget, reserved)
 			break
 		}
 		req.Body = io.NopCloser(countingReader{r: body, n: &sent})
-		req.ContentLength = left
+		req.ContentLength = reserved
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("Cache-Control", "no-store")
 		before := sent.Load()
 		resp, err := client.Do(req)
-		atomic.AddInt64(budget, -(sent.Load() - before))
+		sentNow := sent.Load() - before
+		// Request bodies are fully consumed or the request fails. Release the
+		// unused reservation in either case; consumed bytes remain charged.
+		atomic.AddInt64(budget, reserved-min(reserved, sentNow))
 		if err != nil {
 			break
 		}
@@ -323,6 +332,21 @@ func uploadStream(ctx context.Context, client *http.Client, url string, budget *
 		}
 	}
 	return sent.Load()
+}
+
+// reserveBudget atomically reserves up to maxBytes from a non-negative shared
+// test budget. The caller returns any unused portion after the request completes.
+func reserveBudget(budget *int64, maxBytes int64) int64 {
+	for {
+		remaining := atomic.LoadInt64(budget)
+		if remaining <= 0 {
+			return 0
+		}
+		reservation := min(remaining, maxBytes)
+		if atomic.CompareAndSwapInt64(budget, remaining, remaining-reservation) {
+			return reservation
+		}
+	}
 }
 
 func withBuster(raw string, i int) string {
