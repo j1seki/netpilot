@@ -134,6 +134,8 @@ func (b *Balancer) DialPinnedFor(ctx context.Context, host string, port int, pol
 	}
 	tcp, ok := c.(*net.TCPConn)
 	if !ok {
+		b.S.ReleaseFor(sl, f)
+		c.Close()
 		return nil, &dialError{rep: repFailure, err: errNotTCP}
 	}
 	return &slotConn{

@@ -35,6 +35,82 @@ func TestDecisionExposesFallbackInterface(t *testing.T) {
 	}
 }
 
+func TestDomainPatternPlainNameIsExactAndWildcardUsesLabelBoundary(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	e, err := NewEngine(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		pattern string
+		dest    string
+		want    bool
+	}{
+		{"example.com", "example.com", true},
+		{"example.com", "evil-example.com", false},
+		{"example.com", "notexample.com", false},
+		{"*.example.com", "www.example.com", true},
+		{"*.example.com", "a.b.example.com", true},
+		{"*.example.com", "example.com", false},
+		{"*.example.com", "evil-example.com", false},
+	} {
+		t.Run(tc.pattern+"/"+tc.dest, func(t *testing.T) {
+			if err := database.SaveRule(db.RuleRecord{
+				ID: "domain", DomainPattern: tc.pattern, PreferredInterface: "eth0", Enabled: true, Priority: 1,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.Reload(); err != nil {
+				t.Fatal(err)
+			}
+			got := e.Evaluate("", "", tc.dest, "default").MatchedRuleID != ""
+			if got != tc.want {
+				t.Fatalf("pattern %q matched %q = %v, want %v", tc.pattern, tc.dest, got, tc.want)
+			}
+			if err := database.DeleteRule("domain"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestRecordUsageDoesNotChargeSubstringApplicationNames(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.SaveRule(db.RuleRecord{ID: "chrome", AppName: "chrome", DataQuotaMB: 100, Enabled: true, Priority: 1}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := NewEngine(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RecordUsage("chromedriver", 5<<20, 0)
+	e.RecordUsage("chrome helper", 5<<20, 0)
+	rules, err := database.ListRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || rules[0].DataUsedMB != 0 {
+		t.Fatalf("unrelated apps were charged to chrome quota: %+v", rules)
+	}
+	e.RecordUsage("chrome", 1<<20, 0)
+	rules, err = database.ListRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || rules[0].DataUsedMB < 0.99 || rules[0].DataUsedMB > 1.01 {
+		t.Fatalf("exact app was not charged: %+v", rules)
+	}
+}
+
 func TestRecordUsageAccumulatesOnlyQuotaRules(t *testing.T) {
 	database, err := db.Open(":memory:")
 	if err != nil {
@@ -53,7 +129,7 @@ func TestRecordUsageAccumulatesOnlyQuotaRules(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	e.RecordUsage("game.exe", 6<<20, 0)
+	e.RecordUsage("game", 6<<20, 0)
 	e.RecordUsage("browser", 6<<20, 0)
 
 	rules, err := database.ListRules()
@@ -92,8 +168,8 @@ func TestRecordUsageDrivesQuotaEnforcement(t *testing.T) {
 	if d := e.Evaluate("vpn.exe", "", "example.com", ""); d.QuotaExceeded {
 		t.Fatal("quota should not be exceeded before usage")
 	}
-	e.RecordUsage("vpn.exe", 11<<20, 0)
-	d := e.Evaluate("vpn.exe", "", "example.com", "")
+	e.RecordUsage("vpn", 11<<20, 0)
+	d := e.Evaluate("vpn", "", "example.com", "")
 	if !d.QuotaExceeded {
 		t.Fatalf("quota should be exceeded after 11 MB: %+v", d)
 	}
