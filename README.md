@@ -39,6 +39,8 @@ Grab the latest prebuilt package for your operating system from the **[Releases 
 | **🐧 Linux x86-64** | **`netpilot-0.4.0-linux-amd64.AppImage`** | Portable single-file AppImage for Ubuntu, Debian, Fedora, Arch, Mint, etc. |
 | **🐧 Linux ARM64** | **`netpilot-0.4.0-linux-arm64.AppImage`** | Native aarch64 AppImage for ARM servers, Apple Silicon VMs (OrbStack/UTM), and Raspberry Pi-class devices. |
 
+**Release:** [NetPilot v0.4.0](https://github.com/j1seki/netpilot/releases/tag/v0.4.0)
+
 ### Running the Linux AppImage
 
 Make the AppImage executable and run it directly — no installation required:

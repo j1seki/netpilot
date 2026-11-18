@@ -185,8 +185,6 @@ func TestListReleasesFollowsPagination(t *testing.T) {
 }
 
 func TestStableChannelSeesMigratedBetaAsStable(t *testing.T) {
-	// A migrated v0.4.0 tag may retain GitHub's prerelease marker but must still
-	// be eligible on the stable channel once the tag is the v0.4.0 line.
 	body := `[{"tag_name":"v0.4.0","prerelease":false}]`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
 	defer srv.Close()

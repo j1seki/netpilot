@@ -3,9 +3,9 @@
 What changed in each release. Each version's section becomes its GitHub release notes, so add the
 entry here before pushing a version tag.
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-11-18
 
-This is a minor release and releases the stable update channel.
+This is the first stable release and releases the stable update channel.
 
 ### Added
 
