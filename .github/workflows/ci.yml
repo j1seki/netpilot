@@ -65,7 +65,7 @@ jobs:
         if: runner.os == 'Windows'
         run: go test -v ./tests/windows
       - name: Unit tests
-        run: go test ./internal/...
+        run: go test ./internal/... ./cmd/...
       - name: Build NetPilot (Linux)
         if: runner.os == 'Linux'
         run: go build -o /tmp/netpilot ./cmd/netpilot
