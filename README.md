@@ -30,14 +30,14 @@ Download and upload speeds, idle and loaded latency, and bufferbloat measure lin
 
 ## ⬇️ Downloads & Installation
 
-Grab the latest prebuilt package for your operating system from the **[Releases Page](https://github.com/j1seki/netpilot/releases/latest)**:
+Grab the latest prebuilt package for your operating system from the **[Releases Page](https://github.com/j1seki/netpilot/releases/latest)**. The Latest release is always the newest stable build; prereleases are listed under **[all releases](https://github.com/j1seki/netpilot/releases)**:
 
 | Operating System | Package | Notes |
 | :--- | :--- | :--- |
-| **🪟 Windows (10 / 11)** | **`netpilot-setup.exe`** / **`netpilot-windows-amd64-portable.zip`** | Single-binary NetPilot GUI + net-merge engine (auto-extracts `wintun.dll`). |
-| **🍎 macOS (Universal)** | **`netpilot-macos-universal.dmg`** | Native Universal binary for Apple Silicon (`M1/M2/M3/M4`) & Intel Macs. |
-| **🐧 Linux x86-64** | **`netpilot-linux-amd64.AppImage`** | Portable single-file AppImage for Ubuntu, Debian, Fedora, Arch, Mint, etc. |
-| **🐧 Linux ARM64** | **`netpilot-linux-arm64.AppImage`** | Native aarch64 AppImage for ARM servers, Apple Silicon VMs (OrbStack/UTM), and Raspberry Pi-class devices. |
+| **🪟 Windows (10 / 11)** | **`netpilot-0.4.0-installer.exe`** / **`netpilot-0.4.0-windows-amd64-portable.zip`** | Single-binary NetPilot GUI + net-merge engine (auto-extracts `wintun.dll`). |
+| **🍎 macOS (Universal)** | **`netpilot-0.4.0-macos-universal.dmg`** | Native Universal binary for Apple Silicon (`M1/M2/M3/M4`) & Intel Macs. |
+| **🐧 Linux x86-64** | **`netpilot-0.4.0-linux-amd64.AppImage`** | Portable single-file AppImage for Ubuntu, Debian, Fedora, Arch, Mint, etc. |
+| **🐧 Linux ARM64** | **`netpilot-0.4.0-linux-arm64.AppImage`** | Native aarch64 AppImage for ARM servers, Apple Silicon VMs (OrbStack/UTM), and Raspberry Pi-class devices. |
 
 ### Running the Linux AppImage
 
@@ -57,6 +57,29 @@ chmod +x netpilot-linux-arm64.AppImage
 > - **Ubuntu / Debian / Mint:** `sudo apt update && sudo apt install -y libwebkit2gtk-4.1-0`
 > - **Fedora / RHEL:** `sudo dnf install webkit2gtk4.1`
 > - **Arch Linux:** `sudo pacman -S webkit2gtk-4.1`
+
+### Automatic updates
+
+NetPilot checks GitHub for a newer build on startup and every six hours, and can download, verify and
+install it without leaving the app. Open **Settings → Automatic Updates** (also on the **Connectivity**
+page) and pick a channel:
+
+| Channel | Receives | GitHub meaning |
+| :--- | :--- | :--- |
+| **Stable** | Finished releases only (`v0.3.11`, `v0.4.0`) | Normal releases and the Latest badge |
+| **Beta** | Prereleases and finished releases (`v0.4.0-beta.1`, `v0.4.0`) | GitHub prereleases plus normal releases |
+
+Versions are compared as full semver, so `v0.4.0-beta.10` is newer than `v0.4.0-beta.9` and a stable
+`v0.4.0` supersedes its own betas. New installations follow the channel of the build they came from,
+and the choice is remembered in the per-user configuration directory (`%AppData%\netpilot` on
+Windows, `~/Library/Application Support/netpilot` on macOS, `~/.config/netpilot` on Linux).
+
+Every release publishes a `checksums.txt`; the updater verifies the downloaded package's SHA-256 (or
+GitHub's asset digest when an older release has no checksum file) before installing. One-click
+install is supported by the Windows installer and portable ZIP, the macOS `.app` bundle when it lives
+in a writable location such as `/Applications`, and the Linux AppImage. Other setups get a link to the
+release page instead. Beta builds are always GitHub prereleases, so the **Latest** release and the
+badge on the Releases page stay on the newest stable version.
 
 ---
 

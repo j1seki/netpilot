@@ -6,6 +6,7 @@ import {
   CapabilityReport,
   NetMergeBinaryInfo,
 } from '../api/wails';
+import { UpdatePanel } from '../components/UpdatePanel';
 import {
   Shield,
   Terminal,
@@ -231,6 +232,9 @@ export const Settings: React.FC = () => {
           <span>{successMsg}</span>
         </div>
       )}
+
+      {/* Automatic Updates: stable vs beta channel, checksum-verified install */}
+      <UpdatePanel />
 
       {/* Window & System Tray Behavior Settings */}
       <div className="card" style={{ marginBottom: 0 }}>

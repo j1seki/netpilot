@@ -217,6 +217,9 @@ func main() {
 	}
 
 	// 6. Launch Wails 3 Desktop Application with Cross-Platform System Tray & Close-to-Tray Hook
+	// The updater belongs to the desktop app: CLI test runs and the headless
+	// daemon must not check GitHub or send notifications.
+	go service.updateLoop(context.Background())
 	prepareLinuxTrayEnvironment()
 
 	distFS, err := fs.Sub(frontend.DistFS, "dist")
@@ -237,6 +240,12 @@ func main() {
 		Assets: application.AssetOptions{
 			Handler: assetHandler,
 		},
+	})
+	service.SetUpdateQuitFunc(func() {
+		// Stop the system-wide engine before the helper replaces the binary;
+		// an elevated net-merge process can otherwise keep files locked.
+		_ = service.SetNetMergeMode(false)
+		app.Quit()
 	})
 
 	mainWin := app.Window.NewWithOptions(application.WebviewWindowOptions{

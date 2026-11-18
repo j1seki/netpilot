@@ -564,12 +564,29 @@ export interface ConnectionProfile {
   updatedAt?: string;
 }
 
+export type UpdateChannel = 'stable' | 'beta';
+export type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'restarting' | 'ready' | 'error';
+
 export interface UpdateStatus {
   current: string;
+  channel: UpdateChannel;
+  autoCheck: boolean;
   latest: string;
+  releaseName?: string;
+  prerelease: boolean;
+  publishedAt?: string | null;
   updateAvailable: boolean;
   releasesUrl: string;
-  checkedAt: string;
+  checkedAt?: string | null;
+  state: UpdateState;
+  assetName?: string;
+  assetSize?: number;
+  downloaded?: number;
+  progress?: number;
+  checksumVerified: boolean;
+  installSupported: boolean;
+  installNote?: string;
+  message?: string;
   error?: string;
 }
 
@@ -1018,9 +1035,37 @@ export const api = {
   },
 
   // Updates & notifications
+  async getUpdateStatus(): Promise<UpdateStatus> {
+    const res = await fetchApi<UpdateStatus>('update/status');
+    return requireApi(res, 'update/status');
+  },
+
   async checkForUpdate(): Promise<UpdateStatus> {
     const res = await fetchApi<UpdateStatus>('update/check');
     return requireApi(res, 'update/check');
+  },
+
+  async setUpdateChannel(channel: UpdateChannel): Promise<UpdateStatus> {
+    const res = await fetchApi<UpdateStatus>('update/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel }),
+    });
+    return requireApi(res, 'update/settings');
+  },
+
+  async setAutoUpdateCheck(enabled: boolean): Promise<UpdateStatus> {
+    const res = await fetchApi<UpdateStatus>('update/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoCheck: enabled }),
+    });
+    return requireApi(res, 'update/settings');
+  },
+
+  async installUpdate(): Promise<UpdateStatus> {
+    const res = await fetchApi<UpdateStatus>('update/install', { method: 'POST' });
+    return requireApi(res, 'update/install');
   },
 
   async sendTestNotification(): Promise<void> {

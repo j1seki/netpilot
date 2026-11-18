@@ -7,13 +7,11 @@ import {
   NetMergeConfig,
   NetMergeStatus,
   SpeedtestResult,
-  UpdateStatus,
 } from '../api/wails';
+import { UpdatePanel } from '../components/UpdatePanel';
 import { TTLView } from './TTLView';
 import {
   Bell,
-  CheckCircle2,
-  DownloadCloud,
   Gauge,
   Layers,
   Radio,
@@ -63,9 +61,6 @@ export const ConnectivityView: React.FC<{ initialTTL?: boolean }> = ({ initialTT
 
   const [profileName, setProfileName] = useState<string>('');
   const [profileDesc, setProfileDesc] = useState<string>('');
-
-  const [update, setUpdate] = useState<UpdateStatus | null>(null);
-  const [checkingUpdate, setCheckingUpdate] = useState<boolean>(false);
 
   const load = async () => {
     try {
@@ -229,17 +224,6 @@ export const ConnectivityView: React.FC<{ initialTTL?: boolean }> = ({ initialTT
       setErrorMsg(err?.message || String(err));
     } finally {
       setBusy('');
-    }
-  };
-
-  const checkUpdate = async () => {
-    setCheckingUpdate(true);
-    try {
-      setUpdate(await api.checkForUpdate());
-    } catch (err: any) {
-      setErrorMsg(err?.message || String(err));
-    } finally {
-      setCheckingUpdate(false);
     }
   };
 
@@ -617,53 +601,28 @@ export const ConnectivityView: React.FC<{ initialTTL?: boolean }> = ({ initialTT
         </div>
 
         {/* Updates and notifications */}
-        <div className="card" style={{ marginBottom: 0 }}>
-          <div className="card-title">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Bell size={14} color="#fb923c" />
-              <span>Updates &amp; Notifications</span>
-            </div>
-          </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <UpdatePanel />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-            <button className="btn btn-secondary btn-sm" onClick={checkUpdate} disabled={checkingUpdate}>
-              <DownloadCloud size={12} />
-              <span>{checkingUpdate ? 'Checking…' : 'Check for updates'}</span>
-            </button>
+          <div className="card" style={{ marginBottom: 0 }}>
+            <div className="card-title">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Bell size={14} color="#fb923c" />
+                <span>Notifications</span>
+              </div>
+            </div>
+
             <button className="btn btn-secondary btn-sm" onClick={testNotification} disabled={busy === 'notify'}>
               <Bell size={12} />
               <span>Test notification</span>
             </button>
-          </div>
 
-          {update && (
-            <div style={{ fontSize: '11.5px', lineHeight: 1.6 }}>
-              {update.error ? (
-                <span style={{ color: '#fb7185' }}>Update check failed: {update.error}</span>
-              ) : update.updateAvailable ? (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '7px', color: '#facc15' }}>
-                  <CheckCircle2 size={14} style={{ marginTop: '2px' }} />
-                  <span>
-                    NetPilot <span className="font-mono">{update.latest}</span> is available (you have{' '}
-                    <span className="font-mono">{update.current}</span>).{' '}
-                    <a href={update.releasesUrl} target="_blank" rel="noreferrer" style={{ color: '#38bdf8' }}>Open releases</a>
-                  </span>
-                </div>
-              ) : (
-                <span style={{ color: '#10b981' }}>
-                  You are on the latest release (<span className="font-mono">{update.current}</span>).
-                </span>
-              )}
-              <div style={{ marginTop: '4px', fontSize: '10px', color: '#71717a' }}>
-                Checked {new Date(update.checkedAt).toLocaleString()}
-              </div>
+            <div style={{ marginTop: '12px', fontSize: '10.5px', color: '#8b8b93', lineHeight: 1.55 }}>
+              NetPilot notifies you when the merged connection starts or stops, when the active adapter
+              changes, when a link flaps, when an adapter reaches its data quota, and when a newer release
+              is available on your update channel. Notifications use the native desktop facility and are
+              best-effort.
             </div>
-          )}
-
-          <div style={{ marginTop: '12px', fontSize: '10.5px', color: '#8b8b93', lineHeight: 1.55 }}>
-            NetPilot notifies you when the merged connection starts or stops, when the active adapter
-            changes, when a link flaps, and when an adapter reaches its data quota. Notifications use
-            the native desktop facility and are best-effort.
           </div>
         </div>
       </div>

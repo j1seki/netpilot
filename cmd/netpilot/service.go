@@ -83,6 +83,16 @@ type NetPilotService struct {
 	hotspotMu    sync.Mutex
 	hotspot      hotspotStatus
 
+	updateMu        sync.Mutex
+	updateCheckMu   sync.Mutex
+	updateInstallMu sync.Mutex
+	updateDir       string
+	updateSettings  update.Settings
+	updateStatus    UpdateStatus
+	updateRelease   *update.Release
+	updateWake      chan struct{}
+	updateQuit      func()
+
 	monitorOnce sync.Once
 	quotaMu     sync.Mutex
 	quotaSeen   map[string]uint64
@@ -119,16 +129,6 @@ type SpeedtestResult struct {
 	Error    string  `json:"error,omitempty"`
 }
 
-// UpdateStatus is the result of checking GitHub for a newer NetPilot release.
-type UpdateStatus struct {
-	Current         string    `json:"current"`
-	Latest          string    `json:"latest"`
-	UpdateAvailable bool      `json:"updateAvailable"`
-	ReleasesURL     string    `json:"releasesUrl"`
-	CheckedAt       time.Time `json:"checkedAt"`
-	Error           string    `json:"error,omitempty"`
-}
-
 // NewNetPilotService constructs the centralized backend service.
 func NewNetPilotService(
 	database *db.Database,
@@ -163,7 +163,9 @@ func NewNetPilotService(
 		latencyCache: make(map[string]cachedLatency),
 		quotaSeen:    make(map[string]uint64),
 		quotaLimit:   make(map[string]float64),
+		updateWake:   make(chan struct{}, 1),
 	}
+	s.initUpdates()
 	dir := state.DefaultDir()
 	_ = os.MkdirAll(dir, 0o755)
 	if store, err := profiles.Open(dir); err == nil {
@@ -1790,25 +1792,8 @@ func (s *NetPilotService) ApplyProfile(ctx context.Context, id string) error {
 }
 
 // -----------------------------------------
-// Update check and notifications
+// Notifications
 // -----------------------------------------
-
-// CheckForUpdate asks GitHub for the newest NetPilot release.
-func (s *NetPilotService) CheckForUpdate(ctx context.Context) UpdateStatus {
-	st := UpdateStatus{
-		Current:     branding.AppVersion,
-		ReleasesURL: update.ReleasesURL,
-		CheckedAt:   time.Now().UTC(),
-	}
-	latest, err := update.Latest(ctx)
-	if err != nil {
-		st.Error = err.Error()
-		return st
-	}
-	st.Latest = latest
-	st.UpdateAvailable = update.Newer(branding.AppVersion, latest)
-	return st
-}
 
 // SendTestNotification shows a native notification so the user can confirm permissions.
 func (s *NetPilotService) SendTestNotification() error {
@@ -2152,8 +2137,52 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
 
+	case path == "update/status":
+		_ = json.NewEncoder(w).Encode(s.GetUpdateStatus())
+
+	case path == "update/settings":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+			return
+		}
+		var body struct {
+			Channel   *string `json:"channel"`
+			AutoCheck *bool   `json:"autoCheck"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Channel != nil {
+			if _, err := s.SetUpdateChannel(*body.Channel); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+		}
+		if body.AutoCheck != nil {
+			if _, err := s.SetAutoUpdateCheck(*body.AutoCheck); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+		}
+		_ = json.NewEncoder(w).Encode(s.GetUpdateStatus())
+
 	case path == "update/check":
 		_ = json.NewEncoder(w).Encode(s.CheckForUpdate(r.Context()))
+
+	case path == "update/install":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+			return
+		}
+		st, err := s.InstallUpdate(r.Context())
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error(), "status": st})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(st)
 
 	case path == "notifications/test":
 		if err := s.SendTestNotification(); err != nil {
