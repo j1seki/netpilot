@@ -78,13 +78,19 @@ jobs:
           # Build net-merge CLI only if needed for wintun source; do NOT ship or embed separate net-merge binaries.
 
           # Fetch the Wintun package for the exact net-merge version vendored in
-          # internal/netmerge/VERSION. Using "latest" here made releases depend on
-          # whatever upstream published that day; a new or broken upstream release
-          # could silently change the runtime shipped by NetPilot.
+          # internal/netmerge/VERSION. If that upstream release is missing, use the
+          # latest available portable package rather than failing the NetPilot release.
           $nmVersion = (Get-Content internal/netmerge/VERSION -Raw).Trim()
-          $dl = Join-Path $env:TEMP "nm-win-$nmVersion"
+          $wintunVersion = "v$nmVersion"
+          gh release view "$wintunVersion" --repo net-merge/net-merge --silent >$null 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            $wintunVersion = 'v0.3.7'
+            Write-Host "net-merge $nmVersion has no portable package; using $wintunVersion"
+          }
+          $wintunVersionNumber = $wintunVersion.TrimStart('v')
+          $dl = Join-Path $env:TEMP "nm-win-$wintunVersionNumber"
           New-Item -ItemType Directory -Force $dl | Out-Null
-          gh release download "v$nmVersion" --repo net-merge/net-merge --pattern 'net-merge-portable.zip' --dir $dl --clobber
+          gh release download "$wintunVersion" --repo net-merge/net-merge --pattern 'net-merge-portable.zip' --dir $dl --clobber
           Expand-Archive -Path "$dl/net-merge-portable.zip" -DestinationPath "$dl/extracted" -Force
           Copy-Item "$dl/extracted/wintun.dll" dist/wintun.dll -Force
           if (Test-Path "$dl/extracted/wintun-LICENSE.txt") {
@@ -97,7 +103,7 @@ jobs:
           # Build NetPilot single binary (-H=windowsgui so no console window ever pops up; netpilot run/tray/etc. are subcommands of this binary)
           go build -trimpath -ldflags "-s -w -H=windowsgui -X netpilot/internal/branding.AppVersion=$version" -o dist/netpilot.exe ./cmd/netpilot
 
-          Write-Host "Embedded net-merge version for this build: $nmVersion"
+          Write-Host "Embedded net-merge version for this build: $nmVersion (Wintun from $wintunVersionNumber)"
       - name: Build Windows installer (.exe) and Portable ZIP
         shell: pwsh
         run: |
