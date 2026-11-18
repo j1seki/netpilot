@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -40,7 +41,7 @@ func main() {
 	headless := flag.Bool("headless", false, "run headless without desktop window")
 	runScenarios := flag.Bool("run-scenarios", false, "execute all simulation scenarios and exit")
 	runSuite := flag.String("run-suite", "", "execute platform test suite (common, linux, windows, macos, scenarios) and exit")
-	reqMode := flag.String("mode", "", "initial execution mode (simulation, dry-run, live)")
+	reqMode := flag.String("mode", "", "initial execution mode (dry-run or live); use -run-scenarios for simulations")
 	dbPath := flag.String("db", "", "path to SQLite database (default: ~/.config/netpilot/netpilot.db)")
 	showConsole := flag.Bool("console", false, "Show Windows console/terminal window (hidden by default)")
 	startHidden := flag.Bool("start-hidden", false, "start with the main window hidden (tray only)")
@@ -70,7 +71,11 @@ func main() {
 	// 3. Mode Controller
 	modeCtrl := mode.NewController(capReport)
 	if *reqMode != "" {
-		_, _ = modeCtrl.SetMode(mode.ExecutionMode(stringsToUpper(*reqMode)), false)
+		target := strings.ReplaceAll(strings.ToUpper(*reqMode), "-", "_")
+		if _, err := modeCtrl.SetMode(mode.ExecutionMode(target), false); err != nil {
+			fmt.Fprintf(os.Stderr, "invalid -mode %q: use dry-run or live (use -run-scenarios for simulations)\n", *reqMode)
+			os.Exit(2)
+		}
 	}
 
 	// 4. SQLite Database
@@ -507,14 +512,4 @@ func main() {
 		fmt.Fprintf(os.Stderr, "application run error: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func stringsToUpper(s string) string {
-	b := []byte(s)
-	for i := range b {
-		if b[i] >= 'a' && b[i] <= 'z' {
-			b[i] -= 'a' - 'A'
-		}
-	}
-	return string(b)
 }

@@ -2046,6 +2046,21 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
+	// Action routes must never run just because a client navigated to their URL.
+	switch path {
+	case "hotspot/apply", "hotspot/revert", "hotspot/auto", "speedtest/run", "profiles/apply",
+		"notifications/test", "netmerge/toggle", "netmerge/autostart", "netmerge/limit",
+		"netmerge/cleanup", "netmerge/socks", "netmerge/routing-mode", "system/console",
+		"ttl/apply", "ttl/restore", "tools/ping", "tools/dns", "tools/port", "tools/wol",
+		"usage/reset", "config/import":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "use POST for this action"})
+			return
+		}
+	}
+
 	switch {
 	case path == "branding":
 		_ = json.NewEncoder(w).Encode(s.GetBrandingInfo())
@@ -2062,7 +2077,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			DryRun   bool     `json:"dryRun"`
 			Adapters []string `json:"adapters"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		st, err := s.ApplyHotspotTo(r.Context(), body.Profile, body.DryRun, body.Adapters)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -2084,12 +2101,16 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Enabled bool `json:"enabled"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		_ = json.NewEncoder(w).Encode(s.SetHotspotAutoApply(body.Enabled))
 
 	case path == "speedtest/run":
 		var req SpeedtestRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if !decodeAPIObject(w, r, &req) {
+			return
+		}
 		_ = json.NewEncoder(w).Encode(s.RunSpeedtest(r.Context(), req))
 
 	case path == "profiles":
@@ -2103,7 +2124,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 		case http.MethodPost:
 			var p profiles.Profile
-			_ = json.NewDecoder(r.Body).Decode(&p)
+			if !decodeAPIObject(w, r, &p) {
+				return
+			}
 			saved, err := s.SaveProfile(p)
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
@@ -2119,7 +2142,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ID string `json:"id"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		if err := s.ApplyProfile(r.Context(), body.ID); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2144,7 +2169,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Mode      string `json:"mode"`
 				ForceLive bool   `json:"forceLive"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			if !decodeAPIObject(w, r, &body) {
+				return
+			}
 			st, err := s.SetExecutionMode(body.Mode, body.ForceLive)
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
@@ -2165,7 +2192,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "rules":
 		if r.Method == http.MethodPost {
 			var rule db.RuleRecord
-			_ = json.NewDecoder(r.Body).Decode(&rule)
+			if !decodeAPIObject(w, r, &rule) {
+				return
+			}
 			if err := s.SaveRule(rule); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2174,7 +2203,11 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 		} else if r.Method == http.MethodDelete {
 			id := r.URL.Query().Get("id")
-			_ = s.DeleteRule(id)
+			if err := s.DeleteRule(id); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 		} else {
 			rules, err := s.ListRules()
@@ -2234,7 +2267,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "adapter-caps":
 		if r.Method == http.MethodPost {
 			var capRec db.AdapterCapRecord
-			_ = json.NewDecoder(r.Body).Decode(&capRec)
+			if !decodeAPIObject(w, r, &capRec) {
+				return
+			}
 			if err := s.SaveAdapterCap(capRec); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2293,7 +2328,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			On bool `json:"on"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		if err := s.SetNetMergeMode(body.On); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2305,7 +2342,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Enabled bool `json:"enabled"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		if err := s.SetNetMergeAutostart(body.Enabled); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2318,7 +2357,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Adapter string  `json:"adapter"`
 			Mbps    float64 `json:"mbps"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		if err := s.SetNetMergeLimit(body.Adapter, body.Mbps); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2339,7 +2380,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Action  string `json:"action"` // "start" or "stop"
 			Address string `json:"address"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		if body.Action == "start" {
 			if err := s.StartNetMergeSocks(body.Address); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
@@ -2354,7 +2397,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "netmerge/config":
 		if r.Method == http.MethodPost {
 			var cfg netmerge.Config
-			_ = json.NewDecoder(r.Body).Decode(&cfg)
+			if !decodeAPIObject(w, r, &cfg) {
+				return
+			}
 			if err := s.SaveNetMergeConfig(cfg); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2375,7 +2420,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Source string `json:"source"`
 				Path   string `json:"path"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			if !decodeAPIObject(w, r, &body) {
+				return
+			}
 			var info netmerge.BinaryInfo
 			var err error
 			if body.Source != "" {
@@ -2408,7 +2455,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Primary   string `json:"primary"`
 			Secondary string `json:"secondary"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		if err := s.SetNetMergeRoutingMode(body.Mode, body.Primary, body.Secondary); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2421,7 +2470,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var body struct {
 				Action string `json:"action"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			if !decodeAPIObject(w, r, &body) {
+				return
+			}
 			if err := s.SetCloseAction(body.Action); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2436,7 +2487,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Show bool `json:"show"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		_ = s.SetConsoleWindow(body.Show)
 		_ = json.NewEncoder(w).Encode(map[string]bool{"visible": body.Show})
 
@@ -2457,7 +2510,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Ifaces   []string `json:"ifaces"`
 			DryRun   bool     `json:"dryRun"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		out, err := s.ApplyTTL(r.Context(), body.BumpIPv4, body.BumpIPv6, body.Policy, body.Ifaces, body.DryRun)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -2470,7 +2525,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			DryRun bool `json:"dryRun"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		out, err := s.RestoreTTL(r.Context(), body.DryRun)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -2492,7 +2549,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Count     int    `json:"count"`
 			TimeoutMs int    `json:"timeoutMs"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		_ = json.NewEncoder(w).Encode(s.PingHost(body.Host, body.Count, body.TimeoutMs))
 
 	case path == "tools/dns":
@@ -2500,7 +2559,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Host       string `json:"host"`
 			RecordType string `json:"type"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		_ = json.NewEncoder(w).Encode(s.LookupDNS(body.Host, body.RecordType))
 
 	case path == "tools/port":
@@ -2509,7 +2570,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Port      int    `json:"port"`
 			TimeoutMs int    `json:"timeoutMs"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		_ = json.NewEncoder(w).Encode(s.CheckTCPPort(body.Host, body.Port, body.TimeoutMs))
 
 	case path == "tools/wol":
@@ -2518,7 +2581,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Broadcast string `json:"broadcast"`
 			Port      int    `json:"port"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		if err := s.SendWakeOnLAN(body.MAC, body.Broadcast, body.Port); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2533,7 +2598,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				InterfaceName string `json:"interfaceName"`
 				Label         string `json:"label"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			if !decodeAPIObject(w, r, &body) {
+				return
+			}
 			if err := s.SaveAdapterLabel(body.InterfaceName, body.Label); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2563,7 +2630,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Scope     string `json:"scope"`
 			Interface string `json:"interface"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
 		res, err := s.ResetDataUsage(body.Scope, body.Interface)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -2585,9 +2654,7 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case path == "config/import":
 		var bundle ConfigBundle
-		if err := json.NewDecoder(r.Body).Decode(&bundle); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		if !decodeAPIObject(w, r, &bundle) {
 			return
 		}
 		res, err := s.ImportConfigBundle(bundle)
