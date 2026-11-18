@@ -121,6 +121,6 @@ func (b *Balancer) handleSocks5(c net.Conn) {
 	}
 	c.SetDeadline(time.Time{})
 	socksReply(c, repOK)
-	in, out := Relay(c, up, sl, fam, b.S)
+	in, out := RelayLimited(c, up, sl, fam, b.S, policy.BandwidthLimitMbps)
 	b.reportUsage(policy.AppName, in, out)
 }

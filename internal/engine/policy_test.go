@@ -3,7 +3,12 @@ package engine
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"testing"
+	"time"
+
+	"netpilot/internal/nics"
 )
 
 type fakeResolver struct {
@@ -54,5 +59,48 @@ func TestFlowLimiterIsOptional(t *testing.T) {
 	lim := newFlowLimiter(10)
 	if lim == nil || lim.in == nil || lim.out == nil {
 		t.Fatal("cap should install both directions")
+	}
+}
+
+func TestDialPinnedForWithBandwidthCapKeepsTCPConn(t *testing.T) {
+	target, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	go func() {
+		c, err := target.Accept()
+		if err == nil {
+			defer c.Close()
+			_, _ = io.Copy(c, c)
+		}
+	}()
+
+	loopback, err := net.InterfaceByName("lo")
+	if err != nil {
+		t.Skipf("loopback interface lookup unavailable: %v", err)
+	}
+	port := target.Addr().(*net.TCPAddr).Port
+	sched := NewScheduler([]nics.Nic{{Name: "loopback", Index: loopback.Index, IP: net.ParseIP("127.0.0.1"), Weight: 1}})
+	b := NewBalancer(sched)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	conn, err := b.DialPinnedFor(ctx, "127.0.0.1", port, FlowPolicy{BandwidthLimitMbps: 10})
+	if err != nil {
+		t.Fatalf("DialPinnedFor with a per-app cap: %v", err)
+	}
+	sc, ok := conn.(*slotConn)
+	if !ok {
+		t.Fatalf("connection type = %T, want *slotConn", conn)
+	}
+	if sc.limiter == nil {
+		t.Fatal("per-app bandwidth limiter was not installed")
+	}
+	if sc.sl.Name != "loopback" {
+		t.Fatalf("slot = %q", sc.sl.Name)
+	}
+	conn.Close()
+	if got := sched.Snapshot()[0].Active; got != 0 {
+		t.Fatalf("slot leaked after Close: active=%d", got)
 	}
 }

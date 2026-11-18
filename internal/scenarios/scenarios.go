@@ -437,7 +437,7 @@ func (e *Engine) registerCatalog() {
 			})
 			_ = ctx.RuleEngine.Reload()
 
-			dec := ctx.RuleEngine.Evaluate("GameClient", "/bin/game", "game.server", "eth0")
+			dec := ctx.RuleEngine.Evaluate("game", "/bin/game", "game.server", "eth0")
 			return []Assertion{
 				{
 					Name:     "Higher priority rule selected",

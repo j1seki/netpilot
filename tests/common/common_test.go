@@ -70,7 +70,7 @@ func TestPolicyValidationAndPrecedence(t *testing.T) {
 		t.Fatalf("reload rules: %v", err)
 	}
 
-	dec := eng.Evaluate("StreamingApp", "/usr/bin/stream", "stream.tv", "default0")
+	dec := eng.Evaluate("stream", "/usr/bin/stream", "stream.tv", "default0")
 	if dec.MatchedRuleID != "high" {
 		t.Fatalf("expected high priority rule matched, got: %s", dec.MatchedRuleID)
 	}

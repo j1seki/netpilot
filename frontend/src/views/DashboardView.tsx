@@ -214,11 +214,9 @@ export const DashboardView: React.FC = () => {
   };
 
   const getAppRule = (appName: string): RuleRecord | undefined => {
-    return rules.find(
-      r =>
-        r.appName.toLowerCase() === appName.toLowerCase() ||
-        appName.toLowerCase().includes(r.appName.toLowerCase())
-    );
+    const basename = (name: string) => name.trim().toLowerCase().split(/[\\/]/).pop()?.replace(/\.exe$/, '');
+    const name = basename(appName);
+    return name ? rules.find(r => basename(r.appName) === name) : undefined;
   };
 
   const formatRouteSummary = (rule?: RuleRecord): string => {

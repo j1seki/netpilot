@@ -182,7 +182,10 @@ func (b *Balancer) DialTCPFor(ctx context.Context, host string, port int, policy
 			}
 			conn, err := d.DialContext(ctx, network, net.JoinHostPort(host, strconv.Itoa(port)))
 			if err == nil {
-				return maybeLimited(conn, policy.BandwidthLimitMbps), sl, f, nil
+				// Keep the concrete *net.TCPConn here. DialPinnedFor wraps it in
+				// slotConn, which applies the per-app limiter and releases the
+				// scheduler slot. The SOCKS relay wraps its upstream separately.
+				return conn, sl, f, nil
 			}
 			b.S.ReleaseFor(sl, f)
 			c := classify(err)
@@ -213,7 +216,15 @@ var bufPool = sync.Pool{New: func() any { b := make([]byte, 128<<10); return &b 
 // protocols that shut down their write side still receive the reply. It returns bytes
 // received from the peer (in) and bytes sent to it (out) for per-application accounting.
 func Relay(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler) (in, out int64) {
+	return RelayLimited(client, upstream, sl, f, s, 0)
+}
+
+// RelayLimited relays a SOCKS flow while applying an optional per-flow cap in
+// addition to the adapter-wide cap on its Slot. The limiter is shared by both
+// relay directions and remains attached to the concrete upstream TCPConn.
+func RelayLimited(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler, limitMbps float64) (in, out int64) {
 	activity := s.track(sl, f)
+	flowLimit := newFlowLimiter(limitMbps)
 	var wg sync.WaitGroup
 	var once sync.Once
 	release := func() {
@@ -225,7 +236,7 @@ func Relay(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler) (in, out
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		n, err := pump(upstream, client, &sl.bytesOut[f], sl, false, activity)
+		n, err := pumpLimited(upstream, client, &sl.bytesOut[f], sl, false, activity, flowLimit)
 		out = n
 		if isLinkDown(err) {
 			s.Fail(sl, f, relayFailCooldown)
@@ -233,7 +244,7 @@ func Relay(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler) (in, out
 		release()
 	}()
 	var err error
-	in, err = pump(client, upstream, &sl.bytesIn[f], sl, true, activity)
+	in, err = pumpLimited(client, upstream, &sl.bytesIn[f], sl, true, activity, flowLimit)
 	if isLinkDown(err) {
 		s.Fail(sl, f, relayFailCooldown)
 	}
@@ -249,6 +260,10 @@ func isLinkDown(err error) bool {
 }
 
 func pump(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activity *flowActivity) (int64, error) {
+	return pumpLimited(dst, src, counter, sl, down, activity, nil)
+}
+
+func pumpLimited(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activity *flowActivity, flowLimit *flowLimiter) (int64, error) {
 	bp := bufPool.Get().(*[]byte)
 	defer bufPool.Put(bp)
 	buf := *bp
@@ -259,6 +274,13 @@ func pump(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activit
 			total += int64(n)
 			activity.bytes.Add(int64(n))
 			counter.Add(int64(n))
+			if flowLimit != nil {
+				if down {
+					flowLimit.read(n)
+				} else {
+					flowLimit.write(n)
+				}
+			}
 			if _, werr := sl.writePaced(dst, buf[:n], down); werr != nil {
 				dst.Close()
 				src.Close()

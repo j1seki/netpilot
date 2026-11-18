@@ -237,7 +237,7 @@ func (r *Runner) runCommonCases(capRep capability.Report) []CaseResult {
 				_ = memDB.SaveRule(db.RuleRecord{ID: "low", AppName: "Stream", PreferredInterface: "eth0", Priority: 10, Enabled: true})
 				_ = memDB.SaveRule(db.RuleRecord{ID: "high", AppName: "Stream", PreferredInterface: "wlan0", Priority: 50, Enabled: true})
 				_ = eng.Reload()
-				dec := eng.Evaluate("StreamingApp", "/usr/bin/stream", "stream.tv", "default0")
+				dec := eng.Evaluate("stream", "/usr/bin/stream", "stream.tv", "default0")
 				if dec.MatchedRuleID != "high" || dec.SelectedInterface != "wlan0" {
 					return StatusFail, "precedence evaluation mismatch"
 				}

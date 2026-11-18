@@ -5,6 +5,7 @@ package rules
 import (
 	"errors"
 	"fmt"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -88,6 +89,26 @@ func (e *Engine) UpdateNICHealth(health map[string]bool) {
 	}
 }
 
+// appNameMatches reports whether an observed application identity belongs to a
+// rule's AppName. A raw substring match made "chromedriver" and "chrome helper"
+// count against a "chrome" rule, inflating its quota and throttling unrelated
+// traffic. Compare executable basenames, ignoring case and a Windows .exe suffix.
+func appNameMatches(observed, ruleName string) bool {
+	observed = strings.ToLower(strings.TrimSpace(observed))
+	ruleName = strings.ToLower(strings.TrimSpace(ruleName))
+	if ruleName == "" {
+		return false
+	}
+	// Match the executable basename, not an arbitrary substring: "chrome" must
+	// not capture chromedriver or chrome helper. Windows process names commonly
+	// carry .exe; compare with and without that extension.
+	base := strings.ToLower(path.Base(strings.ReplaceAll(observed, `\`, "/")))
+	base = strings.TrimSuffix(base, ".exe")
+	ruleBase := strings.ToLower(path.Base(strings.ReplaceAll(ruleName, `\`, "/")))
+	ruleBase = strings.TrimSuffix(ruleBase, ".exe")
+	return base == ruleBase
+}
+
 // RecordUsage adds a finished flow's byte counts to every matching rule that has a data
 // quota. Rules without a quota are skipped so high-frequency flow accounting never turns
 // into a database write per connection.
@@ -97,7 +118,6 @@ func (e *Engine) RecordUsage(appName string, bytesIn, bytesOut int64) {
 		return
 	}
 	mb := float64(total) / (1024 * 1024)
-	norm := strings.ToLower(strings.TrimSpace(appName))
 
 	e.mu.Lock()
 	var changed []db.RuleRecord
@@ -107,7 +127,7 @@ func (e *Engine) RecordUsage(appName string, bytesIn, bytesOut int64) {
 			continue
 		}
 		ruleName := strings.ToLower(r.AppName)
-		if norm != ruleName && !strings.Contains(norm, ruleName) {
+		if !appNameMatches(appName, ruleName) {
 			continue
 		}
 		r.DataUsedMB += mb
@@ -155,7 +175,6 @@ func (e *Engine) Evaluate(appName, appPath, destination string, defaultInterface
 		EvaluatedAt:       time.Now(),
 	}
 
-	normApp := strings.ToLower(strings.TrimSpace(appName))
 	normPath := strings.ToLower(strings.TrimSpace(appPath))
 	normDest := strings.ToLower(strings.TrimSpace(destination))
 
@@ -164,15 +183,8 @@ func (e *Engine) Evaluate(appName, appPath, destination string, defaultInterface
 			continue
 		}
 
-		matched := false
-
 		// Check app name match
-		if r.AppName != "" {
-			ruleName := strings.ToLower(r.AppName)
-			if normApp == ruleName || strings.Contains(normApp, ruleName) {
-				matched = true
-			}
-		}
+		matched := appNameMatches(appName, r.AppName)
 
 		// Check app path match (supports glob)
 		if !matched && r.AppPath != "" {
@@ -182,11 +194,23 @@ func (e *Engine) Evaluate(appName, appPath, destination string, defaultInterface
 			}
 		}
 
-		// Check domain pattern match
+		// Check domain pattern match. A wildcard suffix must match on a label
+		// boundary, and a plain pattern is an exact match only: matching any
+		// destination that merely ends in the pattern made "example.com" match
+		// "evil-example.com" and routed/quota-attributed unrelated traffic.
 		if !matched && r.DomainPattern != "" {
-			pattern := strings.ToLower(r.DomainPattern)
-			if pattern == "*" || pattern == normDest || strings.HasSuffix(normDest, strings.TrimPrefix(pattern, "*")) {
+			pattern := strings.ToLower(strings.TrimSpace(r.DomainPattern))
+			if pattern == "*" {
 				matched = true
+			} else if pattern == normDest {
+				matched = true
+			} else if strings.HasPrefix(pattern, "*.") {
+				suffix := strings.TrimPrefix(pattern, "*")
+				matched = strings.HasSuffix(normDest, suffix) && len(normDest) > len(suffix)
+			} else if strings.HasPrefix(pattern, "*") {
+				// A bare "*foo" keeps the legacy suffix behaviour (e.g. "*@work" or
+				// "*internal"), but never matches the whole destination by accident.
+				matched = strings.HasSuffix(normDest, strings.TrimPrefix(pattern, "*"))
 			}
 		}
 
