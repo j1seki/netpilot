@@ -71,7 +71,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $version = '${{ inputs.tag || github.ref_name }}'.TrimStart('v')
+          $version = 'v0.4.0'.TrimStart('v')
           New-Item -ItemType Directory -Force dist | Out-Null
           New-Item -ItemType Directory -Force internal/netmerge/embedded/bin | Out-Null
           # True single-binary: netpilot itself implements all net-merge subcommands (see cmd/netpilot/subcommands.go).
@@ -97,11 +97,11 @@ jobs:
           # Build NetPilot single binary (-H=windowsgui so no console window ever pops up; netpilot run/tray/etc. are subcommands of this binary)
           go build -trimpath -ldflags "-s -w -H=windowsgui -X netpilot/internal/branding.AppVersion=$version" -o dist/netpilot.exe ./cmd/netpilot
 
-          Write-Host "Embedded net-merge version for this build: $wantEngine"
+          Write-Host "Embedded net-merge version for this build: $nmVersion"
       - name: Build Windows installer (.exe) and Portable ZIP
         shell: pwsh
         run: |
-          $version = '${{ inputs.tag || github.ref_name }}'.TrimStart('v')
+          $version = 'v0.4.0'.TrimStart('v')
           # Inno Setup's VersionInfoVersion must be numeric X.Y.Z.W. Derive it from
           # the leading version numbers, e.g. 0.4.0-beta.1 -> 0.4.0.0.
           $numericVersion = '0.0.0.0'
@@ -114,11 +114,12 @@ jobs:
           & $iscc "/DVersion=$version" "/DNumericVersion=$numericVersion" installer/netpilot.iss
           Compress-Archive -Path dist/netpilot.exe, dist/wintun.dll, dist/netpilot.ico, LICENSE, THIRD-PARTY-NOTICES.md, README.md -DestinationPath dist/netpilot-windows-amd64-portable.zip -Force
           Get-ChildItem dist/*.exe, dist/*.zip
+          Rename-Item -Path dist/netpilot-installer.exe -NewName dist/netpilot-0.4.0-installer.exe
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
-            dist/netpilot-setup.exe
+            dist/netpilot-installer.exe
             dist/netpilot-windows-amd64-portable.zip
           if-no-files-found: error
 
@@ -428,12 +429,12 @@ jobs:
           version="${TAG#v}"
           mkdir -p out
           # Every downloadable asset carries the release version in its name,
-          # e.g. netpilot-0.4.0-beta.1-setup.exe. The filename is derived here in
+          # e.g. netpilot-0.4.0-installer.exe. The filename is derived here in
           # the publish step so the per-platform build jobs stay unchanged.
           while IFS= read -r -d '' file; do
             base=$(basename "$file")
             case "$base" in
-              netpilot-setup.exe)                  name="netpilot-${version}-setup.exe" ;;
+              netpilot-installer.exe)                  name="netpilot-${version}-installer.exe" ;;
               netpilot-windows-amd64-portable.zip) name="netpilot-${version}-windows-amd64-portable.zip" ;;
               netpilot-macos-universal.dmg)        name="netpilot-${version}-macos-universal.dmg" ;;
               netpilot-linux-amd64.AppImage)       name="netpilot-${version}-linux-amd64.AppImage" ;;
@@ -442,16 +443,73 @@ jobs:
             esac
             cp "$file" "out/$name"
           done < <(find artifacts -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.AppImage' \) -print0)
+          # Integrity metadata for the in-app updater (and for manual checks).
+          # The filenames here include the version, so this file is stable across
+          # releases and can be matched asset-by-asset by NetPilot.
+          (cd out && rm -f checksums.txt && sha256sum ./* > checksums.txt)
           ls -lh out
+      - name: Determine release channel
+        id: channel
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="$TAG"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tags must be vX.Y.Z (stable) or vX.Y.Z-<prerelease> (beta); got '$tag'"
+            exit 1
+          fi
+          if [[ "$tag" == *-* ]]; then
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          VERSION: v0.4.0
         run: |
-          tag="${{ inputs.tag || github.ref_name }}"
-          ver="${tag#v}"
+          tag="$VERSION"
+          version="${tag#v}"
           nm_ver=$(tr -d '[:space:]' < internal/netmerge/VERSION || echo "0.3.6")
+          if [ "$nm_ver" != "$version" ]; then
+            echo "::error::NetPilot version $version does not match net-merge VERSION $nm_ver"
+            exit 1
+          fi
+
+          # GitHub has no separate "channel" field: the prerelease flag is the
+          # channel marker. Stable releases are normal releases; beta releases
+          # are prereleases and must never take Latest.
+          prerelease=false
+          channel_label="Stable"
+          channel_note="offered to NetPilot's Stable and Beta update channels."
+          if [ "$CHANNEL" = "beta" ]; then
+            prerelease=true
+            channel_label="Beta"
+            channel_note="offered to NetPilot's Beta update channel. This is a GitHub prerelease and never takes the Latest badge."
+          fi
+
+          # GitHub's automatic Latest selection is based on creation date, not
+          # semver, so rebuilding an old backport would otherwise take the badge
+          # from a newer stable release. Promote only a tag that is at least as
+          # new as the current Latest (re-running the current release keeps it).
+          make_latest=false
+          if [ "$prerelease" = "false" ]; then
+            make_latest=true
+            current=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
+            if [ -n "$current" ] && [ "$current" != "$tag" ]; then
+              highest=$(printf '%s\n%s\n' "${current#v}" "$ver" | sort -V | tail -n1)
+              if [ "$highest" != "$ver" ]; then
+                make_latest=false
+              fi
+            fi
+          fi
+
           notes=$(cat <<EOF
           NetPilot $tag — Multi-Adapter Network Control Center (single-binary NetPilot incl. net-merge engine v${nm_ver}; no separate net-merge binaries).
+
+          Release channel: **${channel_label}** — ${channel_note}
 
           Highlights:
           - Beszel-inspired dark UI with real-time per-adapter telemetry
@@ -459,27 +517,32 @@ jobs:
           - Single-binary NetPilot (GUI + net-merge CLI + tray in one binary; auto-extracts wintun.dll on Windows)
           - Silent Windows execution (no console popups) & minimize-to-tray support across Windows, macOS, and Linux Desktop Environments
 
-          Packages (all include version ${ver}):
-          - Linux: netpilot-${ver}-linux-amd64.AppImage & netpilot-${ver}-linux-arm64.AppImage (portable across all Linux desktop environments)
-          - macOS: netpilot-${ver}-macos-universal.dmg (Intel & Apple Silicon)
-          - Windows: netpilot-${ver}-setup.exe (installer) & netpilot-${ver}-windows-amd64-portable.zip
+          Packages (all include version ${version}):
+          - Linux: netpilot-${version}-linux-amd64.AppImage & netpilot-${version}-linux-arm64.AppImage (portable across all Linux desktop environments)
+          - macOS: netpilot-${version}-macos-universal.dmg (Intel & Apple Silicon)
+          - Windows: netpilot-${version}-installer.exe (installer) & netpilot-${version}-windows-amd64-portable.zip
+
+          All packages are listed in checksums.txt; NetPilot's updater verifies the SHA-256 before installing.
           EOF
           )
 
-          # Semver prereleases (e.g. v0.4.0-beta.1) must not take the "Latest" badge
-          # away from the stable release (v0.3.9). Detect any -<pre> suffix.
-          prerelease=false
-          case "$tag" in
-            *-*) prerelease=true ;;
-          esac
-
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" out/* --clobber
-            gh release edit "$tag" --title "NetPilot $tag" --notes "$notes" --prerelease="$prerelease"
-          else
             if [ "$prerelease" = "true" ]; then
-              gh release create "$tag" out/* --title "NetPilot $tag" --notes "$notes" --prerelease
+              gh release edit "$tag" --title "NetPilot $tag" --notes "$notes" --prerelease
             else
-              gh release create "$tag" out/* --title "NetPilot $tag" --notes "$notes" --latest
+              gh release edit "$tag" --title "NetPilot $tag" --notes "$notes"
             fi
+            # Use the API for the same reason as creation: `make_latest` is
+            # explicit, so beta builds never claim it and old backports do not
+            # displace a newer stable release.
+            release_id=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq .id)
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -F prerelease="$prerelease" -f make_latest="$make_latest" >/dev/null
+          elif [ "$prerelease" = "true" ]; then
+            gh release create "$tag" out/* --title "NetPilot $tag" --notes "$notes" \
+              --prerelease --latest=false
+          else
+            gh release create "$tag" out/* --title "NetPilot $tag" --notes "$notes" \
+              --latest="$make_latest"
           fi

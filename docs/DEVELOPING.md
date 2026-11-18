@@ -94,14 +94,30 @@ scripts\fetch-wintun.ps1 -OutDir .
 
 Releases are built by GitHub Actions when a `vX.Y.Z` tag is pushed (`.github/workflows/release.yml`).
 Add the version's section to `CHANGELOG.md` first: it becomes the release notes, and the release fails
-without it (`scripts\release-notes.ps1 -Version X.Y.Z` previews them).
+without it (`scripts\release-notes.ps1 -Version X.Y.Z` previews them). Downloadable assets are
+versioned (`netpilot-0.4.0-linux-amd64.AppImage`, `netpilot-0.4.0-macos-universal.dmg`, and
+`netpilot-0.4.0-installer.exe`); the NetPilot updater matches those names.
+
+Tags also choose the update channel. `vX.Y.Z` is a stable release: it is published as a normal GitHub
+release and is eligible for the Latest badge. A tag with a semver prerelease suffix such as
+`v0.4.0-beta.1` is a beta release: the workflow publishes it as a GitHub prerelease and explicitly
+sets `make_latest=false`, so it can never take Latest from the stable line. Keep the suffix in the tag;
+the workflow derives the channel from it rather than from a manual checkbox. Re-running an older tag
+re-uploads its assets and leaves an existing Latest selection alone.
+
+The publish job also generates `checksums.txt` (SHA-256 of every asset) and attaches it to the
+release; NetPilot's in-app updater verifies downloads against it, falling back to GitHub's per-asset
+digest for releases published before the file existed. If an existing release was published with the
+wrong prerelease marker, correct it over the API (`-F prerelease=true|false`, and `-f
+make_latest=true` only when promoting a stable release), then re-check the Releases page.
 Layout: `cmd/net-merge` is the command line; `internal/engine` the scheduler, balancer, probes and
 SOCKS5 front-end; `internal/nics` adapter discovery, counters and egress pinning; `internal/tun` the
 system-wide front-end; `internal/tray` the tray icon; `internal/platform` privileges, single instance
 and autostart. Desktop-side features live in `internal/hotspot` (tether detection and profiles),
 `internal/speedtest` (pinned per-adapter and merged benchmarks), `internal/profiles` (saved
-connection profiles), `internal/notify` (native notifications) and `internal/procnet` (process-to-socket
-attribution for per-app policy). OS-specific code lives in `_windows.go` / `_linux.go` / `_darwin.go` files next to the shared code. The
+connection profiles), `internal/notify` (native notifications), `internal/update` (release channels,
+semver ordering, checksum verification and per-platform install helpers) and `internal/procnet`
+(process-to-socket attribution for per-app policy). OS-specific code lives in `_windows.go` / `_linux.go` / `_darwin.go` files next to the shared code. The
 Nix package and NixOS module are in `nix/`; after changing Go dependencies, update `vendorHash` in
 `nix/package.nix` (`nix build` prints the new one).
 

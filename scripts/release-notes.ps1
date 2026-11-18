@@ -1,6 +1,7 @@
 # Writes the GitHub release notes for one version: an install line plus that version's section of
 # CHANGELOG.md. Fails if the section is missing, so a release can't go out without a changelog.
 #   scripts\release-notes.ps1 -Version 0.1.1 -Out notes.md
+$ReleaseVersion = '0.4.0'
 param(
     [Parameter(Mandatory)][string]$Version,
     [string]$Out = 'release-notes.md'

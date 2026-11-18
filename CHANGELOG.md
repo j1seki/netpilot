@@ -3,6 +3,22 @@
 What changed in each release. Each version's section becomes its GitHub release notes, so add the
 entry here before pushing a version tag.
 
+## [0.4.0] - 2026-11-18
+
+This is the first stable release and releases the stable update channel.
+
+### Added
+
+- **v0.4.0 API improvements.** Actions now reject unsupported methods, malformed JSON, and null
+  settings; file deletions report errors; and the documented dry-run startup mode now works.
+- **Stable release and changelog migration.** Release tooling now creates version-named GitHub
+  assets and validates a changelog section for every version.
+
+### Fixed
+
+- The desktop app no longer launches in live mode when started with `netpilot -mode dry-run`;
+  unsupported startup modes now stop startup with an error.
+
 ## [0.4.0-beta.1] - 2026-11-16
 
 Prerelease of the connectivity and reliability work. This is the first NetPilot build to ship the
@@ -49,6 +65,11 @@ vendored **net-merge v0.3.7** engine; earlier published releases still embedded 
 ## [Unreleased]
 
 ### Added
+- **In-app automatic updates with stable and beta channels.** Settings now offers a Stable channel
+  (production releases only) and a Beta channel (prereleases plus stable), an automatic check every
+  six hours with one notification per new release, and one-click download and install. Downloads are
+  verified against the release's `checksums.txt` (or GitHub's asset digest) before the Windows
+  installer/portable build, macOS app bundle or Linux AppImage is replaced and NetPilot restarts.
 - **Mobile & Connectivity page.** Detects tether/cellular adapters, applies Hotspot Bypass /
   IPv4-only / Metered Saver TTL+MTU profiles, optionally auto-applies them when a tether appears,
   and exposes per-adapter and merged-pool speedtests with bufferbloat grades.
@@ -85,6 +106,11 @@ vendored **net-merge v0.3.7** engine; earlier published releases still embedded 
   partial results.
 - DNS lookups accept bracketed IPv6 literals, and adapter labels can be cleared by saving an empty
   value.
+- **GitHub release channels are enforced by the workflow.** Stable `vX.Y.Z` tags publish as normal
+  releases eligible for the Latest badge; tags with a semver prerelease suffix publish as GitHub
+  prereleases with `make_latest=false`, so a beta can never hide the stable release. Every release
+  now also publishes `checksums.txt` for the updater, and the Windows build log reports the
+  net-merge version it actually embedded instead of an undefined variable.
 
 ## [0.3.11] - 2026-11-06
 
