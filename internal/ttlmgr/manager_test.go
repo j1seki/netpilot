@@ -618,6 +618,9 @@ func TestApplyTouchesOnlyConfiguredAdapters(t *testing.T) {
 
 			touched := map[string]bool{}
 			for _, w := range fb.snapshotWrites() {
+				if tc.policy != PolicyInterfaceNone && w.Ref.Scope == ScopeSystemGlobal {
+					t.Errorf("adapter policy %q wrote to a system-wide setting", tc.policy)
+				}
 				if w.Ref.Scope == ScopePerInterface {
 					touched[w.Ref.Interface] = true
 					if !tc.want[w.Ref.Interface] {

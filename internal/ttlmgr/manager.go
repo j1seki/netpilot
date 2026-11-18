@@ -164,7 +164,7 @@ func (m *Manager) Inspect(ctx context.Context, ifaces []IfaceInfo) (Report, erro
 		// Writability is decided by the host's write capability, never by a successful read.
 		if !rep.Capabilities.Supported {
 			setting.WritableReason = readOnlyReason(rep.Capabilities.Platform)
-		} else if ref.Scope == ScopePerInterface && !capabilitiesAllowPerInterface(rep.Capabilities) {
+		} else if ref.Scope == ScopePerInterface && !capabilitiesAllowPerInterface(rep.Capabilities, ref.Family) {
 			setting.WritableReason = perInterfaceReadOnlyReason(rep.Capabilities.Platform)
 		} else {
 			setting.Writable = true
@@ -199,8 +199,7 @@ func perInterfaceReadOnlyReason(platform string) string {
 		return "Set-NetIPInterface -CurrentHopLimit is not available on this Windows build, " +
 			"so a per-interface value cannot be set through a supported mechanism."
 	case "linux":
-		return "The system-global value is writable, but this build has no supported per-adapter " +
-			"setter. Use the system-global value or an nftables/iptables mangle rule for one adapter."
+		return "Linux exposes an IPv4 TTL default system-wide, not per adapter through sysctl."
 	case "darwin":
 		return "The system-global value is writable, but macOS exposes no supported per-adapter " +
 			"hop-limit setter."
@@ -212,7 +211,10 @@ func perInterfaceReadOnlyReason(platform string) string {
 // capabilitiesAllowPerInterface reports whether the probed build supports the per-interface
 // setter. It reads the probe result rather than assuming, which is the whole reason the probe
 // exists.
-func capabilitiesAllowPerInterface(c Capabilities) bool {
+func capabilitiesAllowPerInterface(c Capabilities, family Family) bool {
+	if c.Platform == "linux" {
+		return family == FamilyIPv6
+	}
 	for _, cc := range c.Commands {
 		if cc.Command == "Set-NetIPInterface" && cc.HasParam {
 			return true
@@ -546,6 +548,10 @@ func (m *Manager) writeBack(ctx context.Context, ref SettingRef, target *int) er
 
 // plan works out which settings differ from what is requested.
 func (m *Manager) plan(ctx context.Context, cfg Config, ifaces []IfaceInfo) ([]Change, error) {
+	caps := m.backend.Capabilities(ctx)
+	if !caps.Supported {
+		return nil, newError(CodeUnsupported, "packet header changes aren't supported on this host", "Inspect the available OS settings.")
+	}
 	var plan []Change
 	add := func(ref SettingRef, want int) {
 		obs, err := m.backend.Read(ctx, ref)
@@ -559,8 +565,26 @@ func (m *Manager) plan(ctx context.Context, cfg Config, ifaces []IfaceInfo) ([]C
 		plan = append(plan, Change{Setting: ref, From: from, To: want})
 	}
 
-	add(SystemRef(FamilyIPv4), cfg.BumpIPv4)
-	add(SystemRef(FamilyIPv6), cfg.BumpIPv6)
+	if cfg.Policy == PolicyInterfaceNone {
+		add(SystemRef(FamilyIPv4), cfg.BumpIPv4)
+		add(SystemRef(FamilyIPv6), cfg.BumpIPv6)
+		return plan, nil
+	}
+	v4 := capabilitiesAllowPerInterface(caps, FamilyIPv4)
+	v6 := capabilitiesAllowPerInterface(caps, FamilyIPv6)
+	if !v4 && !v6 {
+		return nil, newError(CodeUnsupported, "no requested packet header can be changed per adapter on this host", "No system-wide fallback was used.")
+	}
+	targets := 0
+	addInterface := func(i IfaceInfo) {
+		targets++
+		if v4 {
+			add(IfaceRef(FamilyIPv4, i.Index, i.Name), cfg.BumpIPv4)
+		}
+		if v6 {
+			add(IfaceRef(FamilyIPv6, i.Index, i.Name), cfg.BumpIPv6)
+		}
+	}
 
 	switch cfg.Policy {
 	case PolicyInterfaceList:
@@ -568,17 +592,18 @@ func (m *Manager) plan(ctx context.Context, cfg Config, ifaces []IfaceInfo) ([]C
 			if !nameInList(cfg.IncludeIfaces, i.Name) {
 				continue
 			}
-			add(IfaceRef(FamilyIPv4, i.Index, i.Name), cfg.BumpIPv4)
-			add(IfaceRef(FamilyIPv6, i.Index, i.Name), cfg.BumpIPv6)
+			addInterface(i)
 		}
 	case PolicyInterfaceAllExcept:
 		for _, i := range ifaces {
 			if nameInList(cfg.ExcludeIfaces, i.Name) {
 				continue
 			}
-			add(IfaceRef(FamilyIPv4, i.Index, i.Name), cfg.BumpIPv4)
-			add(IfaceRef(FamilyIPv6, i.Index, i.Name), cfg.BumpIPv6)
+			addInterface(i)
 		}
+	}
+	if targets == 0 {
+		return nil, newError(CodeConfigInvalid, "no connected interface matches the requested scope", "Refresh the adapter list and try again.")
 	}
 	return plan, nil
 }

@@ -100,3 +100,27 @@ func TestLinuxBackendMissingProcFailsHonestly(t *testing.T) {
 		}
 	}
 }
+
+func TestLinuxAdapterScopeChangesOnlyIPv6(t *testing.T) {
+	const hopLimit = "/proc/sys/net/ipv6/conf/usb0/hop_limit"
+	files := map[string]string{hopLimit: "64\n"}
+	backend := &linuxBackend{read: fakeProc(files), write: func(path string, val []byte) error {
+		if path != hopLimit {
+			t.Fatalf("unexpected write to %s", path)
+		}
+		files[path] = string(val)
+		return nil
+	}}
+	m, _ := newTestManager(t, backend)
+	cfg := DefaultConfig()
+	cfg.Policy, cfg.IncludeIfaces = PolicyInterfaceList, []string{"usb0"}
+	ctx := context.Background()
+	ifaces := []IfaceInfo{{Name: "usb0", Index: 3}}
+	out, err := m.Apply(ctx, ApplyRequest{Confirm: true, Override: &cfg, Ifaces: ifaces})
+	if err != nil || len(out.Changes) != 1 || !out.Changes[0].Verified || out.Changes[0].Setting.Family != FamilyIPv6 {
+		t.Fatalf("want one verified IPv6 change, got %+v, %v", out, err)
+	}
+	if _, err = m.Restore(ctx, RestoreRequest{Confirm: true, Ifaces: ifaces}); err != nil || files[hopLimit] != "64\n" {
+		t.Fatalf("restore: hop limit %q, %v", files[hopLimit], err)
+	}
+}

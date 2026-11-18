@@ -68,6 +68,18 @@ func TestRunAdapterHonoursByteBudget(t *testing.T) {
 	}
 }
 
+func TestUnreachableAdapterGetsNoBufferbloatGrade(t *testing.T) {
+	srv := benchmarkServer(t)
+	srv.Close()
+	res := RunAdapter(context.Background(), Adapter{Name: "unreachable"}, Options{
+		Duration: 200 * time.Millisecond, Streams: 1,
+		DownURL: srv.URL, UpURL: srv.URL, PingURL: srv.URL,
+	})
+	if res.Grade != "" || res.Error == "" {
+		t.Fatalf("unmeasured latency must not get a grade: %+v", res)
+	}
+}
+
 func TestConcurrentDownloadStreamsShareByteBudget(t *testing.T) {
 	const budgetBytes = int64(64 << 10)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

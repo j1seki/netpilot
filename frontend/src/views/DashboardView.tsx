@@ -22,7 +22,17 @@ import {
   EyeOff,
   Router,
   Wifi,
+  Code2,
+  Cpu,
+  Server,
+  Shield,
+  Terminal,
 } from 'lucide-react';
+
+const processIcons = new Map([
+  ['globe', Globe], ['shield', Shield], ['terminal', Terminal],
+  ['code', Code2], ['server', Server], ['cpu', Cpu],
+]);
 
 interface AdapterWithHistory extends InterfaceInfo {
   rxHistory: number[];
@@ -657,15 +667,21 @@ export const DashboardView: React.FC = () => {
               <tbody>
                 {filteredApps.slice(0, 50).map(app => {
                   const matchedRule = getAppRule(app.name);
+                  const ProcessIcon = processIcons.get(app.iconHint) ?? Cpu;
                   return (
                     <tr key={`${app.pid}-${app.name}`}>
                       <td>
-                        <div style={{ fontWeight: 600, color: '#fafafa' }}>{app.name}</div>
-                        {app.socketCount !== undefined && app.socketCount > 0 && (
-                          <div style={{ fontSize: '10px', color: '#71717a' }}>
-                            {app.socketCount} sockets
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <ProcessIcon size={16} aria-hidden="true" style={{ color: '#7dd3fc', flexShrink: 0 }} />
+                          <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                            <div style={{ fontWeight: 600, color: '#fafafa' }}>{app.name}</div>
+                            {(app.socketCount ?? 0) > 0 && (
+                              <div style={{ fontSize: '10px', color: '#71717a' }}>
+                                {app.socketCount} sockets
+                              </div>
+                            )}
                           </div>
-                        )}
+                        </div>
                       </td>
                       <td className="font-mono" style={{ fontSize: '11px', color: '#71717a' }}>
                         {app.pid}

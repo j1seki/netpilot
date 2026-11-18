@@ -1198,7 +1198,11 @@ func (s *NetPilotService) ApplyTTL(ctx context.Context, bumpIPv4, bumpIPv6 int, 
 	cfg.BumpIPv4 = bumpIPv4
 	cfg.BumpIPv6 = bumpIPv6
 	cfg.Policy = pol
-	cfg.IncludeIfaces = ifaceList
+	if pol == ttlmgr.PolicyInterfaceAllExcept {
+		cfg.ExcludeIfaces = ifaceList
+	} else {
+		cfg.IncludeIfaces = ifaceList
+	}
 	cfg.Updated = time.Now()
 
 	return s.ttlManager.Apply(ctx, ttlmgr.ApplyRequest{
@@ -1491,11 +1495,12 @@ func (s *NetPilotService) GetHotspotStatus() map[string]interface{} {
 	s.hotspotMu.Lock()
 	st := s.hotspot
 	s.hotspotMu.Unlock()
+	adapters := s.detectedTethers()
 	return map[string]interface{}{
 		"status":    st,
-		"adapters":  s.detectedTethers(),
+		"adapters":  adapters,
 		"profiles":  hotspot.Profiles(),
-		"available": len(s.detectedTethers()) > 0,
+		"available": len(adapters) > 0,
 	}
 }
 
@@ -1527,9 +1532,8 @@ func (s *NetPilotService) detectedTethers() []string {
 	return out
 }
 
-// ApplyHotspot enables a hotspot profile: TTL/hop-limit bump on the tether adapters, plus the
-// profile's TUN MTU and IPv6 policy. It returns the new status even when the TTL write needs
-// elevation, with the reason in Note.
+// ApplyHotspot saves the profile's TUN MTU and IPv6 policy. Packet header changes
+// are managed separately and never triggered by tether detection.
 func (s *NetPilotService) ApplyHotspot(ctx context.Context, profileID string, dryRun bool) (hotspotStatus, error) {
 	return s.ApplyHotspotTo(ctx, profileID, dryRun, nil)
 }
@@ -1537,7 +1541,7 @@ func (s *NetPilotService) ApplyHotspot(ctx context.Context, profileID string, dr
 // ApplyHotspotTo is ApplyHotspot with an explicit adapter override. The override lets the
 // user force a profile onto an adapter whose name does not match the tether heuristics
 // (notably macOS, where iPhone USB tethering shows up as a plain "enN").
-func (s *NetPilotService) ApplyHotspotTo(ctx context.Context, profileID string, dryRun bool, adapters []string) (hotspotStatus, error) {
+func (s *NetPilotService) ApplyHotspotTo(_ context.Context, profileID string, dryRun bool, adapters []string) (hotspotStatus, error) {
 	p, ok := hotspot.Get(profileID)
 	if !ok {
 		return hotspotStatus{}, fmt.Errorf("unknown hotspot profile %q", profileID)
@@ -1555,71 +1559,47 @@ func (s *NetPilotService) ApplyHotspotTo(ctx context.Context, profileID string, 
 		return hotspotStatus{}, fmt.Errorf("no tether or cellular adapter detected")
 	}
 
-	note := ""
+	s.hotspotMu.Lock()
+	defer s.hotspotMu.Unlock()
 	if dryRun {
-		s.hotspotMu.Lock()
-		prevMTU, prevV6 := s.hotspot.PrevMTU, s.hotspot.PrevIPv6
-		s.hotspotMu.Unlock()
 		return hotspotStatus{
 			Profile: p.ID, Adapters: tethers, MTU: p.MTU,
 			Note:    "dry run: no changes were made",
-			PrevMTU: prevMTU, PrevIPv6: prevV6,
+			PrevMTU: s.hotspot.PrevMTU, PrevIPv6: s.hotspot.PrevIPv6,
 		}, nil
 	}
-	if s.netmergeCtrl != nil {
-		cfg := s.netmergeCtrl.GetConfig()
-		s.hotspotMu.Lock()
-		if !s.hotspot.Enabled {
-			s.hotspot.PrevMTU, s.hotspot.PrevIPv6 = cfg.MTU, cfg.IPv6Mode
-		}
-		s.hotspotMu.Unlock()
-		cfg.MTU = p.MTU
-		cfg.IPv6Mode = p.IPv6Mode
-		if err := s.netmergeCtrl.SaveConfig(cfg); err != nil {
-			return hotspotStatus{}, err
-		}
+	if s.netmergeCtrl == nil {
+		return hotspotStatus{}, fmt.Errorf("tunnel controller not initialized")
+	}
+	cfg := s.netmergeCtrl.GetConfig()
+	if !s.hotspot.Enabled {
+		s.hotspot.PrevMTU, s.hotspot.PrevIPv6 = cfg.MTU, cfg.IPv6Mode
+	}
+	cfg.MTU = p.MTU
+	cfg.IPv6Mode = p.IPv6Mode
+	if err := s.netmergeCtrl.SaveConfig(cfg); err != nil {
+		return hotspotStatus{}, err
 	}
 
-	out, err := s.ApplyTTL(ctx, p.BumpIPv4, p.BumpIPv6, "list", tethers, false)
-	switch {
-	case err != nil:
-		note = "TUN settings applied, but TTL/hop-limit change failed: " + err.Error()
-	case out.Failed > 0:
-		note = fmt.Sprintf("TUN settings applied; %d TTL/hop-limit change(s) failed (elevation may be required)", out.Failed)
-	}
-
-	s.hotspotMu.Lock()
 	s.hotspot.Enabled = true
 	s.hotspot.Profile = p.ID
 	s.hotspot.Adapters = append([]string(nil), tethers...)
 	s.hotspot.MTU = p.MTU
-	s.hotspot.Note = note
+	s.hotspot.Note = "NetPilot tunnel settings saved. Restart the tunnel to pick up MTU changes. System TTL and Hop Limit were not changed."
 	s.hotspot.AppliedAt = time.Now().UTC()
 	s.saveHotspotLocked()
-	st := s.hotspot
-	s.hotspotMu.Unlock()
-	return st, nil
+	return s.hotspot, nil
 }
 
-// RevertHotspot restores the TTL values captured before the hotspot profile was applied and
-// puts the MTU/IPv6 settings back where they were.
-func (s *NetPilotService) RevertHotspot(ctx context.Context) (hotspotStatus, error) {
-	note := ""
-	if out, err := s.RestoreTTL(ctx, false); err != nil {
-		note = "TTL/hop-limit restore failed: " + err.Error()
-	} else if out.Failed > 0 {
-		note = fmt.Sprintf("%d TTL/hop-limit value(s) could not be restored", out.Failed)
-	}
-
+// RevertHotspot restores the previous tunnel policy without touching any
+// separately captured TTL/Hop Limit settings.
+func (s *NetPilotService) RevertHotspot(_ context.Context) (hotspotStatus, error) {
 	s.hotspotMu.Lock()
+	defer s.hotspotMu.Unlock()
+	if !s.hotspot.Enabled {
+		return s.hotspot, nil
+	}
 	prevMTU, prevV6 := s.hotspot.PrevMTU, s.hotspot.PrevIPv6
-	s.hotspot.Enabled = false
-	s.hotspot.Adapters = nil
-	s.hotspot.AppliedAt = time.Time{}
-	s.hotspot.Note = note
-	s.saveHotspotLocked()
-	st := s.hotspot
-	s.hotspotMu.Unlock()
 
 	if s.netmergeCtrl != nil && prevMTU > 0 {
 		cfg := s.netmergeCtrl.GetConfig()
@@ -1628,10 +1608,15 @@ func (s *NetPilotService) RevertHotspot(ctx context.Context) (hotspotStatus, err
 			cfg.IPv6Mode = prevV6
 		}
 		if err := s.netmergeCtrl.SaveConfig(cfg); err != nil {
-			return st, err
+			return s.hotspot, err
 		}
 	}
-	return st, nil
+	s.hotspot.Enabled = false
+	s.hotspot.Adapters = nil
+	s.hotspot.AppliedAt = time.Time{}
+	s.hotspot.Note = "Previous tunnel settings restored. To undo past packet header changes, use Restore Originals under TTL & Hop Limit."
+	s.saveHotspotLocked()
+	return s.hotspot, nil
 }
 
 // SetHotspotAutoApply persists whether a newly detected tether should be configured automatically.

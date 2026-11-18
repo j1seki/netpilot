@@ -9,6 +9,7 @@ import {
   SpeedtestResult,
   UpdateStatus,
 } from '../api/wails';
+import { TTLView } from './TTLView';
 import {
   Bell,
   CheckCircle2,
@@ -18,6 +19,7 @@ import {
   Radio,
   RefreshCw,
   Save,
+  ShieldCheck,
   Sliders,
   Smartphone,
   Trash2,
@@ -37,7 +39,8 @@ const gradeColor = (grade: string) => {
 
 const fmtMbps = (v: number) => (v >= 1 ? `${v.toFixed(1)} Mbps` : `${Math.round(v * 1000)} Kbps`);
 
-export const ConnectivityView: React.FC = () => {
+export const ConnectivityView: React.FC<{ initialTTL?: boolean }> = ({ initialTTL = false }) => {
+  const [showTTL, setShowTTL] = useState(initialTTL);
   const [hotspot, setHotspot] = useState<HotspotStatus | null>(null);
   const [status, setStatus] = useState<NetMergeStatus | null>(null);
   const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
@@ -56,6 +59,7 @@ export const ConnectivityView: React.FC = () => {
   const [probe4, setProbe4] = useState<string>('');
   const [probe6, setProbe6] = useState<string>('');
   const schedInit = useRef(false);
+  const profileInit = useRef(false);
 
   const [profileName, setProfileName] = useState<string>('');
   const [profileDesc, setProfileDesc] = useState<string>('');
@@ -73,7 +77,10 @@ export const ConnectivityView: React.FC = () => {
       setHotspot(hs);
       setStatus(st);
       setProfiles(ps);
-      if (hs.status?.profile) setSelectedProfile(hs.status.profile);
+      if (!profileInit.current && hs.status?.profile) {
+        setSelectedProfile(hs.status.profile);
+        profileInit.current = true;
+      }
       if (!schedInit.current && st.config) {
         setScheduling(st.config.scheduling === 'low-latency' ? 'low-latency' : 'balanced');
         setProbe4((st.config.probeTargetsV4 || []).join(', '));
@@ -111,8 +118,8 @@ export const ConnectivityView: React.FC = () => {
     setErrorMsg('');
     setNotice('');
     try {
-      await api.revertHotspot();
-      setNotice('Hotspot mode reverted.');
+      const st = await api.revertHotspot();
+      setNotice(st.note || 'Hotspot mode reverted.');
       await load();
     } catch (err: any) {
       setErrorMsg(err?.message || String(err));
@@ -157,7 +164,8 @@ export const ConnectivityView: React.FC = () => {
     }
   };
 
-  const runSpeedtest = async () => {    setSpeedRunning(true);
+  const runSpeedtest = async () => {
+    setSpeedRunning(true);
     setErrorMsg('');
     setNotice('');
     try {
@@ -259,7 +267,7 @@ export const ConnectivityView: React.FC = () => {
             Mobile &amp; Connectivity
           </h1>
           <p style={{ margin: '4px 0 0', fontSize: '11.5px', color: '#8b8b93' }}>
-            Tethering profiles, link benchmarks, saved setups, release checks and notifications.
+            Tethering, packet TTL and hop limit, link benchmarks, and saved setups.
           </p>
         </div>
         <button className="btn btn-secondary btn-sm" onClick={load}>
@@ -267,6 +275,17 @@ export const ConnectivityView: React.FC = () => {
           <span>Refresh</span>
         </button>
       </div>
+
+      <nav aria-label="Mobile sections" style={{ display: 'flex', gap: '8px' }}>
+        <button className={`btn btn-sm ${showTTL ? 'btn-secondary' : 'btn-emerald'}`} aria-pressed={!showTTL} onClick={() => setShowTTL(false)}>
+          <Radio size={13} aria-hidden="true" /> Tethering &amp; Links
+        </button>
+        <button className={`btn btn-sm ${showTTL ? 'btn-emerald' : 'btn-secondary'}`} aria-pressed={showTTL} onClick={() => setShowTTL(true)}>
+          <ShieldCheck size={13} aria-hidden="true" /> TTL &amp; Hop Limit
+        </button>
+      </nav>
+
+      {showTTL ? <TTLView /> : <>
 
       {errorMsg && (
         <div className="card" style={{ marginBottom: 0, borderColor: 'rgba(251, 113, 133, 0.35)', color: '#fb7185', fontSize: '11.5px' }}>
@@ -287,19 +306,15 @@ export const ConnectivityView: React.FC = () => {
             <span>Hotspot / Cellular Tethering</span>
           </div>
           <span className={`status-pill ${hotspot?.status.enabled ? 'pass' : hotspot?.available ? 'warn' : 'skipped'}`}>
-            {hotspot?.status.enabled ? 'Active' : hotspot?.available ? 'Ready' : 'No tether'}
+            {!hotspot ? 'Checking…' : hotspot.status.enabled ? 'Profile saved' : hotspot.available ? 'Candidate found' : 'No match'}
           </span>
         </div>
 
         {!hotspot?.available && !hotspot?.status.enabled ? (
           <div style={{ fontSize: '11.5px', color: '#a1a1aa', lineHeight: 1.6 }}>
-            No tether or cellular adapter is visible right now. Connect a phone by USB tethering or a
-            mobile broadband modem; adapters matching names such as <span className="font-mono">enx…</span>,
-            <span className="font-mono"> usb0</span>, <span className="font-mono">wwan0</span> or
-            <span className="font-mono"> rmnet…</span> will appear here automatically.
+            {!hotspot ? 'Waiting for adapter status.' : 'No tether or cellular adapter was identified by name. Connect your phone by Wi-Fi or USB tethering.'}
             <div style={{ marginTop: '10px', color: '#d4d4d8' }}>
-              If the adapter uses another name (macOS exposes iPhone tethering as a plain
-              <span className="font-mono"> enN</span>), select it explicitly:
+              Select the active Wi-Fi or USB adapter below. iPhone USB tethering on macOS may appear as <span className="font-mono">enN</span>.
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '8px' }}>
               {(status?.nics || []).map(n => (
@@ -328,10 +343,10 @@ export const ConnectivityView: React.FC = () => {
               <button
                 className="btn btn-emerald btn-sm"
                 onClick={applyHotspot}
-                disabled={manualTargets.length === 0 || busy === 'hotspot'}
+                disabled={!hotspot || manualTargets.length === 0 || busy === 'hotspot'}
               >
                 <Zap size={12} />
-                <span>Apply to selected adapter</span>
+                 <span>Save tunnel profile</span>
               </button>
             </div>
           </div>
@@ -369,7 +384,7 @@ export const ConnectivityView: React.FC = () => {
                     {p.description}
                   </p>
                   <div className="font-mono" style={{ marginLeft: '22px', marginTop: '5px', fontSize: '10px', color: '#71717a' }}>
-                    TTL +{p.bumpIpv4}/+{p.bumpIpv6} · MTU {p.mtu} · IPv6 {p.ipv6Mode}
+                     Tunnel MTU {p.mtu} · IPv6 {p.ipv6Mode}
                   </div>
                 </label>
               ))}
@@ -378,7 +393,7 @@ export const ConnectivityView: React.FC = () => {
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               <button className="btn btn-emerald btn-sm" onClick={applyHotspot} disabled={busy === 'hotspot'}>
                 <Zap size={12} />
-                <span>{hotspot.status.enabled ? 'Re-apply profile' : 'Apply hotspot profile'}</span>
+                 <span>{hotspot.status.enabled ? 'Update tunnel profile' : 'Save tunnel profile'}</span>
               </button>
               {hotspot.status.enabled && (
                 <button className="btn btn-secondary btn-sm" onClick={revertHotspot} disabled={busy === 'hotspot'}>
@@ -395,7 +410,7 @@ export const ConnectivityView: React.FC = () => {
             {hotspot.status.enabled && (
               <div style={{ marginTop: '10px', fontSize: '10.5px', color: '#71717a' }}>
                 Profile <span className="font-mono">{profilesById(hotspot.status.profile)?.name || hotspot.status.profile}</span>
-                {' '}applied to {hotspot.status.adapters.join(', ')} at{' '}
+                 {' '}saved with {hotspot.status.adapters?.join(', ')} selected at{' '}
                 {hotspot.status.appliedAt ? new Date(hotspot.status.appliedAt).toLocaleString() : '—'}.
               </div>
             )}
@@ -528,6 +543,9 @@ export const ConnectivityView: React.FC = () => {
             </tbody>
           </table>
         )}
+        <p style={{ margin: '8px 0 0', color: '#a1a1aa', fontSize: '11px' }}>
+          These measurements describe link performance, not how the phone or carrier classifies traffic.
+        </p>
       </div>
 
       <div className="grid-2" style={{ gap: '14px' }}>
@@ -649,6 +667,7 @@ export const ConnectivityView: React.FC = () => {
           </div>
         </div>
       </div>
+      </>}
     </div>
   );
 };

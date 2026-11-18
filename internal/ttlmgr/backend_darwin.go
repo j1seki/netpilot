@@ -32,6 +32,9 @@ func (d *darwinBackend) Capabilities(context.Context) Capabilities {
 }
 
 func (d *darwinBackend) Read(ctx context.Context, ref SettingRef) (Observed, error) {
+	if ref.Scope == ScopePerInterface {
+		return Observed{}, newError(CodeUnsupported, "no per-interface packet header source on macOS", "The system-wide default is a separate setting.")
+	}
 	if !ref.Kind.IsConfigurable() {
 		return Observed{}, newError(CodeUnsupported, string(ref.Kind)+" is not configurable on macOS", "Only packet TTL and hop limit are configurable")
 	}
@@ -60,6 +63,9 @@ func (d *darwinBackend) Read(ctx context.Context, ref SettingRef) (Observed, err
 }
 
 func (d *darwinBackend) Write(ctx context.Context, ref SettingRef, value int) error {
+	if ref.Scope == ScopePerInterface {
+		return newError(CodeUnsupported, "no per-interface packet header setter on macOS", "The system-wide default was not changed.")
+	}
 	if value < 1 || value > 255 {
 		return newError(CodeConfigInvalid, fmt.Sprintf("TTL/Hop Limit must be 1-255, got %d", value), "Valid range is 1 to 255")
 	}

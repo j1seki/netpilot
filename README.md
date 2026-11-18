@@ -4,63 +4,27 @@
 
 # NetPilot
 
-**The Modern Multi-Adapter Network Control Center & Bandwidth Aggregator**
+**Multi-adapter network control for Windows, macOS, and Linux**
 
-Combine Wi-Fi, Ethernet, 5G Tethering, and VPNs into a single fast connection — or set up instant automatic failover when your primary link drops.
+Use Wi-Fi, Ethernet, and phone tethering together, or keep a backup link ready when your primary connection drops.
 
 [![Latest Release](https://img.shields.io/github/v/release/j1seki/netpilot?style=flat-square&color=10b981&label=Download)](https://github.com/j1seki/netpilot/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-38bdf8?style=flat-square)](#%EF%B8%8F-downloads--installation)
-[![Engine](https://img.shields.io/badge/Embedded%20Engine-net--merge%20%2B%20tray-10b981?style=flat-square)](https://github.com/net-merge/net-merge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-zinc?style=flat-square)](LICENSE)
 
 </div>
 
 ---
 
-## 🖥️ Interface Overview
+## NetPilot in action
 
-Redesigned with an ultra-clean, dark telemetry aesthetic inspired by **[Beszel](https://beszel.dev/)**, NetPilot gives you real-time visibility and one-click control over every network adapter on your machine. The short demo below covers the main flow — watch it once, then use the section explanations as a quick reference.
+![NetPilot desktop app: live dashboard, process icons, tethering, and TTL preview](docs/netpilot-demo.gif)
 
-![NetPilot demo — dashboard, net-merge controls and settings](docs/demo.gif)
+- **Systems** shows adapter traffic, active processes, and app routing rules. **Metrics** shows usage history.
+- **Speed** distributes connections across healthy adapters. **Backup** switches to a secondary link when the primary fails.
+- **Mobile** puts tethering profiles and link tests alongside **TTL & Hop Limit**. Preview supported desktop packet-header changes before applying them, or restore the original settings.
 
-### How to read the interface
-
-- **Systems & Adapter Telemetry** — The dashboard shows live download/upload load meters, WAN/LAN addresses, latency, per-application routing policies, and active processes at a glance. Each adapter row reflects real OS counters and health probes, not estimates.
-- **Net-Merge Engine · Speed vs. Backup** — Use the Net-Merge tab to switch between **Speed Mode** (simultaneous multi-link aggregation with weighted least-busy-flows scheduling) and **Backup Mode** (primary adapter with automatic failover to the secondary). Tune per-adapter speed caps or start a zero-privilege SOCKS5 multi-link balancer without touching the system routing table.
-- **Mobile & Connectivity** — Detects phone-tether/cellular adapters and applies a one-click TTL + MTU profile, runs per-adapter and merged speedtests with bufferbloat grades, and saves named connection profiles for instant switching.
-- **TTL, Rules, Metrics & Tools** — Pin apps or games to adapters, customize IPv4/IPv6 Hop Limits, review historical bandwidth per adapter/application, and run ping/DNS/port/Wake-on-LAN diagnostics.
-- **System Tray & Silent Execution** — The window close button minimizes to the tray by default; a single tray menu controls start/stop, Speed/Backup modes, per-adapter caps, and autostart. On Windows, all child processes run with `CREATE_NO_WINDOW`, so no console flashes.
-
-Full-resolution stills are kept in [`docs/screenshots/`](docs/screenshots/): [dashboard](docs/screenshots/dashboard.png), [net-merge](docs/screenshots/netmerge.png), [settings](docs/screenshots/settings.png).
-
----
-
-## ✨ What's New & Key Features
-
-- 📦 **Zero Setup — `net-merge` & `net-merge-tray` Built Right In**
-  Both `net-merge` and `net-merge-tray` (plus `wintun.dll` on Windows) are embedded directly inside NetPilot out of the box. You don't need to download anything extra. Want to test a custom build? Switch between **Built-in** and **External (Full Path)** anytime in **Settings**.
-- ⚡ **Two Intelligent Routing Modes**
-  - **Speed Mode (Default):** Combines all healthy adapters simultaneously using weighted least-busy-flows scheduling for maximum aggregate download and upload throughput.
-  - **Backup Mode (Failover Only):** Routes 100% of traffic through your **Primary Adapter** (e.g., Ethernet) and switches to your **Secondary Adapter** (e.g., Wi-Fi or Phone Hotspot) *only* when the primary connection fails, automatically switching back when it recovers.
-- 🛡️ **Zero-Interference Standby (`System Default`)**
-  - When **Net-Merge is Active**, your default adapter is `net-merge`.
-  - When **Net-Merge is Inactive**, your default adapter is `System Default` and NetPilot stands by cleanly without touching your OS routing table.
-- 📥 **System Tray First (Windows, macOS & All Linux Desktop Environments)**
-  - Clicking the window close (`X`) button **minimizes NetPilot to the system tray** by default (configurable in Settings to either minimize or quit).
-  - Reopen NetPilot, toggle the `net-merge` adapter on/off, or switch between **Speed** and **Backup** modes directly from the tray icon.
-  - Full StatusNotifierItem / AppIndicator support across **KDE Plasma, GNOME, XFCE, Cinnamon, MATE, Hyprland, Sway, and i3**.
-- 🔇 **100% Silent on Windows**
-  All background health probes, PowerShell/netsh queries, and `net-merge` operations run with `CREATE_NO_WINDOW` — no flashing CMD windows ever.
-- 🎯 **Per-App Routing, TTL Manager & Monthly Analytics**
-  Pin specific apps or games to specific adapters, customize IPv4/IPv6 Hop Limits (TTL) for hotspot carrier bypass, and track historical bandwidth usage per adapter and application.
-- 📱 **Hotspot & Mobile Connectivity**
-  - Detects phone-tether and cellular adapters by their OS naming conventions and applies a one-click TTL/MTU profile (Hotspot Bypass, IPv4-only, Metered Saver), optionally automatically when a tether appears.
-  - Built-in speedtest measures each adapter in isolation and the merged pool, including upload, idle latency and bufferbloat (A–F) grades.
-  - Saved connection profiles switch routing mode, latency scheduling, MTU and IPv6 policy in one action.
-- ⏱️ **Low-Latency Scheduling & Custom Probes**
-  Choose **Balanced** (least-busy flows) or **Low-Latency** (RTT/jitter-aware) scheduling, and override the IPv4/IPv6 reachability probe targets when a carrier blocks the defaults.
-- 🛡️ **Quota Guard & Live Events**
-  Quotas on adapters and per-app rules are enforced from real OS/flow counters, adapters are throttled when a quota is reached, and a Server-Sent Events stream keeps the UI current without polling every view.
+Download and upload speeds, idle and loaded latency, and bufferbloat measure link performance. Neither those numbers nor desktop OS read-back verify how iOS, Android, or a carrier classifies tethered traffic. See [tethering validation](docs/tethering-validation.md) for the measured baseline and test steps.
 
 ---
 
@@ -93,16 +57,6 @@ chmod +x netpilot-linux-arm64.AppImage
 > - **Ubuntu / Debian / Mint:** `sudo apt update && sudo apt install -y libwebkit2gtk-4.1-0`
 > - **Fedora / RHEL:** `sudo dnf install webkit2gtk4.1`
 > - **Arch Linux:** `sudo pacman -S webkit2gtk-4.1`
-
----
-
-## 🔄 Automated `net-merge` Sync & Release Pipeline
-
-NetPilot tracks upstream **[net-merge/net-merge](https://github.com/net-merge/net-merge)** without automatically publishing releases:
-
-- A scheduled workflow (`.github/workflows/sync-net-merge.yml`) checks for new `net-merge` releases every 6 hours and three-way merges the vendored engine packages, preserving NetPilot's local changes (Speed/Backup routing, platform probes).
-- A sync opens or updates a **pull request** against `main`; it never pushes directly to `main`, never force-tags NetPilot with the upstream version, and never triggers a release on its own. Conflicting engine changes fail the workflow for a human to resolve.
-- Releases are cut explicitly by pushing a NetPilot version tag (e.g. `v0.4.0-beta.1`). A gating job verifies the engine version recorded in `internal/netmerge/VERSION` is really compiled into every binary, so a version-label-only sync cannot ship a stale engine again. Semver prereleases are marked as such and never take the "Latest" badge from the stable release.
 
 ---
 

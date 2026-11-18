@@ -91,7 +91,7 @@ func TestCapabilitiesReportsFullSupport(t *testing.T) {
 	if len(caps.Commands) != len(requiredCommands()) {
 		t.Fatalf("capabilities list %d commands, want %d", len(caps.Commands), len(requiredCommands()))
 	}
-	if !capabilitiesAllowPerInterface(caps) {
+	if !capabilitiesAllowPerInterface(caps, FamilyIPv4) {
 		t.Error("per-interface setter was probed as present but is not allowed")
 	}
 	joined := strings.Join(caps.Notes, " ")
@@ -130,7 +130,7 @@ func TestCapabilitiesReportsMissingParameter(t *testing.T) {
 	if !caps.Supported {
 		t.Fatal("the system-wide read/write pair is complete, so the backend is usable")
 	}
-	if capabilitiesAllowPerInterface(caps) {
+	if capabilitiesAllowPerInterface(caps, FamilyIPv4) {
 		t.Error("a missing Set-NetIPInterface parameter was reported as usable")
 	}
 	joined := strings.Join(caps.Notes, " ")

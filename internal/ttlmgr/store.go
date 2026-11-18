@@ -42,7 +42,7 @@ type Config struct {
 	BumpIPv4 int `json:"bumpIPv4"`
 	BumpIPv6 int `json:"bumpIPv6"`
 
-	// Policy selects which adapters the per-interface bump targets.
+	// Policy selects system-global writes or a per-interface scope.
 	Policy InterfacePolicy `json:"interfacePolicy"`
 
 	// IncludeIfaces and ExcludeIfaces are adapter names, matched case-insensitively.

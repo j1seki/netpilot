@@ -61,7 +61,7 @@ func (l *linuxBackend) Capabilities(context.Context) Capabilities {
 			"The current IPv4 TTL is read from and written to /proc/sys/net/ipv4/ip_default_ttl.",
 			"The current IPv6 hop limit is read from and written to /proc/sys/net/ipv6/conf/all/hop_limit and default/hop_limit.",
 			"Per-interface IPv6 hop limits are configured via /proc/sys/net/ipv6/conf/<iface>/hop_limit.",
-			"Per-interface IPv4 packet TTL mangling (hotspot/tethering optimization) is supported via iptables/nftables.",
+			"IPv4 TTL is not configurable per interface through sysctl.",
 		},
 	}
 }
@@ -79,7 +79,7 @@ func (l *linuxBackend) Read(_ context.Context, ref SettingRef) (Observed, error)
 		if ref.Family == FamilyIPv6 {
 			path = filepath.Join("/proc/sys/net/ipv6/conf", ref.Interface, "hop_limit")
 		} else {
-			path = procPaths[FamilyIPv4]
+			return Observed{}, newError(CodeUnsupported, "no per-interface IPv4 TTL source", "The system-wide default is a separate setting.")
 		}
 	} else {
 		var ok bool
@@ -133,13 +133,7 @@ func (l *linuxBackend) Write(ctx context.Context, ref SettingRef, value int) err
 			return nil
 		}
 
-		// Per-interface IPv4: configure iptables mangle rule for tethering/outgoing packets
-		_ = exec.CommandContext(ctx, "iptables", "-t", "mangle", "-D", "POSTROUTING", "-o", ref.Interface, "-j", "TTL", "--ttl-set", strconv.Itoa(value)).Run()
-		cmd := exec.CommandContext(ctx, "iptables", "-t", "mangle", "-A", "POSTROUTING", "-o", ref.Interface, "-j", "TTL", "--ttl-set", strconv.Itoa(value))
-		if _, err := cmd.CombinedOutput(); err != nil {
-			return l.writeGlobal(ctx, ref.Family, value, valBytes)
-		}
-		return nil
+		return newError(CodeUnsupported, "no per-interface IPv4 TTL setter", "The system-wide default was not changed.")
 	}
 
 	return l.writeGlobal(ctx, ref.Family, value, valBytes)

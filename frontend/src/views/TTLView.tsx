@@ -16,12 +16,14 @@ export const TTLView: React.FC = () => {
   const [ipv4Val, setIpv4Val] = useState<number>(64);
   const [ipv6Val, setIpv6Val] = useState<number>(64);
   const [policy, setPolicy] = useState<string>('none');
+  const [ifaces, setIfaces] = useState<string[]>([]);
   const [applying, setApplying] = useState<boolean>(false);
   const [restoring, setRestoring] = useState<boolean>(false);
   const [outcome, setOutcome] = useState<TTLOutcome | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>('');
 
   const loadData = async () => {
+    setErrorMsg('');
     try {
       const rep = await api.inspectTTL();
       setReport(rep);
@@ -50,7 +52,7 @@ export const TTLView: React.FC = () => {
         bumpIPv4: ipv4Val,
         bumpIPv6: ipv6Val,
         policy,
-        ifaces: [],
+        ifaces,
         dryRun,
       });
       setOutcome(out);
@@ -90,6 +92,12 @@ export const TTLView: React.FC = () => {
 
   const cur4 = report?.settings.find(s => s.family === 'ipv4' && s.scope === 'system-global');
   const cur6 = report?.settings.find(s => s.family === 'ipv6' && s.scope === 'system-global');
+  const writableAdapters = Array.from(new Set(report?.settings.flatMap(s =>
+    s.scope === 'per-interface' && s.writable && s.interface ? [s.interface] : []) ?? []));
+  const changes = outcome?.changes ?? [];
+  const busy = applying || restoring;
+  const invalid = [ipv4Val, ipv6Val].some(n => !Number.isInteger(n) || n < 1 || n > 255)
+    || (policy === 'list' && !ifaces.length);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -101,9 +109,9 @@ export const TTLView: React.FC = () => {
               <h2 style={{ fontSize: '15px', fontWeight: 700, color: 'white' }}>
                 Packet TTL &amp; Hop Limit Manager
               </h2>
-              <span className="status-pill pass" style={{ fontSize: '10.5px' }}>
-                {report?.capabilities.platform.toUpperCase()} • FULLY SUPPORTED
-              </span>
+              {report && <span className={`status-pill ${report.capabilities.supported ? 'pass' : 'warn'}`}>
+                {report.capabilities.platform.toUpperCase()} · {report.capabilities.supported ? 'CONFIGURABLE' : 'INSPECT ONLY'}
+              </span>}
             </div>
             <p style={{ fontSize: '11.5px', color: '#94a3b8', marginTop: '2px' }}>
               Controls outbound IPv4 Time-To-Live and IPv6 Hop Limit packet headers. Features automatic original capture, read-back verification, and single-click safe rollback.
@@ -114,7 +122,7 @@ export const TTLView: React.FC = () => {
             <button
               className="btn btn-secondary btn-sm"
               onClick={handleRestore}
-              disabled={restoring}
+              disabled={busy || !report?.elevated || !report.capabilities.supported}
               style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px' }}
             >
               <RotateCcw size={12} />
@@ -123,6 +131,8 @@ export const TTLView: React.FC = () => {
             <button
               className="btn btn-secondary btn-sm"
               onClick={loadData}
+              aria-label="Refresh TTL settings"
+              disabled={busy}
               style={{ padding: '6px 8px' }}
             >
               <RefreshCw size={12} />
@@ -155,7 +165,7 @@ export const TTLView: React.FC = () => {
         </div>
       )}
 
-      {/* Grid: Configuration & Hotspot Presets */}
+      {/* Configuration */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '12px' }}>
         {/* Controls Card */}
         <div className="card" style={{ marginBottom: 0 }}>
@@ -181,23 +191,7 @@ export const TTLView: React.FC = () => {
                 cursor: 'pointer',
               }}
             >
-              Standard OS Default (64)
-            </button>
-
-            <button
-              onClick={() => { setIpv4Val(65); setIpv6Val(65); }}
-              style={{
-                fontSize: '10.5px',
-                padding: '3px 8px',
-                borderRadius: '4px',
-                background: ipv4Val === 65 ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                border: `1px solid ${ipv4Val === 65 ? '#10b981' : 'rgba(255, 255, 255, 0.1)'}`,
-                color: ipv4Val === 65 ? '#34d399' : '#cbd5e1',
-                cursor: 'pointer',
-              }}
-              title="Decrements by 1 hop through tethered phone so carrier sees standard on-device handset TTL 64"
-            >
-              ⚡ Tethering / Hotspot Optimization (65)
+              Set both to 64
             </button>
 
             <button
@@ -212,7 +206,7 @@ export const TTLView: React.FC = () => {
                 cursor: 'pointer',
               }}
             >
-              Windows Server / Enterprise (128)
+              Set both to 128
             </button>
           </div>
 
@@ -231,7 +225,7 @@ export const TTLView: React.FC = () => {
                 style={{ width: '100%', fontSize: '13px', fontWeight: 700, color: '#38bdf8' }}
               />
               <span style={{ fontSize: '10px', color: '#64748b' }}>
-                Current live: {cur4?.value ?? 64}
+                 System default: {cur4?.value ?? 'Unavailable'}
               </span>
             </div>
 
@@ -249,7 +243,7 @@ export const TTLView: React.FC = () => {
                 style={{ width: '100%', fontSize: '13px', fontWeight: 700, color: '#facc15' }}
               />
               <span style={{ fontSize: '10px', color: '#64748b' }}>
-                Current live: {cur6?.value ?? 64}
+                 System default: {cur6?.value ?? 'Unavailable'}
               </span>
             </div>
           </div>
@@ -261,14 +255,31 @@ export const TTLView: React.FC = () => {
             </label>
             <select
               value={policy}
-              onChange={e => setPolicy(e.target.value)}
+              onChange={e => { setPolicy(e.target.value); setIfaces([]); }}
+              aria-label="Target scope"
               className="input"
               style={{ width: '100%', fontSize: '11.5px' }}
             >
               <option value="none">System-Global (applies to all machine interfaces)</option>
-              <option value="list">Selected Adapters Only (per-interface)</option>
-              <option value="all-except">All Adapters Except Excluded</option>
+              <option value="list" disabled={!writableAdapters.length}>Selected Adapters Only</option>
+              <option value="all-except" disabled={!writableAdapters.length}>All Adapters Except Excluded</option>
             </select>
+            {policy !== 'none' && (
+              <fieldset style={{ marginTop: '8px' }}>
+                <legend>{policy === 'list' ? 'Include adapters' : 'Exclude adapters'}</legend>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  {writableAdapters.map(name => (
+                    <label key={name}>
+                      <input type="checkbox" checked={ifaces.includes(name)} onChange={e => {
+                        const checked = e.target.checked;
+                        setIfaces(prev => checked ? [...prev, name] : prev.filter(n => n !== name));
+                      }} /> {name}
+                    </label>
+                  ))}
+                </div>
+                {report?.capabilities.platform === 'linux' && <p>Adapter scope changes IPv6 Hop Limit only.</p>}
+              </fieldset>
+            )}
           </div>
 
           {errorMsg && (
@@ -288,14 +299,14 @@ export const TTLView: React.FC = () => {
             }}>
               <div style={{ fontWeight: 600 }}>
                 {outcome.dryRun
-                  ? `Dry-run plan calculated: ${outcome.changes.length} setting(s) would change (nothing was written).`
+                  ? `Preview: ${changes.length} setting(s) would change (nothing was written).`
                   : outcome.failed
                     ? `Applied ${outcome.applied ?? 0}, failed ${outcome.failed}.`
-                    : `Successfully applied ${outcome.applied ?? outcome.changes.length} setting(s).`}
+                    : `${changes.filter(c => c.verified).length} of ${outcome.applied ?? changes.length} written setting(s) verified by OS read-back.`}
               </div>
-              {outcome.changes.length > 0 && (
+              {changes.length > 0 && (
                 <div style={{ marginTop: '5px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  {outcome.changes.slice(0, 8).map((c, i) => (
+                  {changes.slice(0, 8).map((c, i) => (
                     <div key={i} className="font-mono" style={{ fontSize: '10.5px' }}>
                       {c.setting?.name || c.setting?.id}: {c.from ?? 'unreadable'} → {c.to}
                       {c.error ? ` (${c.error})` : ''}
@@ -314,7 +325,7 @@ export const TTLView: React.FC = () => {
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => handleApply(true)}
-              disabled={applying}
+              disabled={busy || invalid || !report?.capabilities.supported}
               style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px' }}
             >
               <Eye size={12} />
@@ -324,7 +335,7 @@ export const TTLView: React.FC = () => {
             <button
               className="btn btn-primary btn-sm"
               onClick={() => handleApply(false)}
-              disabled={applying}
+              disabled={busy || invalid || !report?.elevated || !report.capabilities.supported}
               style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, fontSize: '11.5px' }}
             >
               <Play size={12} />
@@ -351,11 +362,10 @@ export const TTLView: React.FC = () => {
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
               <span style={{ color: '#10b981' }}>✓</span>
-              <span><strong>Atomic Rollback:</strong> Partial transaction failures automatically roll back any modified settings.</span>
+              <span><strong>Rollback:</strong> If a write fails, NetPilot tries to restore the settings already changed.</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
-              <span style={{ color: '#10b981' }}>✓</span>
-              <span><strong>Hotspot Optimization:</strong> Sets TTL to 65 to normalize downstream tethered packets across wireless carriers.</span>
+              <span><strong>Verification scope:</strong> These are desktop OS settings, not a measurement of packets seen by the phone or carrier.</span>
             </div>
           </div>
         </div>
@@ -404,7 +414,7 @@ export const TTLView: React.FC = () => {
                   {s.valueOrigin || 'default'}
                 </td>
                 <td>
-                  <span className={`status-pill ${s.writable ? 'pass' : 'blocked'}`} style={{ fontSize: '10px' }}>
+                  <span title={s.writableReason} className={`status-pill ${s.writable ? 'pass' : 'blocked'}`} style={{ fontSize: '10px' }}>
                     {s.writable ? 'WRITABLE' : 'INSPECT-ONLY'}
                   </span>
                 </td>

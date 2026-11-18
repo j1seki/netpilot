@@ -10,7 +10,6 @@ import { Sparkline } from './components/Charts';
 import { DashboardView } from './views/DashboardView';
 import { NetMergeView } from './views/NetMergeView';
 import { ConnectivityView } from './views/ConnectivityView';
-import { TTLView } from './views/TTLView';
 import { RoutingRules } from './views/RoutingRules';
 import { Analytics } from './views/Analytics';
 import { TestDebug } from './views/TestDebug';
@@ -25,7 +24,6 @@ import {
   BarChart2,
   Bug,
   Settings as SettingsIcon,
-  ShieldCheck,
   Wrench,
   Zap,
   ShieldAlert,
@@ -35,7 +33,6 @@ import {
 export type MainTab =
   | 'dashboard'
   | 'netmerge'
-  | 'ttl'
   | 'rules'
   | 'usage'
   | 'tools'
@@ -43,12 +40,14 @@ export type MainTab =
   | 'settings'
   | 'connectivity';
 
-const MAIN_TABS: MainTab[] = ['dashboard', 'netmerge', 'ttl', 'rules', 'usage', 'tools', 'test-suite', 'settings', 'connectivity'];
+const MAIN_TABS: MainTab[] = ['dashboard', 'netmerge', 'rules', 'usage', 'tools', 'test-suite', 'settings', 'connectivity'];
+const openTTL = new URLSearchParams(window.location.search).get('tab') === 'ttl';
 
 function initialTab(): MainTab {
   // Deep links are handy for docs and for jumping straight to a page:
   // index.html?tab=usage#/usage-style URLs from the tray/docs.
   const requested = new URLSearchParams(window.location.search).get('tab') as MainTab | null;
+  if (openTTL) return 'connectivity';
   return requested && MAIN_TABS.includes(requested) ? requested : 'dashboard';
 }
 
@@ -61,7 +60,6 @@ export const App: React.FC = () => {
   const [visitedTabs, setVisitedTabs] = useState<Record<MainTab, boolean>>({
     dashboard: startTab === 'dashboard',
     netmerge: startTab === 'netmerge',
-    ttl: startTab === 'ttl',
     rules: startTab === 'rules',
     usage: startTab === 'usage',
     tools: startTab === 'tools',
@@ -129,7 +127,6 @@ export const App: React.FC = () => {
     { id: 'netmerge', label: 'Net-Merge', icon: <GitMerge size={13} /> },
     { id: 'connectivity', label: 'Mobile', icon: <Smartphone size={13} /> },
     { id: 'rules', label: 'Rules', icon: <Split size={13} /> },
-    { id: 'ttl', label: 'TTL', icon: <ShieldCheck size={13} /> },
     { id: 'usage', label: 'Metrics', icon: <BarChart2 size={13} /> },
     { id: 'tools', label: 'Tools', icon: <Wrench size={13} /> },
     { id: 'test-suite', label: 'Diagnostics', icon: <Bug size={13} /> },
@@ -146,7 +143,7 @@ export const App: React.FC = () => {
       color: '#fafafa',
       overflow: 'hidden',
     }}>
-      {/* Beszel-Inspired Top Header Bar */}
+      {/* Top header */}
       <header style={{
         height: '54px',
         minHeight: '54px',
@@ -249,7 +246,7 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Right: Beszel-style Pill Navigation */}
+        {/* Navigation */}
         <nav style={{
           display: 'flex',
           alignItems: 'center',
@@ -305,12 +302,7 @@ export const App: React.FC = () => {
         )}
         {visitedTabs.connectivity && (
           <div style={{ display: currentTab === 'connectivity' ? 'block' : 'none' }}>
-            <ConnectivityView />
-          </div>
-        )}
-        {visitedTabs.ttl && (
-          <div style={{ display: currentTab === 'ttl' ? 'block' : 'none' }}>
-            <TTLView />
+            <ConnectivityView initialTTL={openTTL} />
           </div>
         )}
         {visitedTabs.rules && (

@@ -181,6 +181,10 @@ func run(parent context.Context, name string, dial dialFunc, opts Options) Resul
 	wg.Wait()
 	res.UpMbps = mbps(up.n.Load(), time.Since(upStart).Seconds())
 
+	if res.IdleMs <= 0 || res.LoadedMs <= 0 {
+		res.Error = "No bufferbloat grade: idle or loaded latency was not measured"
+		return res
+	}
 	res.BufferbloatMs = res.LoadedMs - res.IdleMs
 	if res.BufferbloatMs < 0 {
 		res.BufferbloatMs = 0

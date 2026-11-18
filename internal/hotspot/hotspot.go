@@ -40,8 +40,6 @@ type Profile struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	BumpIPv4    int    `json:"bumpIpv4"`
-	BumpIPv6    int    `json:"bumpIpv6"`
 	MTU         int    `json:"mtu"`
 	IPv6Mode    string `json:"ipv6Mode"`
 }
@@ -51,28 +49,22 @@ func Profiles() []Profile {
 	return []Profile{
 		{
 			ID:          "hotspot-bypass",
-			Name:        "Hotspot Bypass",
-			Description: "Raise TTL/hop limit by one and clamp the TUN MTU to 1420 for phone tethering without carrier TTL detection.",
-			BumpIPv4:    1,
-			BumpIPv6:    1,
+			Name:        "Tethering (Automatic IPv6)",
+			Description: "Use a 1420 tunnel MTU and automatic IPv6 policy.",
 			MTU:         1420,
 			IPv6Mode:    "auto",
 		},
 		{
 			ID:          "hotspot-ipv4",
 			Name:        "Hotspot (IPv4 only)",
-			Description: "TTL bypass with IPv6 refused, for carriers that throttle or misroute IPv6 on tethered plans.",
-			BumpIPv4:    1,
-			BumpIPv6:    1,
+			Description: "Use a 1420 tunnel MTU and route only IPv4 through the tunnel.",
 			MTU:         1420,
 			IPv6Mode:    "off",
 		},
 		{
 			ID:          "metered-saver",
-			Name:        "Metered Saver",
-			Description: "Small 1280 MTU and IPv4-only to reduce per-packet overhead on a metered cellular link.",
-			BumpIPv4:    1,
-			BumpIPv6:    0,
+			Name:        "Low MTU (IPv4 only)",
+			Description: "Use a 1280 tunnel MTU for troubleshooting suspected path MTU issues.",
 			MTU:         1280,
 			IPv6Mode:    "off",
 		},

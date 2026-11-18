@@ -521,8 +521,6 @@ export interface HotspotProfile {
   id: string;
   name: string;
   description: string;
-  bumpIpv4: number;
-  bumpIpv6: number;
   mtu: number;
   ipv6Mode: string;
 }
