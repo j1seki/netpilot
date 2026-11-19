@@ -7,8 +7,11 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -91,89 +94,8 @@ func main() {
 	}
 	defer database.Close()
 
-	// 5. Core Subsystems
-	ruleEng, err := rules.NewEngine(database)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize rules engine: %v\n", err)
-		os.Exit(1)
-	}
-
-	failoverSM := failover.NewStateMachine(failover.Config{
-		FailThreshold:    3,
-		RecoverThreshold: 2,
-	}, func(iface string, oldState, newState failover.LinkState) {
-		ringLog.Log(logger.LogEntry{
-			Level:     logger.LevelWarn,
-			Component: "FailoverEngine",
-			Message:   fmt.Sprintf("Interface %s transitioned %s -> %s", iface, oldState, newState),
-		})
-	})
-
-	appMgr := apps.NewManager()
-	analyticsCol := analytics.NewCollector(database)
-
-	// Wire dynamic lowest-latency interface selection for rules set to "FASTEST"
-	ruleEng.SetFastestNICProvider(failoverSM.GetFastestInterface)
-
-	// Sample real host network counters in background
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			_ = analyticsCol.SampleHostNICs()
-		}
-	}()
-
 	scenarioEng := scenarios.NewEngine(ringLog, database)
-	diagGen := diagnostics.NewGenerator(detector, modeCtrl, ringLog, database)
 	testRunner := testrunner.NewRunner(detector, database, ringLog)
-	netmergeCtrl := netmerge.NewController("")
-	ttlStore := ttlmgr.NewStore(filepath.Join(state.DefaultDir(), "ttl"))
-	ttlBackend := ttlmgr.NewBackend(ttlmgr.NewExecRunner())
-	ttlManager := ttlmgr.NewManager(ttlStore, ttlBackend)
-
-	service := NewNetPilotService(
-		database,
-		ringLog,
-		detector,
-		modeCtrl,
-		ruleEng,
-		failoverSM,
-		appMgr,
-		analyticsCol,
-		scenarioEng,
-		diagGen,
-		testRunner,
-		netmergeCtrl,
-		ttlManager,
-	)
-
-	// Trigger initial WAN IP discovery for active interfaces
-	go func() {
-		_ = service.GetInterfaces()
-	}()
-
-	service.StartMonitors(context.Background())
-
-	// Start local loopback HTTP API listener for live inspection & testing.
-	// It is also the fallback transport for the desktop webview: Wails serves /api/*
-	// directly, but WebView2/WKWebView can block the cross-origin loopback fetch, so the
-	// CORS headers below keep that fallback usable instead of leaving the UI empty.
-	go func() {
-		server := &http.Server{
-			Addr:              localAPIAddress,
-			Handler:           newLocalAPIHandler(service),
-			ReadHeaderTimeout: 5 * time.Second,
-			IdleTimeout:       30 * time.Second,
-		}
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			ringLog.Log(logger.LogEntry{
-				Level:     logger.LevelError,
-				Component: "LocalAPI",
-				Message:   fmt.Sprintf("Loopback API listener failed: %v", err),
-			})
-		}
-	}()
 
 	// CLI execution paths
 	if *runScenarios {
@@ -211,15 +133,109 @@ func main() {
 		return
 	}
 
+	// 5. Core Subsystems
+	ruleEng, err := rules.NewEngine(database)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize rules engine: %v\n", err)
+		os.Exit(1)
+	}
+
+	failoverSM := failover.NewStateMachine(failover.Config{
+		FailThreshold:    3,
+		RecoverThreshold: 2,
+	}, func(iface string, oldState, newState failover.LinkState) {
+		ringLog.Log(logger.LogEntry{
+			Level:     logger.LevelWarn,
+			Component: "FailoverEngine",
+			Message:   fmt.Sprintf("Interface %s transitioned %s -> %s", iface, oldState, newState),
+		})
+	})
+
+	appMgr := apps.NewManager()
+	analyticsCol := analytics.NewCollector(database)
+
+	// Wire dynamic lowest-latency interface selection for rules set to "FASTEST"
+	ruleEng.SetFastestNICProvider(failoverSM.GetFastestInterface)
+
+	diagGen := diagnostics.NewGenerator(detector, modeCtrl, ringLog, database)
+	netmergeCtrl := netmerge.NewController("")
+	ttlStore := ttlmgr.NewStore(filepath.Join(state.DefaultDir(), "ttl"))
+	ttlBackend := ttlmgr.NewBackend(ttlmgr.NewExecRunner())
+	ttlManager := ttlmgr.NewManager(ttlStore, ttlBackend)
+
+	service := NewNetPilotService(
+		database,
+		ringLog,
+		detector,
+		modeCtrl,
+		ruleEng,
+		failoverSM,
+		appMgr,
+		analyticsCol,
+		scenarioEng,
+		diagGen,
+		testRunner,
+		netmergeCtrl,
+		ttlManager,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = analyticsCol.SampleHostNICs()
+			}
+		}
+	}()
+	go service.GetInterfaces()
+	service.StartMonitors(ctx)
+
+	// The desktop primarily uses the Wails route. Keep the loopback API for
+	// headless clients and webviews that can't use that route for streaming.
+	server := &http.Server{
+		Addr:              localAPIAddress,
+		Handler:           newLocalAPIHandler(service),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+	defer server.Close()
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			ringLog.Log(logger.LogEntry{
+				Level:     logger.LevelError,
+				Component: "LocalAPI",
+				Message:   fmt.Sprintf("Loopback API listener failed: %v", err),
+			})
+		}
+	}()
+
+	stopForwarding := func() {
+		cancel()
+		_ = server.Close()
+		if err := service.stopForwarding(); err != nil {
+			fmt.Fprintf(os.Stderr, "stop NetPilot forwarding on exit: %v\n", err)
+		}
+	}
 	if *headless {
+		signals, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
 		fmt.Printf("%s v%s daemon running in headless mode (%s)...\n", branding.AppName, branding.AppVersion, modeCtrl.Current())
-		select {}
+		<-signals.Done()
+		stopForwarding()
+		return
 	}
 
 	// 6. Launch Wails 3 Desktop Application with Cross-Platform System Tray & Close-to-Tray Hook
 	// The updater belongs to the desktop app: CLI test runs and the headless
 	// daemon must not check GitHub or send notifications.
-	go service.updateLoop(context.Background())
+	go service.updateLoop(ctx)
 	prepareLinuxTrayEnvironment()
 
 	distFS, err := fs.Sub(frontend.DistFS, "dist")
@@ -240,13 +256,12 @@ func main() {
 		Assets: application.AssetOptions{
 			Handler: assetHandler,
 		},
+		Mac: application.MacOptions{
+			ApplicationShouldTerminateAfterLastWindowClosed: true,
+		},
 	})
-	service.SetUpdateQuitFunc(func() {
-		// Stop the system-wide engine before the helper replaces the binary;
-		// an elevated net-merge process can otherwise keep files locked.
-		_ = service.SetNetMergeMode(false)
-		app.Quit()
-	})
+	app.OnShutdown(stopForwarding)
+	service.SetUpdateQuitFunc(app.Quit)
 
 	mainWin := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     branding.WindowTitle,
@@ -254,7 +269,7 @@ func main() {
 		Height:    860,
 		MinWidth:  760,
 		MinHeight: 540,
-		Hidden:    *startHidden,
+		Hidden:    *startHidden && isLinuxTrayHostAvailable(),
 	})
 
 	showMainWindow := func() {
@@ -303,7 +318,7 @@ func main() {
 	type trayAdapterSlot struct {
 		sub    *application.MenuItem
 		capOpt []*application.MenuItem
-		name   string
+		name   atomic.Pointer[string]
 	}
 	adapterSlots := make([]trayAdapterSlot, maxTrayAdapters)
 	for i := 0; i < maxTrayAdapters; i++ {
@@ -324,9 +339,11 @@ func main() {
 			}
 			opt := subMenu.AddRadio(lbl, capVal == 0)
 			opt.OnClick(func(_ *application.Context) {
-				name := adapterSlots[slotIdx].name
-				if name != "" {
-					_ = netmergeCtrl.SetLimit(name, capVal)
+				name := adapterSlots[slotIdx].name.Load()
+				if name != nil {
+					if err := service.SetNetMergeLimit(*name, capVal); err != nil {
+						return
+					}
 					for k, o := range adapterSlots[slotIdx].capOpt {
 						o.SetChecked(trayAdapterLimits[k] == capVal)
 					}
@@ -338,10 +355,8 @@ func main() {
 		if subItem != nil {
 			subItem.SetHidden(true)
 		}
-		adapterSlots[i] = trayAdapterSlot{
-			sub:    subItem,
-			capOpt: opts,
-		}
+		adapterSlots[i].sub = subItem
+		adapterSlots[i].capOpt = opts
 	}
 
 	trayMenu.AddSeparator()
@@ -410,7 +425,7 @@ func main() {
 	autostartItem.OnClick(func(_ *application.Context) {
 		cur := netmergeCtrl.GetConfig()
 		next := !cur.Autostart
-		if err := netmergeCtrl.SetAutostart(next); err == nil {
+		if err := service.SetNetMergeAutostart(next); err == nil {
 			autostartItem.SetChecked(next)
 		} else {
 			autostartItem.SetChecked(cur.Autostart)
@@ -426,7 +441,6 @@ func main() {
 
 	quitItem := trayMenu.Add("Quit NetPilot")
 	quitItem.OnClick(func(_ *application.Context) {
-		_ = service.SetNetMergeMode(false)
 		app.Quit()
 	})
 
@@ -439,13 +453,19 @@ func main() {
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 			st, err := netmergeCtrl.GetStatus()
 			if err != nil {
 				continue
 			}
 			active := st.IsRunning
 			cfg := st.Config
+			liveMode := modeCtrl.Current() == mode.ModeLive
 			engineLabel := "Selected: " + st.Binary.Version
 			if active {
 				engineLabel = "Running: " + st.RunningVersion
@@ -458,6 +478,7 @@ func main() {
 			verItem.SetLabel(engineLabel)
 
 			sysTray.SetIcon(icon.PNG(active))
+			toggleItem.SetEnabled(liveMode)
 			if active {
 				toggleItem.SetLabel("Stop Net-Merge")
 			} else {
@@ -469,6 +490,7 @@ func main() {
 			useAllItem.SetChecked(cfg.IPv6Mode != "on")
 			pauseSingleItem.SetChecked(cfg.AutoPause)
 			autostartItem.SetChecked(st.Autostart)
+			autostartItem.SetEnabled(liveMode)
 
 			// Update live adapter rows and aggregate speed
 			var totalDown, totalUp float64
@@ -485,7 +507,7 @@ func main() {
 				}
 				if presentIdx < maxTrayAdapters {
 					slot := &adapterSlots[presentIdx]
-					slot.name = nic.Name
+					slot.name.Store(&nic.Name)
 					if slot.sub != nil {
 						stateSym := "✓"
 						if nic.State == "no internet" {
@@ -503,6 +525,7 @@ func main() {
 						slot.sub.SetHidden(false)
 						for k, opt := range slot.capOpt {
 							opt.SetChecked(trayAdapterLimits[k] == nic.LimitMbps)
+							opt.SetEnabled(liveMode)
 						}
 					}
 					presentIdx++
@@ -511,7 +534,7 @@ func main() {
 			for i := presentIdx; i < maxTrayAdapters; i++ {
 				if adapterSlots[i].sub != nil {
 					adapterSlots[i].sub.SetHidden(true)
-					adapterSlots[i].name = ""
+					adapterSlots[i].name.Store(nil)
 				}
 			}
 

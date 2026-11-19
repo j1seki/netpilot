@@ -78,6 +78,16 @@ vendored **net-merge v0.3.7** engine; earlier published releases still embedded 
 
 ## [Unreleased]
 
+### Desktop reliability
+
+- Dry-Run now enforces inspection mode for tunnel, proxy, and host network changes. TTL previews remain available.
+- The Net-Merge panel preserves edits during polling and reports failed proxy, speed-cap, and cleanup actions.
+- Closing NetPilot stops the forwarding it started. Stopping the desktop SOCKS5 proxy closes active connections, and the listener accepts IPv4 loopback addresses.
+- Linux desktop autostart opens NetPilot in standby and uses the original AppImage path.
+- The dashboard aligns latency and adapter-role headings, shows the active failover adapter, and keeps process names readable at the default window size.
+- VM adapter fallback requires a default route and filters out recognized VPNs. The elevated NetPilot runner uses the configured scheduling, probe targets, and adapter weights.
+- Reinstalling an official engine can repair a damaged download. An update check in progress preserves the selected release channel.
+
 ### Added
 - **In-app automatic updates with stable and beta channels.** Settings now offers a Stable channel
   (production releases only) and a Beta channel (prereleases plus stable), an automatic check every

@@ -109,3 +109,50 @@ func SetAutostart(on bool) error {
 		"X-GNOME-Autostart-enabled=true\n"
 	return os.WriteFile(path, []byte(entry), 0o644)
 }
+
+func desktopAutostartFile() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "autostart", "netpilot.desktop"), nil
+}
+
+// DesktopAutostartEnabled reports whether NetPilot starts at desktop sign-in.
+func DesktopAutostartEnabled() bool {
+	path, err := desktopAutostartFile()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
+	return err == nil
+}
+
+// SetDesktopAutostart starts the desktop app in standby at sign-in.
+func SetDesktopAutostart(on bool) error {
+	path, err := desktopAutostartFile()
+	if err != nil {
+		return err
+	}
+	if !on {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	args := " -start-hidden"
+	if image := os.Getenv("APPIMAGE"); filepath.IsAbs(image) {
+		exe = image
+		args = " --appimage-extract-and-run" + args
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	command := desktopQuote(strings.ReplaceAll(exe, "%", "%%")) + args
+	entry := "[Desktop Entry]\nType=Application\nName=NetPilot\nExec=" + command + "\nTerminal=false\n"
+	return os.WriteFile(path, []byte(entry), 0o644)
+}

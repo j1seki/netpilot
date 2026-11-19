@@ -256,6 +256,7 @@ export interface NetMergeStatus {
   runningVersion?: string;
   runningSource?: NetMergeEngineSource;
   restartForMode?: boolean;
+  systemAppRules?: boolean;
 }
 
 export function engineVersionLabel(status: NetMergeStatus | null) {

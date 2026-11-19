@@ -2,6 +2,7 @@ package netmerge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"netpilot/internal/netmerge/embedded"
 	"netpilot/internal/netmerge/releases"
+	"netpilot/internal/state"
 )
 
 func (c *Controller) engineDir() (string, error) {
@@ -46,7 +48,7 @@ func (c *Controller) resolve(source, value string) BinaryInfo {
 	info.Exists = fileExists(info.Path)
 	if err == nil {
 		info.Version, err = ValidateBinary(info.Path)
-		if err == nil && info.Version != "net-merge "+strings.TrimPrefix(tag, "v") {
+		if err == nil && !versionMatchesTag(info.Version, tag) {
 			err = fmt.Errorf("installed engine reported %q instead of %s", info.Version, tag)
 		}
 	}
@@ -57,14 +59,19 @@ func (c *Controller) resolve(source, value string) BinaryInfo {
 	return info
 }
 
+func versionMatchesTag(version, tag string) bool {
+	number, ok := strings.CutPrefix(version, "net-merge ")
+	return ok && strings.TrimPrefix(number, "v") == strings.TrimPrefix(tag, "v")
+}
+
 // InstallRelease downloads an official release without replacing the bundled fallback.
 // Selection is saved only after the binary has been verified.
 func (c *Controller) InstallRelease(ctx context.Context, tag string) (BinaryInfo, error) {
 	if !releases.ValidTag(tag) {
 		return BinaryInfo{}, fmt.Errorf("select a release version")
 	}
-	if c.IsActive() {
-		return BinaryInfo{}, fmt.Errorf("stop the running net-merge engine before changing versions")
+	if c.IsForwarding() {
+		return BinaryInfo{}, fmt.Errorf("stop net-merge and its SOCKS proxy before changing engines")
 	}
 	c.installMu.Lock()
 	defer c.installMu.Unlock()
@@ -86,21 +93,50 @@ func (c *Controller) InstallRelease(ctx context.Context, tag string) (BinaryInfo
 	if err != nil {
 		return BinaryInfo{}, err
 	}
-	defer os.RemoveAll(tmp)
+	removeStaging := true
+	defer func() {
+		if removeStaging {
+			_ = os.RemoveAll(tmp)
+		}
+	}()
+	staged := filepath.Join(tmp, "engine")
+	if err := os.Mkdir(staged, 0o700); err != nil {
+		return BinaryInfo{}, err
+	}
 	for name, data := range files {
-		if err := os.WriteFile(filepath.Join(tmp, name), data, 0o700); err != nil {
+		if err := os.WriteFile(filepath.Join(staged, name), data, 0o700); err != nil {
 			return BinaryInfo{}, err
 		}
 	}
-	version, err := ValidateBinary(filepath.Join(tmp, releases.CLIName(runtime.GOOS)))
+	version, err := ValidateBinary(filepath.Join(staged, releases.CLIName(runtime.GOOS)))
 	if err != nil {
 		return BinaryInfo{}, err
 	}
-	if version != "net-merge "+strings.TrimPrefix(tag, "v") {
+	if !versionMatchesTag(version, tag) {
 		return BinaryInfo{}, fmt.Errorf("downloaded engine reported unexpected version %q", version)
 	}
-	if err := os.Rename(tmp, filepath.Join(dir, tag)); err != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, running := state.Read(c.stateDir)
+	if c.tunOn || c.socksRunning || running {
+		return BinaryInfo{}, fmt.Errorf("stop net-merge and its SOCKS proxy before changing engines")
+	}
+	target := filepath.Join(dir, tag)
+	previous := filepath.Join(tmp, "previous")
+	hadPrevious := false
+	if err := os.Rename(target, previous); err == nil {
+		hadPrevious = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return BinaryInfo{}, fmt.Errorf("could not replace the existing %s engine: %w", tag, err)
+	}
+	if err := os.Rename(staged, target); err != nil {
+		if hadPrevious {
+			if restoreErr := os.Rename(previous, target); restoreErr != nil {
+				removeStaging = false
+				err = errors.Join(err, fmt.Errorf("previous engine saved at %s: %w", previous, restoreErr))
+			}
+		}
 		return BinaryInfo{}, fmt.Errorf("could not install %s: %w", tag, err)
 	}
-	return c.SetEngineSource("release", tag)
+	return c.setEngineSourceLocked("release", tag)
 }

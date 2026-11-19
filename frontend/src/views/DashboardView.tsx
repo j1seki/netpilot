@@ -157,6 +157,7 @@ export const DashboardView: React.FC = () => {
   }, []);
 
   const isMergeActive = nmStatus?.isRunning ?? false;
+  const systemAppRules = nmStatus?.systemAppRules ?? false;
   const routingMode = nmStatus?.routingMode || nmStatus?.config?.routingMode || 'speed';
 
   // Primary/secondary only mean something in Backup mode. In Speed mode the
@@ -248,7 +249,7 @@ export const DashboardView: React.FC = () => {
     if (!isMergeActive) {
       return 'System Default (Standby)';
     }
-    if (!rule || !rule.enabled) {
+    if (!systemAppRules || !rule || !rule.enabled) {
       return 'net-merge (Default Adapter)';
     }
     if (rule.preferredInterface === 'FASTEST') {
@@ -348,8 +349,8 @@ export const DashboardView: React.FC = () => {
             <tr>
               <th style={{ width: '15%' }}>Adapter</th>
               <th style={{ width: '20%' }}>Addresses (LAN / WAN)</th>
-              <th style={{ width: '14%' }}>Role & Weight</th>
               <th style={{ width: '12%' }}>Latency</th>
+              <th style={{ width: '14%' }}>Role & Weight</th>
               <th style={{ width: '16%' }}>Download Load</th>
               <th style={{ width: '13%' }}>Upload Load</th>
               <th style={{ width: '10%', textAlign: 'right' }}>Trend</th>
@@ -371,9 +372,10 @@ export const DashboardView: React.FC = () => {
 
               const nmSlot = (nmStatus?.nics || []).find(s => s.Name === iface.name);
               const weightPct = nmSlot ? Math.round((nmSlot.Weight || 1) * 100) : 100;
-              const capMbps = iface.rxLimitMbps && iface.rxLimitMbps > 0 ? iface.rxLimitMbps : 100;
-              const rxBarPct = Math.min(100, Math.max(rx > 0 ? 4 : 0, (rx / capMbps) * 100));
-              const txBarPct = Math.min(100, Math.max(tx > 0 ? 4 : 0, (tx / capMbps) * 100));
+              const rxCap = iface.rxLimitMbps || 100;
+              const txCap = iface.txLimitMbps || 100;
+              const rxBarPct = Math.min(100, Math.max(rx > 0 ? 4 : 0, (rx / rxCap) * 100));
+              const txBarPct = Math.min(100, Math.max(tx > 0 ? 4 : 0, (tx / txCap) * 100));
 
               let roleLabel = 'Merged Pool';
               let roleColor = '#38bdf8';
@@ -381,9 +383,12 @@ export const DashboardView: React.FC = () => {
                 roleLabel = iface.isDefault ? 'OS Default' : 'Standby';
                 roleColor = iface.isDefault ? '#10b981' : '#71717a';
               } else if (routingMode === 'backup') {
-                if (iface.name === primaryAdapter) {
-                  roleLabel = 'Primary Active';
+                if (iface.name === nmStatus?.activeAdapter) {
+                  roleLabel = iface.name === primaryAdapter ? 'Primary Active' : 'Failover Active';
                   roleColor = '#10b981';
+                } else if (iface.name === primaryAdapter) {
+                  roleLabel = 'Primary Standby';
+                  roleColor = '#a1a1aa';
                 } else if (iface.name === secondaryAdapter) {
                   roleLabel = 'Failover Standby';
                   roleColor = '#f59e0b';
@@ -515,6 +520,9 @@ export const DashboardView: React.FC = () => {
                           <ArrowUp size={11} />
                           {txStr}
                         </span>
+                        {(iface.txLimitMbps ?? 0) > 0 && (
+                          <span style={{ color: '#71717a', fontSize: '10px' }}>cap {iface.txLimitMbps}M</span>
+                        )}
                       </div>
                       <div className="beszel-meter">
                         <div
@@ -564,9 +572,11 @@ export const DashboardView: React.FC = () => {
           </div>
 
           <p style={{ fontSize: '11.5px', color: '#a1a1aa', marginBottom: '12px' }}>
-            {isMergeActive
+            {systemAppRules
               ? 'Default adapter is net-merge. Applications below can be pinned to specific adapters, failover pairs, or bandwidth caps.'
-              : 'Net-Merge is currently inactive (Standby). All applications use System Default and NetPilot does not modify any routes until activated.'}
+              : isMergeActive
+                ? 'The tunnel is running in a separate process with its own routing configuration. NetPilot app rules are available through the in-app SOCKS5 proxy.'
+                : 'All applications use System Default in Standby. Start Net-Merge or the local SOCKS5 proxy to route traffic through NetPilot.'}
           </p>
 
           {rules.length === 0 ? (
@@ -720,8 +730,8 @@ export const DashboardView: React.FC = () => {
                       <td>
                         <div className="process-name">
                           <ProcessIcon pid={app.pid} executable={app.executable} />
-                          <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-                            <div style={{ fontWeight: 600, color: '#fafafa' }}>{app.name}</div>
+                          <div className="process-identity">
+                            <div className="process-name-text" title={app.name}>{app.name}</div>
                             {(app.socketCount ?? 0) > 0 && (
                               <div style={{ fontSize: '10px', color: '#71717a' }}>
                                 {app.socketCount} sockets
@@ -741,7 +751,7 @@ export const DashboardView: React.FC = () => {
                           <span style={{ fontSize: '11px', color: '#71717a' }}>
                             System Default
                           </span>
-                        ) : matchedRule ? (
+                        ) : systemAppRules && matchedRule ? (
                           <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 600 }}>
                             {formatRouteSummary(matchedRule)}
                           </span>
@@ -754,7 +764,7 @@ export const DashboardView: React.FC = () => {
                       <td style={{ textAlign: 'right' }}>
                         <button
                           className="btn btn-secondary btn-sm"
-                          style={{ padding: '3px 8px', fontSize: '11px' }}
+                          style={{ padding: '3px 8px', fontSize: '11px', whiteSpace: 'nowrap' }}
                           onClick={() => openModalForRule(matchedRule, app.name, app.executable)}
                         >
                           {matchedRule ? 'Edit' : '+ Rule'}

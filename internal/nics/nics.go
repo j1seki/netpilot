@@ -58,6 +58,20 @@ func VirtualAdapterMap() map[int]string {
 }
 
 func DiscoverNicsDetailed(include []string, weights map[string]float64) ([]Nic, []Skip, error) {
+	return discoverNicsDetailed(include, weights, false)
+}
+
+// DiscoverNicsWithFallback also tries software adapters with default routes
+// when a VM or container exposes no hardware adapters to the guest.
+func DiscoverNicsWithFallback(include []string, weights map[string]float64) ([]Nic, []Skip, error) {
+	found, skipped, err := DiscoverNicsDetailed(include, weights)
+	if err != nil || len(found) > 0 || len(include) > 0 {
+		return found, skipped, err
+	}
+	return discoverNicsDetailed(nil, weights, true)
+}
+
+func discoverNicsDetailed(include []string, weights map[string]float64, allowSoftware bool) ([]Nic, []Skip, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil, nil, err
@@ -67,6 +81,9 @@ func DiscoverNicsDetailed(include []string, weights map[string]float64) ([]Nic, 
 	var info map[int]adapterInfo
 	if len(include) == 0 {
 		info, _ = adapterInfos() // nil on error: fall back to name filtering only
+	}
+	if allowSoftware && info == nil {
+		return nil, nil, fmt.Errorf("could not verify default routes for software adapters")
 	}
 	var out []Nic
 	var skipped []Skip
@@ -85,10 +102,13 @@ func DiscoverNicsDetailed(include []string, weights map[string]float64) ([]Nic, 
 			case virtualName.MatchString(ifc.Name):
 				skip("looks like a virtual/VPN adapter (name)")
 				continue
-			case info != nil && haveInfo && ai.virtual != "":
+			case haveInfo && ai.virtual != "" && !allowSoftware:
 				skip(ai.virtual)
 				continue
-			case info != nil && haveInfo && virtualDesc.MatchString(ai.desc):
+			case allowSoftware && ifc.Flags&net.FlagPointToPoint != 0:
+				skip("point-to-point interface")
+				continue
+			case haveInfo && virtualDesc.MatchString(ai.desc):
 				skip(fmt.Sprintf("virtual/VPN adapter (%s)", ai.desc))
 				continue
 			}

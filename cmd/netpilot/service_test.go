@@ -1,13 +1,71 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"netpilot/internal/capability"
 	"netpilot/internal/db"
 	"netpilot/internal/logger"
+	"netpilot/internal/mode"
+	"netpilot/internal/netmerge"
 	"netpilot/internal/rules"
 )
+
+func TestDryRunBlocksNetworkChanges(t *testing.T) {
+	svc, _ := newTestService(t)
+	svc.modeCtrl = mode.NewController(capability.Report{})
+	if _, err := svc.SetExecutionMode(string(mode.ModeDryRun), false); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ path, body string }{
+		{"netmerge/toggle", `{"on":true}`},
+		{"netmerge/toggle", `{"on":false}`},
+		{"netmerge/socks", `{"action":"start"}`},
+		{"netmerge/socks", `{"action":"stop"}`},
+		{"netmerge/autostart", `{"enabled":true}`},
+		{"netmerge/limit", `{"adapter":"eth0","mbps":1}`},
+		{"netmerge/cleanup", `{}`},
+		{"ttl/apply", `{"dryRun":false}`},
+		{"ttl/restore", `{"dryRun":false}`},
+		{"tools/wol", `{}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/"+tc.path, strings.NewReader(tc.body))
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "switch to Live Mode") {
+			t.Errorf("%s %s returned %d %s", tc.path, tc.body, rec.Code, rec.Body.String())
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/ttl/apply", strings.NewReader(`{"dryRun":true}`))
+	rec := httptest.NewRecorder()
+	svc.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "TTL manager not initialized") {
+		t.Fatalf("preview did not reach the TTL handler: %s", rec.Body.String())
+	}
+}
+
+func TestDryRunTransitionRequiresForwardingToStop(t *testing.T) {
+	svc, _ := newTestService(t)
+	svc.modeCtrl = mode.NewController(capability.Report{})
+	svc.netmergeCtrl = netmerge.NewController(t.TempDir())
+	t.Cleanup(func() { _ = svc.netmergeCtrl.StopOwned() })
+	if err := svc.StartNetMergeSocks("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := svc.SetExecutionMode(string(mode.ModeDryRun), false); err == nil || st.CurrentMode != mode.ModeLive {
+		t.Fatalf("transition allowed with an active proxy: %+v, %v", st, err)
+	}
+	if err := svc.StopNetMergeSocks(); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := svc.SetExecutionMode(string(mode.ModeDryRun), false); err != nil || st.CurrentMode != mode.ModeDryRun {
+		t.Fatalf("transition with proxy stopped: %+v, %v", st, err)
+	}
+}
 
 func newTestService(t *testing.T) (*NetPilotService, *db.Database) {
 	t.Helper()

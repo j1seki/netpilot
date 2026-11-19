@@ -107,19 +107,23 @@ func (w nmWeightFlags) Set(v string) error {
 }
 
 type nmCommon struct {
-	include   string
-	weights   nmWeightFlags
-	rescan    time.Duration
-	stats     time.Duration
-	auto      bool
-	logFile   string
-	stateDir  string
-	ipv6      string
-	mtu       int
-	pprof     string
-	mode      string
-	primary   string
-	secondary string
+	include    string
+	weights    nmWeightFlags
+	rescan     time.Duration
+	stats      time.Duration
+	auto       bool
+	logFile    string
+	stateDir   string
+	ipv6       string
+	mtu        int
+	pprof      string
+	mode       string
+	primary    string
+	secondary  string
+	scheduling string
+	probe4     string
+	probe6     string
+	since      time.Time
 }
 
 func (c *nmCommon) register(fs *flag.FlagSet) {
@@ -137,6 +141,9 @@ func (c *nmCommon) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.mode, "mode", "speed", "routing mode: speed or backup")
 	fs.StringVar(&c.primary, "primary", "", "primary adapter name when -mode=backup")
 	fs.StringVar(&c.secondary, "secondary", "", "secondary/backup adapter name when -mode=backup")
+	fs.StringVar(&c.scheduling, "scheduling", "balanced", "flow scheduling: balanced or low-latency")
+	fs.StringVar(&c.probe4, "probe4", "", "comma-separated IPv4 probe endpoints")
+	fs.StringVar(&c.probe6, "probe6", "", "comma-separated IPv6 probe endpoints")
 }
 
 func (c *nmCommon) nicsDetailed() ([]nics.Nic, []nics.Skip, error) {
@@ -146,18 +153,7 @@ func (c *nmCommon) nicsDetailed() ([]nics.Nic, []nics.Skip, error) {
 			inc = append(inc, s)
 		}
 	}
-	found, skipped, err := nics.DiscoverNicsDetailed(inc, c.weights)
-	if len(found) == 0 && len(inc) == 0 {
-		ifaces, _ := net.Interfaces()
-		var allNames []string
-		for _, ifc := range ifaces {
-			if ifc.Flags&net.FlagUp != 0 && ifc.Flags&net.FlagLoopback == 0 && ifc.Name != "net-merge" {
-				allNames = append(allNames, ifc.Name)
-			}
-		}
-		found, skipped, err = nics.DiscoverNicsDetailed(allNames, c.weights)
-	}
-	return found, skipped, err
+	return nics.DiscoverNicsWithFallback(inc, c.weights)
 }
 
 func (c *nmCommon) nics() ([]nics.Nic, error) {
@@ -201,6 +197,12 @@ func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer
 	if c.mtu < 1280 || c.mtu > 65535 {
 		return nil, nil, fmt.Errorf("-mtu must be between 1280 and 65535, got %d", c.mtu)
 	}
+	if c.rescan <= 0 {
+		return nil, nil, fmt.Errorf("-rescan must be a positive duration")
+	}
+	if c.scheduling != "balanced" && c.scheduling != "low-latency" {
+		return nil, nil, fmt.Errorf("-scheduling must be balanced or low-latency")
+	}
 	if c.pprof != "" {
 		if err := nmStartPprof(c.pprof); err != nil {
 			return nil, nil, err
@@ -215,6 +217,8 @@ func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer
 	}
 	sched := engine.NewScheduler(ns)
 	sched.SetAuto(c.auto && len(c.weights) == 0)
+	sched.SetLatencyAware(c.scheduling == "low-latency")
+	sched.SetProbeTargets(strings.Split(c.probe4, ","), strings.Split(c.probe6, ","))
 	if strings.EqualFold(c.mode, "backup") {
 		sched.SetMode(engine.ModeBackup, c.primary, c.secondary)
 	} else {
@@ -236,7 +240,7 @@ func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer
 	}
 	bal.SetV6Mode(v6)
 
-	since := time.Now()
+	c.since = time.Now()
 	go sched.RunProbes(nil)
 	go func() {
 		for range time.Tick(c.rescan) {
@@ -269,7 +273,7 @@ func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer
 						PID:         os.Getpid(),
 						Mode:        m,
 						V6:          bal.V6State(),
-						Since:       since,
+						Since:       c.since,
 						Updated:     now,
 						NICs:        sched.Snapshot(),
 						ProcessMbps: bal.ProcessRates(now),
@@ -417,7 +421,7 @@ func nmCmdRun(args []string) {
 		PID:     os.Getpid(),
 		Mode:    "system-wide",
 		V6:      bal.V6State(),
-		Since:   time.Now(),
+		Since:   c.since,
 		Updated: time.Now(),
 		NICs:    sched.Snapshot(),
 	})

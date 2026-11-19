@@ -92,11 +92,22 @@ func (s *NetPilotService) SetUpdateChannel(channel string) (UpdateStatus, error)
 	if !ok {
 		return s.GetUpdateStatus(), fmt.Errorf("unknown update channel %q", channel)
 	}
+	if !s.updateInstallMu.TryLock() {
+		return s.GetUpdateStatus(), errors.New("wait for the current update before changing channels")
+	}
+	defer s.updateInstallMu.Unlock()
 
 	s.updateMu.Lock()
 	previous := s.updateSettings
+	next := previous
+	next.Channel = ch
+	if err := update.SaveSettings(s.updateDir, next); err != nil {
+		st := s.updateStatusLocked()
+		s.updateMu.Unlock()
+		return st, fmt.Errorf("save update settings: %w", err)
+	}
 	if s.updateSettings.Channel != ch {
-		s.updateSettings.Channel = ch
+		s.updateSettings = next
 		s.updateRelease = nil
 		s.updateStatus.Latest = ""
 		s.updateStatus.ReleaseName = ""
@@ -112,14 +123,6 @@ func (s *NetPilotService) SetUpdateChannel(channel string) (UpdateStatus, error)
 		s.updateStatus.State = "idle"
 		s.updateStatus.Message = ""
 		s.updateStatus.Error = ""
-	}
-	// Save under the same lock as the mutation so a concurrent notification
-	// bookkeeping write cannot restore the old channel.
-	if err := update.SaveSettings(s.updateDir, s.updateSettings); err != nil {
-		s.updateSettings = previous
-		st := s.updateStatusLocked()
-		s.updateMu.Unlock()
-		return st, fmt.Errorf("save update settings: %w", err)
 	}
 	st := s.updateStatusLocked()
 	s.updateMu.Unlock()
@@ -172,6 +175,11 @@ func (s *NetPilotService) checkForUpdate(ctx context.Context, force bool) Update
 	}
 
 	s.updateMu.Lock()
+	if s.updateStatus.State == "downloading" || s.updateStatus.State == "installing" {
+		st := s.updateStatusLocked()
+		s.updateMu.Unlock()
+		return st
+	}
 	if !force {
 		if !s.updateSettings.AutoCheck {
 			st := s.updateStatusLocked()
@@ -197,6 +205,10 @@ func (s *NetPilotService) checkForUpdate(ctx context.Context, force bool) Update
 
 	s.updateMu.Lock()
 	defer s.updateMu.Unlock()
+	// A channel change or an install may have superseded this check in flight.
+	if s.updateSettings.Channel != channel || s.updateStatus.State != "checking" {
+		return s.updateStatusLocked()
+	}
 	s.updateStatus.CheckedAt = &now
 	if err != nil {
 		s.updateStatus.State = "error"

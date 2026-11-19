@@ -12,7 +12,7 @@ import (
 	"netpilot/internal/state"
 )
 
-// prepareLinuxTrayEnvironment ensures that icon files exist in both ~/.local/share/icons
+// prepareLinuxTrayEnvironment ensures that icon files exist in both the user icon theme
 // and the NetPilot state directory. Wails itself owns and registers the StatusNotifierItem;
 // registering it again here produced two icons on desktops which proxy both KDE and
 // freedesktop watcher interfaces (notably AppImage hosts running AppIndicator).
@@ -22,13 +22,19 @@ func prepareLinuxTrayEnvironment() {
 	_ = os.WriteFile(filepath.Join(iconDir, "netpilot.png"), icon.PNG(true), 0o644)
 	_ = os.WriteFile(filepath.Join(iconDir, "netpilot-off.png"), icon.PNG(false), 0o644)
 
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		hicolor := filepath.Join(home, ".local", "share", "icons", "hicolor", "32x32", "apps")
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	if !filepath.IsAbs(dataHome) {
+		dataHome = ""
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			dataHome = filepath.Join(home, ".local", "share")
+		}
+	}
+	if dataHome != "" {
+		hicolor := filepath.Join(dataHome, "icons", "hicolor", "32x32", "apps")
 		if os.MkdirAll(hicolor, 0o755) == nil {
 			_ = os.WriteFile(filepath.Join(hicolor, "netpilot.png"), icon.PNG(true), 0o644)
 		}
 	}
-
 }
 
 // isLinuxTrayHostAvailable checks whether any StatusNotifierWatcher or system tray host is active on DBus.

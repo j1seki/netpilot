@@ -2,6 +2,7 @@ package netmerge
 
 import (
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,6 +13,66 @@ import (
 	"netpilot/internal/nics"
 	"netpilot/internal/state"
 )
+
+func TestStopSocks5ClosesClientConnections(t *testing.T) {
+	c := NewController(t.TempDir())
+	defer close(c.stopCh)
+	defer c.StopOwned()
+	if err := c.StartSocks5("0.0.0.0:0"); err == nil {
+		t.Fatal("SOCKS5 accepted an address outside loopback")
+	}
+	if err := c.StartSocks5("localhost:0"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := c.GetStatus()
+	if err != nil || !st.SocksRunning {
+		t.Fatalf("proxy status: %+v, %v", st, err)
+	}
+	conn, err := net.DialTimeout("tcp4", st.SocksAddress, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte{5, 1, 0}); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, 2)
+	if _, err := io.ReadFull(conn, reply); err != nil || reply[0] != 5 || reply[1] != 0 {
+		t.Fatalf("SOCKS5 handshake: %v, %v", reply, err)
+	}
+	if err := c.StopSocks5(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Read(reply); !errors.Is(err, io.EOF) {
+		t.Fatalf("client connection is still open: %v", err)
+	}
+}
+
+func TestStopOwnedLeavesIndependentEngineRunning(t *testing.T) {
+	dir := t.TempDir()
+	c := NewController(dir)
+	defer close(c.stopCh)
+	record := state.Status{PID: 12345, Since: time.Now(), Updated: time.Now()}
+	state.Write(dir, record)
+	if err := c.StopOwned(); err != nil {
+		t.Fatal(err)
+	}
+	if state.TakeMarker(dir, "off") {
+		t.Fatal("stop marker sent to an independent engine")
+	}
+	c.mu.Lock()
+	c.launchedPID, c.launchedSince = record.PID, record.Since
+	c.mu.Unlock()
+	if err := c.StopOwned(); err != nil {
+		t.Fatal(err)
+	}
+	if !state.TakeMarker(dir, "off") {
+		t.Fatal("missing stop marker for engine started by this controller")
+	}
+}
 
 func TestNetMergeController(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "netmerge_test_*")

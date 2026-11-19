@@ -92,10 +92,10 @@ func (c *Controller) describe(m ExecutionMode) State {
 	case ModeDryRun:
 		return State{
 			CurrentMode:     ModeDryRun,
-			Description:     "Dry-Run Mode: Inspects real system interfaces and processes, but suppresses active route modifications.",
+			Description:     "Dry-Run Mode inspects interfaces and processes. Net-Merge, SOCKS5, and system network changes require Live Mode.",
 			AllowsSystemMod: false,
 			RequiresRoot:    false,
-			ActiveWarning:   "Inspection active. Route modifications disabled.",
+			ActiveWarning:   "Inspection active. System network changes are disabled.",
 		}
 	default:
 		return State{

@@ -93,32 +93,30 @@ badge on the Releases page stay on the newest stable version.
 ## 🛠️ Building from Source
 
 NetPilot uses **Go** for the backend/engine and **React + Vite + `typescript-go` (`tsgo`)** for the frontend.
+Use the Go version in `go.mod` and Node.js 22 or later. The Linux release build needs the GTK 3 and
+WebKitGTK 4.1 development packages (`libgtk-3-dev` and `libwebkit2gtk-4.1-dev` on Debian and Ubuntu).
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/j1seki/netpilot.git
 cd netpilot
 
-# 2. Sync the latest upstream net-merge source (optional, already synced in repo)
-bash scripts/sync-net-merge.sh
-
-# 3. Build frontend assets (typechecked with typescript-go / tsgo)
-cd frontend
-npm ci
-npm run build
-cd ..
-
-# 4. Build the single NetPilot binary (GUI + net-merge CLI + tray in one file)
+# Build the frontend and optionally bundle the official engine.
+(cd frontend && npm ci && npm run build)
 go run scripts/bundle-net-merge.go
-#    On Linux add -tags gtk3; on Windows add -ldflags "-H=windowsgui" to hide the console.
-go build -trimpath -ldflags "-s -w" -o dist/netpilot ./cmd/netpilot
 
-# The net-merge subcommands are built in: `dist/netpilot version`, `list`, `run`, etc.
-# `internal/netmerge/VERSION` is embedded via go:embed; keep it in sync with the engine.
+# Build and launch the Linux desktop app.
+go build -tags gtk3 -trimpath -o dist/netpilot ./cmd/netpilot
+./dist/netpilot
 
-# 5. Run the test suite
-go test ./internal/... ./tests/common ./tests/scenarios
+go test -tags gtk3 ./...
 ```
+
+Use `./dist/netpilot -mode dry-run` for inspection and previews. Choose Live Mode in Settings to
+start forwarding or change host network settings. The built-in `version`, `list`, and `run` commands
+also work directly from a terminal.
+
+On macOS and Windows, omit `-tags gtk3`. On Windows, add `-ldflags "-H=windowsgui"` to build
+without a console window. The Windows release bundle supplies the Wintun driver.
 
 ---
 

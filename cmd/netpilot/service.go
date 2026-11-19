@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -51,6 +52,8 @@ type cachedWAN struct {
 	at  time.Time
 }
 
+var errDryRunNetworkChange = errors.New("switch to Live Mode in Settings to make this network change")
+
 type cachedLatency struct {
 	routerMs float64
 	webMs    float64
@@ -59,7 +62,8 @@ type cachedLatency struct {
 
 // NetPilotService is the backend RPC service exposed to the Wails 3 React frontend.
 type NetPilotService struct {
-	mu           sync.RWMutex
+	networkMu    sync.RWMutex
+	shuttingDown bool
 	database     *db.Database
 	ringLog      *logger.RingLogger
 	capDetector  *capability.Detector
@@ -224,8 +228,17 @@ func (s *NetPilotService) GetExecutionMode() mode.State {
 	return s.modeCtrl.GetState()
 }
 
-// SetExecutionMode switches between Simulation, Dry-Run, and Live modes.
+// SetExecutionMode switches between Dry-Run and Live modes.
 func (s *NetPilotService) SetExecutionMode(targetMode string, forceLive bool) (mode.State, error) {
+	s.networkMu.Lock()
+	defer s.networkMu.Unlock()
+
+	current := s.modeCtrl.GetState()
+	if targetMode == string(mode.ModeDryRun) && current.CurrentMode != mode.ModeDryRun &&
+		s.netmergeCtrl != nil && s.netmergeCtrl.IsForwarding() {
+		return current, fmt.Errorf("stop Net-Merge and the SOCKS5 proxy before switching to Dry-Run")
+	}
+
 	op := s.ringLog.StartOperation("SetExecutionMode", "ModeController", string(s.modeCtrl.Current()), "common", "")
 	op.Step(logger.PhaseValidationStarted, "Validating mode transition request to "+targetMode, nil)
 
@@ -237,6 +250,28 @@ func (s *NetPilotService) SetExecutionMode(targetMode string, forceLive bool) (m
 
 	op.Complete("SUCCESS", map[string]interface{}{"newMode": targetMode})
 	return st, nil
+}
+
+// beginLiveNetworkChange keeps a mode transition from overlapping a host network
+// change. Configuration edits and explicit previews can run in either mode.
+func (s *NetPilotService) beginLiveNetworkChange() (func(), error) {
+	s.networkMu.RLock()
+	if s.shuttingDown {
+		s.networkMu.RUnlock()
+		return nil, fmt.Errorf("NetPilot is shutting down")
+	}
+	if s.modeCtrl != nil && s.modeCtrl.Current() == mode.ModeDryRun {
+		s.networkMu.RUnlock()
+		return nil, errDryRunNetworkChange
+	}
+	return s.networkMu.RUnlock, nil
+}
+
+func (s *NetPilotService) stopForwarding() error {
+	s.networkMu.Lock()
+	defer s.networkMu.Unlock()
+	s.shuttingDown = true
+	return s.netmergeCtrl.StopOwned()
 }
 
 // ListRules returns all configured routing rules.
@@ -1057,6 +1092,11 @@ func (s *NetPilotService) GetNetMergeStatus() (netmerge.StatusInfo, error) {
 }
 
 func (s *NetPilotService) SetNetMergeMode(on bool) error {
+	done, err := s.beginLiveNetworkChange()
+	if err != nil {
+		return err
+	}
+	defer done()
 	if s.netmergeCtrl == nil {
 		return fmt.Errorf("net-merge controller not initialized")
 	}
@@ -1069,6 +1109,11 @@ func (s *NetPilotService) SetNetMergeMode(on bool) error {
 }
 
 func (s *NetPilotService) SetNetMergeAutostart(enabled bool) error {
+	done, err := s.beginLiveNetworkChange()
+	if err != nil {
+		return err
+	}
+	defer done()
 	if s.netmergeCtrl == nil {
 		return fmt.Errorf("net-merge controller not initialized")
 	}
@@ -1076,6 +1121,11 @@ func (s *NetPilotService) SetNetMergeAutostart(enabled bool) error {
 }
 
 func (s *NetPilotService) SetNetMergeLimit(adapter string, mbps float64) error {
+	done, err := s.beginLiveNetworkChange()
+	if err != nil {
+		return err
+	}
+	defer done()
 	if s.netmergeCtrl == nil {
 		return fmt.Errorf("net-merge controller not initialized")
 	}
@@ -1083,6 +1133,11 @@ func (s *NetPilotService) SetNetMergeLimit(adapter string, mbps float64) error {
 }
 
 func (s *NetPilotService) RunNetMergeCleanup() error {
+	done, err := s.beginLiveNetworkChange()
+	if err != nil {
+		return err
+	}
+	defer done()
 	if s.netmergeCtrl == nil {
 		return fmt.Errorf("net-merge controller not initialized")
 	}
@@ -1095,6 +1150,11 @@ func (s *NetPilotService) RunNetMergeCleanup() error {
 }
 
 func (s *NetPilotService) StartNetMergeSocks(addr string) error {
+	done, err := s.beginLiveNetworkChange()
+	if err != nil {
+		return err
+	}
+	defer done()
 	if s.netmergeCtrl == nil {
 		return fmt.Errorf("net-merge controller not initialized")
 	}
@@ -1102,6 +1162,11 @@ func (s *NetPilotService) StartNetMergeSocks(addr string) error {
 }
 
 func (s *NetPilotService) StopNetMergeSocks() error {
+	done, err := s.beginLiveNetworkChange()
+	if err != nil {
+		return err
+	}
+	defer done()
 	if s.netmergeCtrl == nil {
 		return fmt.Errorf("net-merge controller not initialized")
 	}
@@ -1184,6 +1249,13 @@ func (s *NetPilotService) InspectTTL(ctx context.Context) (ttlmgr.Report, error)
 }
 
 func (s *NetPilotService) ApplyTTL(ctx context.Context, bumpIPv4, bumpIPv6 int, policy string, ifaceList []string, dryRun bool) (ttlmgr.Outcome, error) {
+	if !dryRun {
+		done, err := s.beginLiveNetworkChange()
+		if err != nil {
+			return ttlmgr.Outcome{}, err
+		}
+		defer done()
+	}
 	if s.ttlManager == nil {
 		return ttlmgr.Outcome{}, fmt.Errorf("TTL manager not initialized")
 	}
@@ -1225,6 +1297,13 @@ func (s *NetPilotService) ApplyTTL(ctx context.Context, bumpIPv4, bumpIPv6 int, 
 }
 
 func (s *NetPilotService) RestoreTTL(ctx context.Context, dryRun bool) (ttlmgr.Outcome, error) {
+	if !dryRun {
+		done, err := s.beginLiveNetworkChange()
+		if err != nil {
+			return ttlmgr.Outcome{}, err
+		}
+		defer done()
+	}
 	if s.ttlManager == nil {
 		return ttlmgr.Outcome{}, fmt.Errorf("TTL manager not initialized")
 	}
@@ -1300,6 +1379,11 @@ func (s *NetPilotService) CheckTCPPort(host string, port int, timeoutMs int) net
 
 // SendWakeOnLAN broadcasts a Wake-on-LAN magic packet for the given MAC address.
 func (s *NetPilotService) SendWakeOnLAN(macAddress, broadcast string, port int) error {
+	done, err := s.beginLiveNetworkChange()
+	if err != nil {
+		return err
+	}
+	defer done()
 	mac, err := nettools.ParseMAC(macAddress)
 	if err != nil {
 		return err
@@ -1896,6 +1980,11 @@ func (s *NetPilotService) enforceAdapterQuotas() {
 	if s.netmergeCtrl == nil || s.database == nil {
 		return
 	}
+	done, err := s.beginLiveNetworkChange()
+	if err != nil {
+		return
+	}
+	defer done()
 	caps, err := s.database.GetAdapterCaps()
 	if err != nil {
 		return
@@ -1929,6 +2018,11 @@ func (s *NetPilotService) enforceAdapterQuotas() {
 }
 
 func (s *NetPilotService) checkHotspotAuto(ctx context.Context) {
+	done, err := s.beginLiveNetworkChange()
+	if err != nil {
+		return
+	}
+	defer done()
 	s.hotspotMu.Lock()
 	auto, enabled, profile := s.hotspot.AutoApply, s.hotspot.Enabled, s.hotspot.Profile
 	s.hotspotMu.Unlock()
@@ -2417,7 +2511,11 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case path == "netmerge/cleanup":
 		if err := s.RunNetMergeCleanup(); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
+			code := http.StatusInternalServerError
+			if errors.Is(err, errDryRunNetworkChange) {
+				code = http.StatusBadRequest
+			}
+			w.WriteHeader(code)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
@@ -2438,7 +2536,11 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			_ = s.StopNetMergeSocks()
+			if err := s.StopNetMergeSocks(); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 

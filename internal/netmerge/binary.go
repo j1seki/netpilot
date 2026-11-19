@@ -78,7 +78,10 @@ func (c *Controller) SetCustomBinaryPath(path string) (BinaryInfo, error) {
 func (c *Controller) SetEngineSource(source string, customPath string) (BinaryInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.setEngineSourceLocked(source, customPath)
+}
 
+func (c *Controller) setEngineSourceLocked(source, customPath string) (BinaryInfo, error) {
 	source = strings.ToLower(strings.TrimSpace(source))
 	customPath = strings.TrimSpace(customPath)
 	switch source {

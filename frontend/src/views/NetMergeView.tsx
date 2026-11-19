@@ -16,28 +16,20 @@ import {
 export const NetMergeView: React.FC = () => {
   const [status, setStatus] = useState<NetMergeStatus | null>(null);
   const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
-  const [config, setConfig] = useState<NetMergeConfig | null>(null);
+  const [configDraft, setConfigDraft] = useState<Partial<Pick<NetMergeConfig, 'ipv6Mode' | 'mtu' | 'autoWeight'>>>({});
   const [loading, setLoading] = useState<boolean>(false);
   const [limitInputs, setLimitInputs] = useState<Record<string, string>>({});
-  const [socksAddr, setSocksAddr] = useState<string>('127.0.0.1:1080');
+  const [socksDraft, setSocksDraft] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const config = status ? { ...status.config, ...configDraft } : null;
+  const socksAddr = status?.socksRunning
+    ? status.socksAddress
+    : socksDraft ?? status?.config.socksAddress ?? '127.0.0.1:1080';
 
   const loadStatus = async () => {
     try {
-      const st = await api.getNetMergeStatus();
-      setStatus(st);
-      if (!config) {
-        setConfig(st.config);
-        setSocksAddr(st.config.socksAddress || '127.0.0.1:1080');
-      }
-      const lims: Record<string, string> = {};
-      if (st.limits) {
-        Object.entries(st.limits).forEach(([k, v]) => {
-          lims[k] = String(v);
-        });
-      }
-      setLimitInputs(prev => ({ ...lims, ...prev }));
+      setStatus(await api.getNetMergeStatus());
     } catch (err: any) {
       setErrorMsg(`Could not read Net-Merge status: ${err?.message || String(err)}`);
     }
@@ -66,10 +58,10 @@ export const NetMergeView: React.FC = () => {
   };
 
   const handleToggleSystemWide = async () => {
+    const next = !(status?.isRunning ?? false);
     setLoading(true);
     setErrorMsg('');
     try {
-      const next = !(status?.isRunning ?? false);
       await api.toggleNetMerge(next);
       showToast(
         next
@@ -80,7 +72,7 @@ export const NetMergeView: React.FC = () => {
     } catch (err: any) {
       const detail = err?.message || String(err);
       setErrorMsg(
-        `Could not start Net-Merge: ${detail}` +
+        `Could not ${next ? 'start' : 'stop'} Net-Merge: ${detail}` +
         (detail.toLowerCase().includes('appimage')
           ? ' AppImages cannot keep CAP_NET_ADMIN, so NetPilot will ask Polkit (pkexec) for permission each time it starts the system-wide adapter.'
           : '')
@@ -103,14 +95,6 @@ export const NetMergeView: React.FC = () => {
     setErrorMsg('');
     try {
       await api.setNetMergeRoutingMode(mode, pri, sec);
-      if (config) {
-        setConfig({
-          ...config,
-          routingMode: mode,
-          primaryAdapter: pri,
-          secondaryAdapter: sec,
-        });
-      }
       showToast(status?.restartForMode
         ? 'Routing preference saved. Stop and start net-merge to apply it.'
         : mode === 'backup'
@@ -134,33 +118,41 @@ export const NetMergeView: React.FC = () => {
       showToast(`Sign-in autostart ${next ? 'enabled' : 'disabled'}.`);
       await loadStatus();
     } catch (err: any) {
-      setErrorMsg(
-        `Could not ${next ? 'enable' : 'disable'} sign-in autostart: ${err?.message || String(err)}. ` +
-        'On Windows this needs administrator rights; on macOS the passwordless sudo rule must be installed once.'
-      );
+      setErrorMsg(`Could not ${next ? 'enable' : 'disable'} sign-in autostart: ${err?.message || String(err)}`);
     } finally {
       setLoading(false);
     }
   };
 
   const handleApplyLimit = async (adapter: string) => {
-    const raw = limitInputs[adapter] || '0';
-    const mbps = parseFloat(raw) || 0;
-    await api.setNetMergeLimit(adapter, mbps);
-    showToast(
-      mbps > 0
-        ? `Speed cap for ${adapter} set to ${mbps} Mbit/s.`
-        : `Speed cap removed for ${adapter}.`
-    );
-    await loadStatus();
+    const mbps = Number(limitInputs[adapter] ?? status?.limits?.[adapter] ?? 0);
+    setErrorMsg('');
+    try {
+      if (!Number.isFinite(mbps) || mbps < 0 || mbps > 1_000_000) {
+        throw new Error('Enter a speed cap between 0 and 1,000,000 Mbit/s.');
+      }
+      await api.setNetMergeLimit(adapter, mbps);
+      await loadStatus();
+      setLimitInputs(prev => {
+        const next = { ...prev };
+        delete next[adapter];
+        return next;
+      });
+      showToast(mbps > 0 ? `Speed cap for ${adapter} set to ${mbps} Mbit/s.` : `Speed cap removed for ${adapter}.`);
+    } catch (err: any) {
+      setErrorMsg(err?.message || String(err));
+    }
   };
 
   const handleCleanup = async () => {
     setLoading(true);
+    setErrorMsg('');
     try {
       await api.cleanupNetMerge();
       showToast('Stale TUN interfaces and leftover routes cleaned up.');
       await loadStatus();
+    } catch (err: any) {
+      setErrorMsg(err?.message || String(err));
     } finally {
       setLoading(false);
     }
@@ -169,20 +161,34 @@ export const NetMergeView: React.FC = () => {
   const handleToggleSocks = async () => {
     if (!status) return;
     const action = status.socksRunning ? 'stop' : 'start';
-    await api.controlNetMergeSocks(action, socksAddr);
-    showToast(
-      action === 'start'
-        ? `SOCKS5 multi-link balancer started on ${socksAddr}.`
-        : 'SOCKS5 proxy stopped.'
-    );
-    await loadStatus();
+    setLoading(true);
+    setErrorMsg('');
+    try {
+      await api.controlNetMergeSocks(action, socksAddr);
+      await loadStatus();
+      setSocksDraft(null);
+      showToast(action === 'start' ? 'SOCKS5 proxy started.' : 'SOCKS5 proxy stopped.');
+    } catch (err: any) {
+      setErrorMsg(err?.message || String(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSaveConfig = async () => {
     if (!config) return;
-    await api.saveNetMergeConfig(config);
-    showToast('Net-Merge engine configuration saved.');
-    await loadStatus();
+    setErrorMsg('');
+    try {
+      if (!Number.isInteger(config.mtu) || config.mtu < 1280 || config.mtu > 65535) {
+        throw new Error('Enter a virtual adapter MTU between 1280 and 65535.');
+      }
+      await api.saveNetMergeConfig(config);
+      await loadStatus();
+      setConfigDraft({});
+      showToast('Net-Merge engine configuration saved.');
+    } catch (err: any) {
+      setErrorMsg(err?.message || String(err));
+    }
   };
 
   const isRunning = status?.isRunning || false;
@@ -281,7 +287,7 @@ export const NetMergeView: React.FC = () => {
             className="btn btn-secondary"
             onClick={handleToggleAutostart}
             disabled={loading}
-            title={status?.autostart ? 'Disable starting net-merge at sign-in' : 'Enable starting net-merge at sign-in'}
+            title={status?.autostart ? 'Disable start at sign-in' : 'Enable start at sign-in'}
           >
             <span>Autostart: {status?.autostart ? 'ON' : 'OFF'}</span>
           </button>
@@ -490,7 +496,7 @@ export const NetMergeView: React.FC = () => {
                         <input
                           type="number"
                           placeholder="Unlimited"
-                          value={limitInputs[slot.Name] ?? (slot.LimitMbps > 0 ? String(slot.LimitMbps) : '')}
+                          value={limitInputs[slot.Name] ?? status?.limits?.[slot.Name] ?? ''}
                           onChange={e =>
                             setLimitInputs(prev => ({ ...prev, [slot.Name]: e.target.value }))
                           }
@@ -538,13 +544,16 @@ export const NetMergeView: React.FC = () => {
             <input
               type="text"
               value={socksAddr}
-              onChange={e => setSocksAddr(e.target.value)}
+              onChange={e => setSocksDraft(e.target.value)}
+              aria-label="SOCKS5 listen address"
+              disabled={status?.socksRunning}
               placeholder="127.0.0.1:1080"
               style={{ flex: 1 }}
             />
             <button
               className={`btn ${status?.socksRunning ? 'btn-danger' : 'btn-primary'}`}
               onClick={handleToggleSocks}
+              disabled={!status || loading}
             >
               {status?.socksRunning ? 'Stop SOCKS5' : 'Start SOCKS5'}
             </button>
@@ -573,7 +582,7 @@ export const NetMergeView: React.FC = () => {
                   </label>
                   <select
                     value={config.ipv6Mode}
-                    onChange={e => setConfig({ ...config, ipv6Mode: e.target.value })}
+                    onChange={e => setConfigDraft({ ...configDraft, ipv6Mode: e.target.value })}
                     style={{ width: '100%' }}
                   >
                     <option value="auto">Auto (Only if all NICs support IPv6)</option>
@@ -588,10 +597,11 @@ export const NetMergeView: React.FC = () => {
                   </label>
                   <input
                     type="number"
-                    value={config.mtu}
+                    aria-label="Virtual Adapter MTU"
+                    value={config.mtu || ''}
                     min={1280}
                     max={65535}
-                    onChange={e => setConfig({ ...config, mtu: parseInt(e.target.value, 10) || 1500 })}
+                    onChange={e => setConfigDraft({ ...configDraft, mtu: Number(e.target.value) })}
                     style={{ width: '100%' }}
                   />
                 </div>
@@ -602,7 +612,7 @@ export const NetMergeView: React.FC = () => {
                   <input
                     type="checkbox"
                     checked={config.autoWeight}
-                    onChange={e => setConfig({ ...config, autoWeight: e.target.checked })}
+                    onChange={e => setConfigDraft({ ...configDraft, autoWeight: e.target.checked })}
                   />
                   <span>Auto-Weight by Observed Throughput</span>
                 </label>

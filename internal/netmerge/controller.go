@@ -1,13 +1,16 @@
 package netmerge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +68,7 @@ type StatusInfo struct {
 	RunningVersion string             `json:"runningVersion,omitempty"`
 	RunningSource  string             `json:"runningSource,omitempty"`
 	RestartForMode bool               `json:"restartForMode"`
+	SystemAppRules bool               `json:"systemAppRules"`
 }
 
 // Controller coordinates all net-merge operations directly inside NetPilot.
@@ -75,6 +79,7 @@ type Controller struct {
 	configFile   string
 	config       Config
 	socksLn      net.Listener
+	socksCancel  context.CancelFunc
 	socksRunning bool
 	socksAddr    string
 
@@ -199,29 +204,9 @@ func (c *Controller) parseIncludes() []string {
 }
 
 func (c *Controller) discover() ([]nics.Nic, error) {
-	inc := c.parseIncludes()
-	found, err := nics.DiscoverNics(inc, c.config.Weights)
+	found, _, err := nics.DiscoverNicsWithFallback(c.parseIncludes(), c.config.Weights)
 	if err != nil {
 		return nil, fmt.Errorf("discover network adapters: %w", err)
-	}
-	if len(found) == 0 && len(inc) == 0 {
-		// Fallback for virtualized environments where default hardware filter skips eth0.
-		// Preserve enumeration errors: an empty successful scan means "remove old adapters",
-		// while a failed scan must leave the current scheduler state untouched.
-		ifaces, err := net.Interfaces()
-		if err != nil {
-			return nil, fmt.Errorf("enumerate interfaces for fallback discovery: %w", err)
-		}
-		var allNames []string
-		for _, ifc := range ifaces {
-			if ifc.Flags&net.FlagUp != 0 && ifc.Flags&net.FlagLoopback == 0 && ifc.Name != "net-merge" {
-				allNames = append(allNames, ifc.Name)
-			}
-		}
-		found, err = nics.DiscoverNics(allNames, c.config.Weights)
-		if err != nil {
-			return nil, fmt.Errorf("discover fallback adapters: %w", err)
-		}
 	}
 	return found, nil
 }
@@ -298,7 +283,6 @@ func (c *Controller) initScheduler() {
 				isOn := c.tunOn
 				since := c.tunSince
 				rm := c.config.RoutingMode
-				c.mu.RUnlock()
 				if isOn {
 					modeDesc := "system-wide (Speed Mode)"
 					if rm == "backup" {
@@ -314,6 +298,7 @@ func (c *Controller) initScheduler() {
 						NICs:    c.sched.Snapshot(),
 					})
 				}
+				c.mu.RUnlock()
 			}
 		}
 	}()
@@ -321,7 +306,7 @@ func (c *Controller) initScheduler() {
 
 func (c *Controller) checkAutostartCached() bool {
 	if time.Since(c.lastAutoAt) > 30*time.Second {
-		c.cachedAuto = platform.AutostartEnabled()
+		c.cachedAuto = platform.DesktopAutostartEnabled()
 		c.lastAutoAt = time.Now()
 	}
 	return c.cachedAuto
@@ -339,6 +324,17 @@ func (c *Controller) IsActive() bool {
 		return true
 	}
 	_, ok := state.Read(stateDir)
+	return ok
+}
+
+// IsForwarding reports whether the TUN or the in-app SOCKS proxy is active.
+func (c *Controller) IsForwarding() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunOn || c.socksRunning {
+		return true
+	}
+	_, ok := state.Read(c.stateDir)
 	return ok
 }
 
@@ -509,6 +505,7 @@ func (c *Controller) GetStatus() (StatusInfo, error) {
 	}
 
 	if inProcOn {
+		info.SystemAppRules = true
 		info.RunningVersion = nativeVersionLabel()
 		info.RunningSource = "builtin"
 		info.PID = os.Getpid()
@@ -567,16 +564,7 @@ func (c *Controller) SetSystemWide(on bool) error {
 	defer c.mu.Unlock()
 
 	if !on {
-		// Turn off in-process TUN if active
-		if c.tunDev != nil {
-			c.tunDev.Off()
-			c.tunDev.Close()
-			c.tunDev = nil
-		}
-		if c.tunOn {
-			c.tunOn = false
-			state.Clear(c.stateDir)
-		}
+		c.stopLocalTunnelLocked()
 		if _, ok := state.Read(c.stateDir); ok || platform.InstanceRunning() {
 			return state.SendMarker(c.stateDir, "off")
 		}
@@ -650,12 +638,25 @@ func (c *Controller) SetSystemWide(on bool) error {
 		"-log", logPath,
 		"-mtu", fmt.Sprintf("%d", c.config.MTU),
 		"-ipv6", c.config.IPv6Mode,
+		fmt.Sprintf("-auto-weight=%t", c.config.AutoWeight),
+		"-rescan", fmt.Sprintf("%ds", c.config.RescanSec),
+	}
+	weights := make([]string, 0, len(c.config.Weights))
+	for name, weight := range c.config.Weights {
+		weights = append(weights, fmt.Sprintf("%s=%g", name, weight))
+	}
+	sort.Strings(weights)
+	for _, weight := range weights {
+		args = append(args, "-weight", weight)
 	}
 	if c.config.IncludeNICs != "" {
 		args = append(args, "-include", c.config.IncludeNICs)
 	}
 	if bin.EngineSource == "builtin" {
-		args = append(args, "-mode", c.config.RoutingMode, "-primary", c.config.PrimaryAdapter, "-secondary", c.config.SecondaryAdapter)
+		args = append(args,
+			"-mode", c.config.RoutingMode, "-primary", c.config.PrimaryAdapter, "-secondary", c.config.SecondaryAdapter,
+			"-scheduling", c.config.Scheduling, "-probe4", strings.Join(c.config.ProbeTargetsV4, ","), "-probe6", strings.Join(c.config.ProbeTargetsV6, ","),
+		)
 	} else if c.config.RoutingMode == "backup" {
 		return fmt.Errorf("this engine supports Speed only; select the NetPilot engine for Backup Failover")
 	}
@@ -704,6 +705,31 @@ func (c *Controller) SetSystemWide(on bool) error {
 	return fmt.Errorf("net-merge engine did not start within timeout (check admin/UAC permissions or adapter connectivity)")
 }
 
+func (c *Controller) stopLocalTunnelLocked() {
+	if c.tunDev != nil {
+		c.tunDev.Close()
+		c.tunDev = nil
+	}
+	if c.tunOn {
+		c.tunOn = false
+		state.Clear(c.stateDir)
+	}
+}
+
+// StopOwned shuts down forwarding started by this desktop instance.
+func (c *Controller) StopOwned() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	socksErr := c.stopSocks5Locked()
+	c.stopLocalTunnelLocked()
+	if st, ok := state.Read(c.stateDir); ok && c.launchedPID > 0 && st.PID == c.launchedPID && st.Since.Equal(c.launchedSince) {
+		if err := state.SendMarker(c.stateDir, "off"); err != nil {
+			return err
+		}
+	}
+	return socksErr
+}
+
 func (c *Controller) waitForActiveStatus(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -720,7 +746,7 @@ func (c *Controller) SetAutostart(enabled bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := platform.SetAutostart(enabled); err != nil {
+	if err := platform.SetDesktopAutostart(enabled); err != nil {
 		return err
 	}
 	c.config.Autostart = enabled
@@ -732,16 +758,15 @@ func (c *Controller) SetAutostart(enabled bool) error {
 
 // SetLimit sets the maximum bandwidth in Mbit/s for a specific network adapter.
 func (c *Controller) SetLimit(adapter string, mbps float64) error {
+	if strings.TrimSpace(adapter) == "" || math.IsNaN(mbps) || mbps < 0 || mbps > 1e6 {
+		return fmt.Errorf("provide an adapter and a speed cap between 0 and 1,000,000 Mbit/s")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.sched != nil {
-		c.sched.SetLimit(adapter, mbps)
-	}
-
-	lims, _ := state.LoadLimits(c.stateDir)
-	if lims == nil {
-		lims = make(map[string]float64)
+	lims, err := state.LoadLimits(c.stateDir)
+	if err != nil {
+		return err
 	}
 	if mbps <= 0 {
 		delete(lims, adapter)
@@ -750,6 +775,9 @@ func (c *Controller) SetLimit(adapter string, mbps float64) error {
 	}
 	if err := state.SaveLimits(c.stateDir, lims); err != nil {
 		return err
+	}
+	if c.sched != nil {
+		c.sched.SetLimit(adapter, mbps)
 	}
 
 	_ = state.SendLimit(c.stateDir, state.LimitRequest{
@@ -762,13 +790,8 @@ func (c *Controller) SetLimit(adapter string, mbps float64) error {
 // CleanupStale removes any leftover routes, gateway rules, or orphaned TUN devices.
 func (c *Controller) CleanupStale() error {
 	c.mu.Lock()
-	if c.tunDev != nil {
-		c.tunDev.Off()
-		c.tunDev.Close()
-		c.tunDev = nil
-	}
-	c.tunOn = false
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	c.stopLocalTunnelLocked()
 	state.Clear(c.stateDir)
 	tun.CleanupStale()
 	return nil
@@ -793,20 +816,34 @@ func (c *Controller) StartSocks5(listenAddr string) error {
 		}
 	}
 
-	ln, err := net.Listen("tcp4", listenAddr)
+	host, port, err := net.SplitHostPort(strings.TrimSpace(listenAddr))
+	if err != nil {
+		return fmt.Errorf("invalid SOCKS5 address: %w", err)
+	}
+	if strings.EqualFold(host, "localhost") {
+		host = "127.0.0.1"
+	}
+	if ip := net.ParseIP(host); ip == nil || ip.To4() == nil || !ip.IsLoopback() {
+		return fmt.Errorf("the SOCKS5 proxy requires an IPv4 loopback address such as 127.0.0.1:1080")
+	}
+	ln, err := net.Listen("tcp4", net.JoinHostPort(host, port))
 	if err != nil {
 		return fmt.Errorf("failed to bind SOCKS5 listener on %s: %w", listenAddr, err)
 	}
 
-	go func() {
-		_ = engine.ServeSocks5(ln, c.balancer)
-	}()
-
-	c.socksLn = ln
-	c.socksRunning = true
-	c.socksAddr = listenAddr
+	previous := c.config.SocksAddress
 	c.config.SocksAddress = listenAddr
-	_ = c.saveConfigLocked()
+	if err := c.saveConfigLocked(); err != nil {
+		c.config.SocksAddress = previous
+		_ = ln.Close()
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.socksLn = ln
+	c.socksCancel = cancel
+	c.socksRunning = true
+	c.socksAddr = ln.Addr().String()
+	go func() { _ = engine.ServeSocks5Context(ctx, ln, c.balancer) }()
 
 	return nil
 }
@@ -815,14 +852,20 @@ func (c *Controller) StartSocks5(listenAddr string) error {
 func (c *Controller) StopSocks5() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.stopSocks5Locked()
+}
 
+func (c *Controller) stopSocks5Locked() error {
 	if !c.socksRunning || c.socksLn == nil {
 		return nil
 	}
 
 	err := c.socksLn.Close()
+	c.socksCancel()
 	c.socksLn = nil
+	c.socksCancel = nil
 	c.socksRunning = false
+	c.socksAddr = c.config.SocksAddress
 	return err
 }
 

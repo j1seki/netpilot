@@ -21,6 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
@@ -68,6 +69,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -130,6 +133,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -145,8 +150,9 @@ jobs:
         env:
           ENGINE_TAG: ${{ needs.engine.outputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NETPILOT_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
+          v="${NETPILOT_TAG#v}"
           mkdir -p dist internal/netmerge/embedded/bin
           go run scripts/bundle-net-merge.go darwin arm64 "$ENGINE_TAG"
 
@@ -160,8 +166,10 @@ jobs:
           built_engine=$(dist/netpilot version 2>/dev/null || true)
           bash scripts/check-engine-version.sh "$want_engine" "$built_engine"
       - name: Build macOS DMG
+        env:
+          NETPILOT_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
+          v="${NETPILOT_TAG#v}"
           APP="NetPilot.app"
           rm -rf "$APP"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -229,6 +237,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -253,8 +263,9 @@ jobs:
         env:
           ENGINE_TAG: ${{ needs.engine.outputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NETPILOT_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
+          v="${NETPILOT_TAG#v}"
           mkdir -p dist internal/netmerge/embedded/bin
           go run scripts/bundle-net-merge.go linux amd64 "$ENGINE_TAG"
 
@@ -329,6 +340,8 @@ jobs:
     runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -353,8 +366,9 @@ jobs:
         env:
           ENGINE_TAG: ${{ needs.engine.outputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NETPILOT_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
+          v="${NETPILOT_TAG#v}"
           mkdir -p dist internal/netmerge/embedded/bin
           go run scripts/bundle-net-merge.go linux arm64 "$ENGINE_TAG"
           CGO_ENABLED=1 GOARCH=arm64 go build -tags gtk3 -trimpath -ldflags "-s -w -X netpilot/internal/branding.AppVersion=$v" -o dist/netpilot ./cmd/netpilot
@@ -422,6 +436,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
