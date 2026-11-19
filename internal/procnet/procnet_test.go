@@ -80,3 +80,18 @@ func TestParseProcEndpoint(t *testing.T) {
 		t.Fatalf("got %s:%d", ip, port)
 	}
 }
+
+func TestLookupPIDMatchesUnconnectedUDP(t *testing.T) {
+	sock, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sock.Close()
+	// The kernel inode snapshot may have been populated by the TCP test.
+	inodeCache.Lock()
+	inodeCache.m = nil
+	inodeCache.Unlock()
+	if pid, ok := LookupPID("udp", net.IPv4(127, 0, 0, 1), uint16(sock.LocalAddr().(*net.UDPAddr).Port), net.IPv4(192, 0, 2, 1), 443); !ok || pid != os.Getpid() {
+		t.Fatalf("UDP owner: %d, %v", pid, ok)
+	}
+}

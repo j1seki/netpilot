@@ -23,23 +23,24 @@ var embeddedVersionRaw string
 // EmbeddedVersion returns the version of the built-in net-merge engine compiled into NetPilot.
 func EmbeddedVersion() string {
 	v := strings.TrimSpace(embeddedVersionRaw)
-	if v == "" {
-		return "0.3.6"
-	}
 	return v
 }
 
+func nativeVersionLabel() string { return "net-merge " + EmbeddedVersion() + " (NetPilot engine)" }
+
 // BinaryInfo reports the resolution and verification status of the net-merge binary.
 type BinaryInfo struct {
-	Path         string `json:"path"`
-	TrayPath     string `json:"trayPath,omitempty"`
-	CustomPath   string `json:"customPath"`
-	EngineSource string `json:"engineSource"` // "builtin" or "external"
-	Exists       bool   `json:"exists"`
-	Source       string `json:"source"` // "builtin", "custom", "same-folder", "path", "system", "none"
-	Version      string `json:"version"`
-	IsValid      bool   `json:"isValid"`
-	Error        string `json:"error,omitempty"`
+	Path           string `json:"path"`
+	TrayPath       string `json:"trayPath,omitempty"`
+	CustomPath     string `json:"customPath"`
+	EngineSource   string `json:"engineSource"` // "builtin" or "external"
+	Exists         bool   `json:"exists"`
+	Source         string `json:"source"` // "builtin", "custom", "same-folder", "path", "system", "none"
+	Version        string `json:"version"`
+	IsValid        bool   `json:"isValid"`
+	Error          string `json:"error,omitempty"`
+	BundledVersion string `json:"bundledVersion,omitempty"`
+	ReleaseTag     string `json:"releaseTag,omitempty"`
 }
 
 type cachedBinaryValidation struct {
@@ -60,33 +61,17 @@ func (c *Controller) GetBinaryInfo() BinaryInfo {
 	c.mu.RLock()
 	source := c.config.EngineSource
 	custom := c.config.BinaryPath
-	stateDir := c.stateDir
 	c.mu.RUnlock()
-	return ResolveBinaryWithSource(source, custom, stateDir)
+	return c.resolve(source, custom)
 }
 
 // SetCustomBinaryPath updates the user-specified binary path and engine source in configuration.
 func (c *Controller) SetCustomBinaryPath(path string) (BinaryInfo, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	path = strings.TrimSpace(path)
 	if path == "" || strings.EqualFold(path, "builtin") {
-		c.config.EngineSource = "builtin"
-		c.config.BinaryPath = ""
-		_ = c.saveConfigLocked()
-		return ResolveBinaryWithSource("builtin", "", c.stateDir), nil
+		return c.SetEngineSource("builtin", "")
 	}
-
-	info := ResolveBinaryWithSource("external", path, c.stateDir)
-	if !info.IsValid {
-		return info, fmt.Errorf("invalid net-merge binary at %q: %s", path, info.Error)
-	}
-
-	c.config.EngineSource = "external"
-	c.config.BinaryPath = path
-	_ = c.saveConfigLocked()
-	return info, nil
+	return c.SetEngineSource("external", path)
 }
 
 // SetEngineSource sets whether NetPilot uses the built-in embedded net-merge or an external binary path.
@@ -96,27 +81,34 @@ func (c *Controller) SetEngineSource(source string, customPath string) (BinaryIn
 
 	source = strings.ToLower(strings.TrimSpace(source))
 	customPath = strings.TrimSpace(customPath)
-	if source != "external" {
-		source = "builtin"
+	switch source {
+	case "builtin", "bundled":
+		customPath = ""
+	case "external", "release":
+	default:
+		return BinaryInfo{}, fmt.Errorf("unknown engine source %q", source)
 	}
-
-	if source == "external" && customPath != "" {
-		info := ResolveBinaryWithSource("external", customPath, c.stateDir)
-		if !info.IsValid {
-			return info, fmt.Errorf("invalid external net-merge binary at %q: %s", customPath, info.Error)
-		}
-		c.config.EngineSource = "external"
-		c.config.BinaryPath = customPath
-		_ = c.saveConfigLocked()
-		return info, nil
+	if c.tunOn || c.socksRunning {
+		return BinaryInfo{}, fmt.Errorf("stop net-merge and its SOCKS proxy before changing engines")
 	}
-
-	c.config.EngineSource = source
-	if customPath != "" {
-		c.config.BinaryPath = customPath
+	if _, running := state.Read(c.stateDir); running {
+		return BinaryInfo{}, fmt.Errorf("stop the running net-merge engine before changing versions")
 	}
-	_ = c.saveConfigLocked()
-	return ResolveBinaryWithSource(c.config.EngineSource, c.config.BinaryPath, c.stateDir), nil
+	info := c.resolve(source, customPath)
+	if !info.IsValid {
+		return info, fmt.Errorf("engine unavailable: %s", info.Error)
+	}
+	previous := c.config
+	c.config.EngineSource, c.config.BinaryPath = source, customPath
+	if source != "builtin" {
+		c.config.RoutingMode = "speed"
+	}
+	if err := c.saveConfigLocked(); err != nil {
+		c.config = previous
+		return info, err
+	}
+	c.applySchedulerModeLocked()
+	return info, nil
 }
 
 // ValidateBinary checks if a file at path exists, is executable, and responds to `version`.
@@ -157,9 +149,9 @@ func ValidateBinary(path string) (string, error) {
 
 	var resVer string
 	var resErr error
-	if err != nil && !strings.Contains(strings.ToLower(outStr), "net-merge") {
+	if err != nil {
 		resErr = fmt.Errorf("binary failed execution: %w (output: %q)", err, outStr)
-	} else if !strings.Contains(strings.ToLower(outStr), "net-merge") {
+	} else if !strings.HasPrefix(outStr, "net-merge ") {
 		resErr = fmt.Errorf("binary responded with unexpected output: %q", outStr)
 	} else {
 		resVer = outStr
@@ -208,6 +200,9 @@ func ResolveBinaryWithSource(engineSource, customPath, stateDir string) BinaryIn
 	if engineSource == "external" && strings.TrimSpace(customPath) != "" {
 		custom := strings.TrimSpace(customPath)
 		expanded := filepath.Clean(os.ExpandEnv(custom))
+		if !filepath.IsAbs(expanded) {
+			return BinaryInfo{EngineSource: "external", Source: "custom", CustomPath: custom, Error: "choose an absolute executable path"}
+		}
 		ver, err := ValidateBinary(expanded)
 		trayCand := filepath.Join(filepath.Dir(expanded), trayName)
 		trayFound := ""
@@ -237,11 +232,13 @@ func ResolveBinaryWithSource(engineSource, customPath, stateDir string) BinaryIn
 			Error:        err.Error(),
 		}
 	}
+	if engineSource == "external" {
+		return BinaryInfo{EngineSource: "external", Source: "custom", Error: "choose a net-merge executable"}
+	}
 
 	// Built-in mode (default):
 	// Ensure wintun.dll is extracted on Windows if embedded
 	_ = embedded.EnsureWintunDLL(stateDir)
-	embCLI, embTray := embedded.ExtractBinaries(stateDir)
 
 	// The NetPilot binary itself natively supports all net-merge CLI and tray subcommands
 	// (`netpilot run`, `netpilot tray`, `netpilot off`, `netpilot status`, `netpilot version`, etc.),
@@ -263,8 +260,6 @@ func ResolveBinaryWithSource(engineSource, customPath, stateDir string) BinaryIn
 	}
 	resolvedPath := exe
 	resolvedTray := exe
-	_ = embCLI
-	_ = embTray
 
 	return BinaryInfo{
 		Path:         resolvedPath,
@@ -273,7 +268,7 @@ func ResolveBinaryWithSource(engineSource, customPath, stateDir string) BinaryIn
 		EngineSource: "builtin",
 		Exists:       fileExists(resolvedPath),
 		Source:       "builtin",
-		Version:      "net-merge " + EmbeddedVersion() + " (built-in single binary)",
+		Version:      nativeVersionLabel(),
 		IsValid:      fileExists(resolvedPath),
 	}
 }

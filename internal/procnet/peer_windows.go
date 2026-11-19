@@ -3,154 +3,141 @@
 package procnet
 
 import (
+	"encoding/binary"
 	"net"
-	"os/exec"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
+	"path/filepath"
+	"unsafe"
 
-	"netpilot/internal/execx"
+	"golang.org/x/sys/windows"
 )
 
-var winTable = struct {
-	sync.Mutex
-	at  time.Time
-	row []flowRow
-}{}
+var iphlpapi = windows.NewLazySystemDLL("iphlpapi.dll")
+var getExtendedTCPTable = iphlpapi.NewProc("GetExtendedTcpTable")
+var getExtendedUDPTable = iphlpapi.NewProc("GetExtendedUdpTable")
 
-type flowRow struct {
-	network string
-	local   net.IP
-	lport   uint16
-	remote  net.IP
-	rport   uint16
-	pid     int
-}
-
-const winTableTTL = time.Second
-
-// runSilent executes a Windows console tool without briefly showing a CMD window.
-// This is the same CREATE_NO_WINDOW guarantee the rest of NetPilot uses through execx.
-func runSilent(name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
-	execx.PrepareCommand(cmd)
-	return cmd.Output()
-}
-
-func parseWinEndpoint(s string) (net.IP, uint16, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" || s == "*:*" {
-		return nil, 0, false
-	}
-	host, portStr := "", ""
-	if strings.HasPrefix(s, "[") {
-		end := strings.LastIndex(s, "]:")
-		if end < 0 {
-			return nil, 0, false
-		}
-		host, portStr = s[1:end], s[end+2:]
-	} else {
-		end := strings.LastIndex(s, ":")
-		if end < 0 {
-			return nil, 0, false
-		}
-		host, portStr = s[:end], s[end+1:]
-	}
-	ip := net.ParseIP(host)
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port < 0 || port > 65535 {
-		return nil, 0, false
-	}
-	return ip, uint16(port), true
-}
-
-func winRows() []flowRow {
-	winTable.Lock()
-	defer winTable.Unlock()
-	if winTable.row != nil && time.Since(winTable.at) < winTableTTL {
-		return winTable.row
-	}
-	out, err := runSilent("netstat", "-ano")
-	var rows []flowRow
-	if err == nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) < 4 {
-				continue
-			}
-			proto := strings.ToLower(fields[0])
-			if proto != "tcp" && proto != "udp" {
-				continue
-			}
-			lip, lport, ok := parseWinEndpoint(fields[1])
-			if !ok {
-				continue
-			}
-			rip, rport, _ := parseWinEndpoint(fields[2])
-			pidStr := fields[len(fields)-1]
-			pid, err := strconv.Atoi(pidStr)
-			if err != nil {
-				continue
-			}
-			rows = append(rows, flowRow{network: proto, local: lip, lport: lport, remote: rip, rport: rport, pid: pid})
-		}
-	}
-	winTable.row, winTable.at = rows, time.Now()
-	return rows
-}
-
+// Read a fresh owner table for new flows. The previous one-second netstat
+// cache missed newly opened connections and could never match unconnected UDP.
 func lookupPID(network string, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16) (int, bool) {
-	for _, row := range winRows() {
-		if row.network != network {
-			continue
+	if localIP == nil || localPort == 0 {
+		return 0, false
+	}
+	udp := network == "udp"
+	if localIP.To4() != nil {
+		if pid, ok := lookupWindowsTable(udp, false, localIP, localPort, remoteIP, remotePort); ok {
+			return pid, ok
 		}
-		if row.lport != localPort || !sameIP(row.local, localIP) {
+	}
+	return lookupWindowsTable(udp, true, localIP, localPort, remoteIP, remotePort)
+}
+
+func lookupWindowsTable(udp, v6 bool, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16) (int, bool) {
+	proc, class := getExtendedTCPTable, uintptr(5) // TCP_TABLE_OWNER_PID_ALL
+	if udp {
+		proc, class = getExtendedUDPTable, 1
+	} // UDP_TABLE_OWNER_PID
+	af := uintptr(windows.AF_INET)
+	if v6 {
+		af = windows.AF_INET6
+	}
+	var size uint32
+	_, _, _ = proc.Call(0, uintptr(unsafe.Pointer(&size)), 0, af, class, 0)
+	for i := 0; i < 3 && size >= 4 && size <= 16<<20; i++ {
+		data := make([]byte, size)
+		code, _, _ := proc.Call(uintptr(unsafe.Pointer(&data[0])), uintptr(unsafe.Pointer(&size)), 0, af, class, 0)
+		switch code {
+		case 0:
+			return ownerFromTable(data, udp, v6, localIP, localPort, remoteIP, remotePort)
+		case uintptr(windows.ERROR_INSUFFICIENT_BUFFER):
 			continue
-		}
-		if remoteIP != nil && remotePort != 0 && (row.rport != remotePort || !sameIP(row.remote, remoteIP)) {
-			continue
-		}
-		if row.pid > 0 {
-			return row.pid, true
+		default:
+			return 0, false
 		}
 	}
 	return 0, false
 }
 
+func ownerFromTable(data []byte, udp, v6 bool, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16) (int, bool) {
+	if len(data) < 4 {
+		return 0, false
+	}
+	count := int(binary.LittleEndian.Uint32(data[:4]))
+	stride, ipSize, local, lport, remote, rport, state, owner := 24, 4, 4, 8, 12, 16, 0, 20
+	switch {
+	case udp && v6:
+		stride, ipSize, local, lport, owner = 28, 16, 0, 20, 24
+	case udp:
+		stride, local, lport, owner = 12, 0, 4, 8
+	case v6:
+		stride, ipSize, local, lport, remote, rport, state, owner = 56, 16, 0, 20, 24, 44, 48, 52
+	}
+	rows := data[4:]
+	if count > len(rows)/stride {
+		return 0, false
+	}
+	var exact, wildcard int
+	for i := 0; i < count; i++ {
+		r := rows[i*stride : (i+1)*stride]
+		if binary.BigEndian.Uint16(r[lport:]) != localPort {
+			continue
+		}
+		pid := int(binary.LittleEndian.Uint32(r[owner:]))
+		if pid <= 0 {
+			continue
+		}
+		lip := net.IP(r[local : local+ipSize])
+		if !lip.Equal(localIP) {
+			if udp && lip.IsUnspecified() {
+				wildcard = uniqueOwner(wildcard, pid)
+			}
+			continue
+		}
+		if !udp {
+			// Closed/listening/time-wait rows do not identify the live peer.
+			st := binary.LittleEndian.Uint32(r[state:])
+			if st <= 2 || st >= 11 || !net.IP(r[remote:remote+ipSize]).Equal(remoteIP) || binary.BigEndian.Uint16(r[rport:]) != remotePort {
+				continue
+			}
+		}
+		exact = uniqueOwner(exact, pid)
+	}
+	if exact != 0 {
+		return exact, exact > 0
+	}
+	return wildcard, wildcard > 0
+}
+
+func uniqueOwner(previous, pid int) int {
+	if previous == 0 || previous == pid {
+		return pid
+	}
+	return -1
+}
+
 func peerPID(conn net.Conn) (int, bool) {
 	local, okL := conn.LocalAddr().(*net.TCPAddr)
 	remote, okR := conn.RemoteAddr().(*net.TCPAddr)
-	if !okL || !okR {
+	if !okL || !okR || !local.IP.IsLoopback() || !remote.IP.IsLoopback() {
 		return 0, false
 	}
-	// The accepted connection's remote endpoint is the client's local endpoint, and our
-	// local endpoint is its remote endpoint.
 	return lookupPID("tcp", remote.IP, uint16(remote.Port), local.IP, uint16(local.Port))
 }
-
-func sameIP(a, b net.IP) bool { return a != nil && b != nil && a.Equal(b) }
 
 func processInfo(pid int) (string, string) {
 	if name, path, ok := cachedProcess(pid); ok {
 		return name, path
 	}
-	out, err := runSilent("tasklist", "/FI", "PID eq "+strconv.Itoa(pid), "/FO", "CSV", "/NH")
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
 		return "", ""
 	}
-	line := strings.TrimSpace(string(out))
-	if line == "" || strings.HasPrefix(line, "INFO:") {
+	defer windows.CloseHandle(h)
+	buf := make([]uint16, 32768)
+	size := uint32(len(buf))
+	if windows.QueryFullProcessImageName(h, 0, &buf[0], &size) != nil {
 		return "", ""
 	}
-	fields := strings.Split(line, "\",\"")
-	if len(fields) < 2 {
-		return "", ""
-	}
-	name := strings.Trim(fields[0], "\"")
-	if name == "" {
-		return "", ""
-	}
-	storeProcess(pid, name, "")
-	return name, ""
+	path := windows.UTF16ToString(buf[:size])
+	name := filepath.Base(path)
+	storeProcess(pid, name, path)
+	return name, path
 }

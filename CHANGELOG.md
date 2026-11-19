@@ -3,6 +3,15 @@
 What changed in each release. Each version's section becomes its GitHub release notes, so add the
 entry here before pushing a version tag.
 
+## [0.4.1] - 2026-11-19
+
+- Active Processes shows native app icons and sortable Network, CPU, RAM, Process, and PID columns. Click a column again to reverse the order.
+- Dashboard layout adapts to narrower windows. Adapter groups can collapse, and adapters can be hidden without affecting routing.
+- The integrated engine reports attributed TCP and UDP traffic by process. This is not a system-wide counter.
+- Release builds include the latest verified official net-merge, with optional upgrades and downgrades in Settings.
+- macOS saves routing preferences in the user configuration folder. The DMG includes an optional first-launch helper.
+- Automatic Updates is available in Settings only.
+
 ## [0.4.0] - 2026-11-18
 
 This is the first stable release and releases the stable update channel.

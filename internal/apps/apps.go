@@ -2,6 +2,7 @@
 package apps
 
 import (
+	"netpilot/internal/execx"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,9 @@ type ProcessInfo struct {
 	BytesSent          int64     `json:"bytesSent"`
 	BytesReceived      int64     `json:"bytesReceived"`
 	CurrentMbps        float64   `json:"currentMbps"`
+	NetworkMbps        *float64  `json:"networkMbps,omitempty"`
+	CPUPercent         *float64  `json:"cpuPercent,omitempty"`
+	MemoryBytes        *uint64   `json:"memoryBytes,omitempty"`
 	AssignedNIC        string    `json:"assignedNic"`
 	RuleMatched        string    `json:"ruleMatched,omitempty"`
 	LastActive         time.Time `json:"lastActive"`
@@ -37,6 +41,8 @@ type ProcessInfo struct {
 type Manager struct {
 	mu        sync.RWMutex
 	processes map[int]*ProcessInfo
+	icons     sync.Map // executable -> encoded PNG (including misses)
+	cpu       map[int]cpuSample
 }
 
 // NewManager creates a real application manager.
@@ -44,6 +50,45 @@ func NewManager() *Manager {
 	return &Manager{
 		processes: make(map[int]*ProcessInfo),
 	}
+}
+
+func (m *Manager) samplePOSIXResources() {
+	cmd := exec.Command("/bin/ps", "-axo", "pid=,pcpu=,rss=")
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	execx.PrepareCommand(cmd)
+	b, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 {
+			continue
+		}
+		pid, _ := strconv.Atoi(f[0])
+		if p := m.processes[pid]; p != nil {
+			if cpu, err := strconv.ParseFloat(f[1], 64); err == nil {
+				p.CPUPercent = &cpu
+			}
+			if rss, err := strconv.ParseUint(f[2], 10, 64); err == nil {
+				rss *= 1024
+				p.MemoryBytes = &rss
+			}
+		}
+	}
+}
+
+type cpuSample struct {
+	created, ticks uint64
+	at             time.Time
+}
+
+func (s cpuSample) usage(previous cpuSample) *float64 {
+	if previous.at.IsZero() || s.created != previous.created || s.ticks < previous.ticks || !s.at.After(previous.at) {
+		return nil
+	}
+	percent := float64(s.ticks-previous.ticks) / 1e5 / s.at.Sub(previous.at).Seconds()
+	return &percent
 }
 
 // Discover lists active applications based on real OS inspection.
@@ -58,6 +103,9 @@ func (m *Manager) Discover() []ProcessInfo {
 		m.discoverWindows()
 	default:
 		m.discoverPOSIX()
+	}
+	if runtime.GOOS != "windows" {
+		m.samplePOSIXResources()
 	}
 
 	out := make([]ProcessInfo, 0, len(m.processes))
@@ -121,7 +169,7 @@ func (m *Manager) discoverLinux() {
 		}
 
 		seen[pid] = true
-		if p, ok := m.processes[pid]; ok {
+		if p, ok := m.processes[pid]; ok && p.Executable == exePath && p.Name == commName {
 			p.LastActive = time.Now()
 			p.SocketCount = socketCount
 		} else {
@@ -168,7 +216,7 @@ func (m *Manager) discoverPOSIX() {
 		exe := strings.Join(fields[1:], " ")
 		name := filepath.Base(exe)
 		seen[pid] = true
-		if p, ok := m.processes[pid]; ok {
+		if p, ok := m.processes[pid]; ok && p.Executable == exe {
 			p.LastActive = time.Now()
 		} else {
 			m.processes[pid] = &ProcessInfo{

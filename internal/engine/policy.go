@@ -10,6 +10,7 @@ import (
 // FlowPolicy is the per-application decision applied to one new flow. It is produced by the
 // caller's rule engine, so the data path stays independent of the database and UI packages.
 type FlowPolicy struct {
+	PID                int     `json:"-"`
 	AppName            string  `json:"appName,omitempty"`
 	AppPath            string  `json:"appPath,omitempty"`
 	PreferredNIC       string  `json:"preferredNic,omitempty"`
@@ -138,15 +139,18 @@ func (b *Balancer) DialPinnedFor(ctx context.Context, host string, port int, pol
 		c.Close()
 		return nil, &dialError{rep: repFailure, err: errNotTCP}
 	}
+	traffic, endTraffic := b.trackProcess(policy.PID)
 	return &slotConn{
-		TCPConn:  tcp,
-		sl:       sl,
-		fam:      f,
-		s:        b.S,
-		activity: b.S.track(sl, f),
-		limiter:  newFlowLimiter(policy.BandwidthLimitMbps),
-		appName:  policy.AppName,
-		onClose:  b.reportUsage,
+		TCPConn:    tcp,
+		sl:         sl,
+		fam:        f,
+		s:          b.S,
+		activity:   b.S.track(sl, f),
+		limiter:    newFlowLimiter(policy.BandwidthLimitMbps),
+		appName:    policy.AppName,
+		onClose:    b.reportUsage,
+		traffic:    traffic,
+		endTraffic: endTraffic,
 	}, nil
 }
 

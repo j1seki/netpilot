@@ -7,6 +7,8 @@ import {
   RuleRecord,
 } from '../api/wails';
 import { Sparkline } from '../components/Charts';
+import { ProcessIcon } from '../components/ProcessIcon';
+import { AdapterGroupButton, AdapterHideButton, useAdapterVisibility } from '../components/AdapterVisibility';
 import {
   Plus,
   ArrowDown,
@@ -22,25 +24,38 @@ import {
   EyeOff,
   Router,
   Wifi,
-  Code2,
-  Cpu,
-  Server,
-  Shield,
-  Terminal,
 } from 'lucide-react';
 
-const processIcons = new Map([
-  ['globe', Globe], ['shield', Shield], ['terminal', Terminal],
-  ['code', Code2], ['server', Server], ['cpu', Cpu],
-]);
 
 interface AdapterWithHistory extends InterfaceInfo {
   rxHistory: number[];
   txHistory: number[];
 }
 
+type ProcessSortKey = 'name' | 'pid' | 'networkMbps' | 'cpuPercent' | 'memoryBytes';
+type ProcessSort = { key: ProcessSortKey; direction: 'ascending' | 'descending' };
+const processColumns: [ProcessSortKey, string][] = [
+  ['name', 'Process'], ['pid', 'PID'], ['networkMbps', 'Network'], ['cpuPercent', 'CPU'], ['memoryBytes', 'RAM'],
+];
+
+function compareProcesses(a: ProcessInfo, b: ProcessInfo, { key, direction }: ProcessSort) {
+  const order = direction === 'ascending' ? 1 : -1;
+  if (key === 'name') return order * a.name.localeCompare(b.name) || a.pid - b.pid;
+  const left = a[key], right = b[key];
+  if (left == null && right != null) return 1;
+  if (left != null && right == null) return -1;
+  return order * ((left ?? 0) - (right ?? 0)) || a.name.localeCompare(b.name) || a.pid - b.pid;
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function formatProcessRate(mbps: number | undefined): string {
+  if (mbps == null) return '—';
+  if (mbps >= 1) return `${mbps.toFixed(2)} Mbps`;
+  if (mbps >= 0.001) return `${(mbps * 1000).toFixed(1)} Kbps`;
+  return `${Math.round(mbps * 1_000_000)} bps`;
 }
 
 export const DashboardView: React.FC = () => {
@@ -49,6 +64,15 @@ export const DashboardView: React.FC = () => {
   const [apps, setApps] = useState<ProcessInfo[]>([]);
   const [rules, setRules] = useState<RuleRecord[]>([]);
   const [appSearch, setAppSearch] = useState<string>('');
+  const [processPage, setProcessPage] = useState(0);
+  const [processSort, setProcessSort] = useState<ProcessSort>({ key: 'name', direction: 'ascending' });
+  const sortProcessesBy = (key: ProcessSortKey) => {
+    setProcessSort(prev => ({ key, direction: prev.key === key
+      ? (prev.direction === 'ascending' ? 'descending' : 'ascending')
+      : (key === 'name' || key === 'pid' ? 'ascending' : 'descending') }));
+    setProcessPage(0);
+  };
+  const visibility = useAdapterVisibility(interfaces);
   const [errorMsg, setErrorMsg] = useState<string>('');
   // WAN IPs are hidden by default so a screen share or screenshot cannot leak
   // the user's public addresses by accident.
@@ -81,8 +105,9 @@ export const DashboardView: React.FC = () => {
     if (ifacesRes.status === 'fulfilled') {
       const ifaces = ifacesRes.value;
       setInterfaces(prev => {
+        const previous = new Map(prev.map(adapter => [adapter.name, adapter]));
         return ifaces.map((cur) => {
-          const existing = prev.find(p => p.name === cur.name);
+          const existing = previous.get(cur.name);
           const rx = cur.rxMbps || 0;
           const tx = cur.txMbps || 0;
 
@@ -238,11 +263,19 @@ export const DashboardView: React.FC = () => {
     return rule.preferredInterface;
   };
 
-  const filteredApps = apps.filter(a => {
-    if (!appSearch.trim()) return true;
-    const q = appSearch.toLowerCase();
-    return a.name.toLowerCase().includes(q) || (a.executable && a.executable.toLowerCase().includes(q));
-  });
+  const q = appSearch.trim().toLowerCase();
+  const filteredApps = apps.filter(a => !q || a.name.toLowerCase().includes(q) || a.executable.toLowerCase().includes(q) || String(a.pid) === q)
+    .sort((a, b) => compareProcesses(a, b, processSort));
+  const pageSize = 50;
+  const page = Math.min(processPage, Math.max(0, Math.ceil(filteredApps.length / pageSize) - 1));
+  const pageStart = page * pageSize;
+  const hasProcessRates = apps.some(app => app.networkMbps != null);
+  const integratedActive = nmStatus?.socksRunning || (nmStatus?.isRunning && nmStatus.runningSource === 'builtin');
+  const networkMessage = hasProcessRates
+    ? 'Network shows measured TCP and UDP traffic through NetPilot, not all system traffic.'
+    : integratedActive
+      ? 'Waiting for attributable traffic. Try starting a new download while NetPilot is running.'
+      : 'To measure per-app traffic, start the NetPilot engine or its SOCKS proxy. Standby and official net-merge releases don’t report per-app bytes.';
 
   // Compute total load across slots
   const totalSlotsActive = (nmStatus?.nics || []).reduce((acc, s) => acc + (s.Active || 0), 0);
@@ -269,8 +302,8 @@ export const DashboardView: React.FC = () => {
         </div>
       )}
       {/* Beszel-Style "All Systems / Network Adapters" Table Card */}
-      <div className="card" style={{ marginBottom: 0, padding: '0', overflow: 'hidden' }}>
-        <div style={{
+      <div className="card netpilot-enter" style={{ marginBottom: 0, padding: '0', overflow: 'hidden' }}>
+        <div className="adapter-card-heading" style={{
           padding: '13px 16px',
           borderBottom: '1px solid #232329',
           display: 'flex',
@@ -284,7 +317,7 @@ export const DashboardView: React.FC = () => {
             </span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '11px', color: '#a1a1aa' }}>
+          <div className="adapter-card-controls" style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '11px', color: '#a1a1aa' }}>
             <span>
               Default Route:{' '}
               <strong style={{ color: isMergeActive ? '#10b981' : '#fafafa' }}>
@@ -308,6 +341,8 @@ export const DashboardView: React.FC = () => {
           </div>
         </div>
 
+        <p className="adapter-visibility-note">Groups keep the list compact. Hiding an adapter only changes this view.</p>
+        <div className="adapter-table-scroll">
         <table className="data-table">
           <thead>
             <tr>
@@ -318,10 +353,17 @@ export const DashboardView: React.FC = () => {
               <th style={{ width: '16%' }}>Download Load</th>
               <th style={{ width: '13%' }}>Upload Load</th>
               <th style={{ width: '10%', textAlign: 'right' }}>Trend</th>
+              <th><span className="sr-only">Visibility</span></th>
             </tr>
           </thead>
-          <tbody>
-            {interfaces.map((iface) => {
+          {visibility.sections.map(section => <tbody key={section.group}>
+            <tr className="adapter-group-row"><td colSpan={8}>
+              <div className="adapter-group-heading">
+                <AdapterGroupButton {...section} count={section.adapters.length} />
+                {section.group === 'hidden' && <button className="btn btn-secondary btn-sm" onClick={visibility.restore}>Show all hidden</button>}
+              </div>
+            </td></tr>
+            {section.open && section.adapters.map((iface) => {
               const rx = iface.rxMbps || 0;
               const tx = iface.txMbps || 0;
               const rxStr = rx >= 1 ? `${rx.toFixed(2)} Mbps` : `${(rx * 1000).toFixed(0)} Kbps`;
@@ -492,20 +534,18 @@ export const DashboardView: React.FC = () => {
                       <Sparkline data={iface.rxHistory} color="#10b981" width={86} height={22} />
                     </div>
                   </td>
+                  <td><AdapterHideButton name={iface.name} hidden={section.group === 'hidden'} toggle={() => visibility.setHidden(iface.name, section.group !== 'hidden')} /></td>
                 </tr>
               );
             })}
-          </tbody>
+          </tbody>)}
         </table>
+        </div>
+        {interfaces.length === 0 && <p className="adapter-visibility-note">No network adapters found yet.</p>}
       </div>
 
       {/* Two-Column Split Application Management */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: '1.15fr 1fr',
-        gap: '14px',
-        alignItems: 'start',
-      }}>
+      <div className="dashboard-app-grid">
         {/* LEFT SEGMENT: Configured App Policies */}
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
@@ -645,32 +685,41 @@ export const DashboardView: React.FC = () => {
               <input
                 type="text"
                 placeholder="Search processes..."
+                aria-label="Search processes by name, path or PID"
                 value={appSearch}
-                onChange={e => setAppSearch(e.target.value)}
+                onChange={e => { setAppSearch(e.target.value); setProcessPage(0); }}
                 style={{ width: '100%', paddingLeft: '26px', paddingRight: '8px', paddingTop: '4px', paddingBottom: '4px', fontSize: '11.5px' }}
               />
             </div>
           </div>
 
-          <div style={{ maxHeight: '340px', overflowY: 'auto' }}>
-            <table className="data-table">
+          <p className="process-network-note">{networkMessage}</p>
+          <div style={{ maxHeight: '340px', overflow: 'auto' }}>
+            <table className="data-table process-table">
               <thead>
                 <tr>
-                  <th>Process</th>
-                  <th>PID</th>
+                  {processColumns.map(([key, label]) => {
+                    const active = processSort.key === key;
+                    const direction = active ? processSort.direction : undefined;
+                    const next = direction === 'ascending' || (!active && key !== 'name' && key !== 'pid') ? 'descending' : 'ascending';
+                    return <th key={key} scope="col" aria-sort={direction}>
+                      <button type="button" className="process-sort-header" onClick={() => sortProcessesBy(key)} aria-label={`Sort by ${label}, ${next}`}>
+                        {label}<span aria-hidden="true" className="process-sort-triangle" data-direction={direction}>{direction === 'ascending' ? '▲' : '▼'}</span>
+                      </button>
+                    </th>;
+                  })}
                   <th>Adapter</th>
                   <th style={{ textAlign: 'right' }}>Rule</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredApps.slice(0, 50).map(app => {
+                {filteredApps.slice(pageStart, pageStart + pageSize).map(app => {
                   const matchedRule = getAppRule(app.name);
-                  const ProcessIcon = processIcons.get(app.iconHint) ?? Cpu;
                   return (
                     <tr key={`${app.pid}-${app.name}`}>
                       <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <ProcessIcon size={16} aria-hidden="true" style={{ color: '#7dd3fc', flexShrink: 0 }} />
+                        <div className="process-name">
+                          <ProcessIcon pid={app.pid} executable={app.executable} />
                           <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
                             <div style={{ fontWeight: 600, color: '#fafafa' }}>{app.name}</div>
                             {(app.socketCount ?? 0) > 0 && (
@@ -684,6 +733,9 @@ export const DashboardView: React.FC = () => {
                       <td className="font-mono" style={{ fontSize: '11px', color: '#71717a' }}>
                         {app.pid}
                       </td>
+                      <td className="font-mono process-metric">{formatProcessRate(app.networkMbps)}</td>
+                      <td className="font-mono process-metric">{app.cpuPercent == null ? '—' : `${app.cpuPercent.toFixed(1)}%`}</td>
+                      <td className="font-mono process-metric">{app.memoryBytes == null ? '—' : `${(app.memoryBytes / 2 ** 20).toFixed(1)} MiB`}</td>
                       <td>
                         {!isMergeActive ? (
                           <span style={{ fontSize: '11px', color: '#71717a' }}>
@@ -711,9 +763,15 @@ export const DashboardView: React.FC = () => {
                     </tr>
                   );
                 })}
+                {!filteredApps.length && <tr><td colSpan={7}>{q ? 'No matching processes.' : 'No processes found yet.'}</td></tr>}
               </tbody>
             </table>
           </div>
+          {filteredApps.length > pageSize && <div className="process-pagination">
+            <span>{pageStart + 1}–{Math.min(pageStart + pageSize, filteredApps.length)} of {filteredApps.length}</span>
+            <button className="btn btn-secondary btn-sm" disabled={page === 0} onClick={() => setProcessPage(page - 1)}>Previous</button>
+            <button className="btn btn-secondary btn-sm" disabled={pageStart + pageSize >= filteredApps.length} onClick={() => setProcessPage(page + 1)}>Next</button>
+          </div>}
         </div>
       </div>
 

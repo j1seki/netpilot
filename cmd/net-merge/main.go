@@ -170,7 +170,7 @@ func (c *common) boot(mode func() string) (*engine.Scheduler, *engine.Balancer, 
 			last = now
 			if mode != nil {
 				if m := mode(); m != "" {
-					state.Write(c.stateDir, state.Status{PID: os.Getpid(), Mode: m, V6: bal.V6State(), Since: since, Updated: now, NICs: sched.Snapshot()})
+					state.Write(c.stateDir, state.Status{PID: os.Getpid(), Mode: m, V6: bal.V6State(), Since: since, Updated: now, NICs: sched.Snapshot(), Version: "net-merge " + version, EngineSource: "external"})
 				}
 			}
 		}

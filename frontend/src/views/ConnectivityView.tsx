@@ -8,7 +8,6 @@ import {
   NetMergeStatus,
   SpeedtestResult,
 } from '../api/wails';
-import { UpdatePanel } from '../components/UpdatePanel';
 import { TTLView } from './TTLView';
 import {
   Bell,
@@ -600,10 +599,8 @@ export const ConnectivityView: React.FC<{ initialTTL?: boolean }> = ({ initialTT
           </div>
         </div>
 
-        {/* Updates and notifications */}
+        {/* Notifications */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <UpdatePanel />
-
           <div className="card" style={{ marginBottom: 0 }}>
             <div className="card-title">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

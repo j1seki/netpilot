@@ -252,8 +252,8 @@ func main() {
 		Title:     branding.WindowTitle,
 		Width:     1320,
 		Height:    860,
-		MinWidth:  1024,
-		MinHeight: 650,
+		MinWidth:  760,
+		MinHeight: 540,
 		Hidden:    *startHidden,
 	})
 
@@ -375,9 +375,10 @@ func main() {
 		trayMenu.Update()
 	})
 	backupModeItem.OnClick(func(_ *application.Context) {
-		_ = service.SetNetMergeRoutingMode("backup", "", "")
-		backupModeItem.SetChecked(true)
-		speedModeItem.SetChecked(false)
+		if err := service.SetNetMergeRoutingMode("backup", "", ""); err == nil {
+			backupModeItem.SetChecked(true)
+			speedModeItem.SetChecked(false)
+		}
 		trayMenu.Update()
 	})
 
@@ -445,6 +446,16 @@ func main() {
 			}
 			active := st.IsRunning
 			cfg := st.Config
+			engineLabel := "Selected: " + st.Binary.Version
+			if active {
+				engineLabel = "Running: " + st.RunningVersion
+				if st.RunningVersion == "" {
+					engineLabel = "Running: version not reported"
+				}
+			} else if st.Binary.Version == "" {
+				engineLabel = "Selected engine unavailable"
+			}
+			verItem.SetLabel(engineLabel)
 
 			sysTray.SetIcon(icon.PNG(active))
 			if active {
@@ -454,6 +465,7 @@ func main() {
 			}
 			speedModeItem.SetChecked(cfg.RoutingMode != "backup")
 			backupModeItem.SetChecked(cfg.RoutingMode == "backup")
+			backupModeItem.SetEnabled(cfg.EngineSource == "builtin")
 			useAllItem.SetChecked(cfg.IPv6Mode != "on")
 			pauseSingleItem.SetChecked(cfg.AutoPause)
 			autostartItem.SetChecked(st.Autostart)

@@ -16,8 +16,12 @@ import (
 // case: os.Executable() points at a FUSE-mounted file under /tmp/.mount*, which a
 // root process spawned by pkexec cannot reliably access. Re-run the original
 // AppImage instead and let it create a root-owned temporary extraction.
-func startElevatedLinux(binaryPath string, args []string) error {
-	target, targetArgs, appImage, err := linuxElevationTarget(binaryPath, args)
+func startElevatedLinux(binaryPath string, args []string, isNetPilot bool) error {
+	target, targetArgs, appImage := binaryPath, args, ""
+	var err error
+	if isNetPilot {
+		target, targetArgs, appImage, err = linuxElevationTarget(binaryPath, args)
+	}
 	if err != nil {
 		return err
 	}
@@ -28,7 +32,7 @@ func startElevatedLinux(binaryPath string, args []string) error {
 		if checkCmd.Run() == nil {
 			cmd := exec.Command(sudoPath, append([]string{"-n", target}, targetArgs...)...)
 			execx.PrepareCommand(cmd)
-			return cmd.Start()
+			return startAndReap(cmd)
 		}
 	}
 
@@ -42,7 +46,15 @@ func startElevatedLinux(binaryPath string, args []string) error {
 
 	cmd := exec.Command(pkexecPath, append([]string{target}, targetArgs...)...)
 	execx.PrepareCommand(cmd)
-	return cmd.Start()
+	return startAndReap(cmd)
+}
+
+func startAndReap(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
 }
 
 // linuxElevationTarget is separated for deterministic tests. It returns the

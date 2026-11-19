@@ -4,24 +4,26 @@ set -euo pipefail
 
 VERSION="${1:-0.1.0}"
 VERSION="${VERSION#v}"
-OUT_DIR="$(realpath "${2:-dist}")"
-mkdir -p "$OUT_DIR"
+mkdir -p "${2:-dist}"
+OUT_DIR="$(cd "${2:-dist}" && pwd -P)"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+go run scripts/bundle-net-merge.go darwin arm64
 
 echo "=== Building single-binary NetPilot macOS Universal Binary (netpilot = GUI + net-merge CLI + tray) ==="
-mkdir -p /tmp/np-mac-bin internal/netmerge/embedded/bin
+mkdir -p "$work/bin" "$work/dmg"
 
 for arch in amd64 arm64; do
-  CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /tmp/np-mac-bin/netpilot-$arch ./cmd/netpilot
+  CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w -X netpilot/internal/branding.AppVersion=$VERSION" -o "$work/bin/netpilot-$arch" ./cmd/netpilot
 done
-lipo -create -output /tmp/np-mac-bin/netpilot /tmp/np-mac-bin/netpilot-amd64 /tmp/np-mac-bin/netpilot-arm64
-codesign --force --sign - /tmp/np-mac-bin/netpilot 2>/dev/null || true
+lipo -create -output "$work/bin/netpilot" "$work/bin/netpilot-amd64" "$work/bin/netpilot-arm64"
 
 echo "=== Creating macOS App Bundle ==="
-APP="NetPilot.app"
-rm -rf "$APP"
+APP="$work/dmg/NetPilot.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 
-cp /tmp/np-mac-bin/netpilot "$APP/Contents/MacOS/netpilot"
+cp "$work/bin/netpilot" "$APP/Contents/MacOS/netpilot"
 chmod +x "$APP/Contents/MacOS/netpilot"
 
 # Generate or copy icon
@@ -56,26 +58,24 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP" 2>/dev/null || true
+codesign --force --deep --sign - "$APP"
 
 echo "=== Creating DMG and Universal Tarball ==="
 # 1. DMG installer
-mkdir -p /tmp/dmg-root
-cp -r "$APP" /tmp/dmg-root/
-ln -s /Applications /tmp/dmg-root/Applications
-cp LICENSE THIRD-PARTY-NOTICES.md /tmp/dmg-root/ 2>/dev/null || true
+install -m 755 'packaging/Open NetPilot.command' "$work/dmg/Open NetPilot.command"
+ln -s /Applications "$work/dmg/Applications"
+cp LICENSE THIRD-PARTY-NOTICES.md "$work/dmg/"
 
 if command -v hdiutil >/dev/null 2>&1; then
-  hdiutil create -volname "NetPilot" -srcfolder /tmp/dmg-root -ov -format UDZO "$OUT_DIR/NetPilot-$VERSION-macOS-universal.dmg"
+  hdiutil create -volname "NetPilot" -srcfolder "$work/dmg" -ov -format UDZO "$OUT_DIR/NetPilot-$VERSION-macOS-universal.dmg"
 elif command -v create-dmg >/dev/null 2>&1; then
-  create-dmg --volname "NetPilot" "$OUT_DIR/NetPilot-$VERSION-macOS-universal.dmg" /tmp/dmg-root
+  create-dmg --volname "NetPilot" "$OUT_DIR/NetPilot-$VERSION-macOS-universal.dmg" "$work/dmg"
 else
   echo "hdiutil not found (not macOS runner?); creating tar.gz instead"
 fi
 
 # 2. Universal Tarball
-tar -czf "$OUT_DIR/netpilot-$VERSION-macos-universal.tar.gz" -C /tmp/dmg-root .
+tar -czf "$OUT_DIR/netpilot-$VERSION-macos-universal.tar.gz" -C "$work/dmg" .
 
-rm -rf /tmp/np-mac-bin /tmp/nm-mac-dl /tmp/dmg-root "$APP"
 echo "=== Done building macOS artifacts ==="
 ls -lh "$OUT_DIR"

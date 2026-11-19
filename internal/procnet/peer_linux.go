@@ -113,6 +113,7 @@ func inodePIDMap() map[string]int {
 
 func lookupPID(network string, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16) (int, bool) {
 	files := []string{"/proc/net/tcp", "/proc/net/tcp6"}
+	var best, owner int
 	if network == "udp" {
 		files = []string{"/proc/net/udp", "/proc/net/udp6"}
 	}
@@ -128,22 +129,39 @@ func lookupPID(network string, localIP net.IP, localPort uint16, remoteIP net.IP
 				continue
 			}
 			lip, lport, err := parseProcEndpoint(fields[1], v6)
-			if err != nil || lport != localPort || !sameIP(lip, localIP) {
+			if err != nil || lport != localPort {
+				continue
+			}
+			score := 1
+			if sameIP(lip, localIP) {
+				score++
+			} else if network != "udp" || !lip.IsUnspecified() {
 				continue
 			}
 			rip, rport, err := parseProcEndpoint(fields[2], v6)
 			if err != nil {
 				continue
 			}
-			if remoteIP != nil && remotePort != 0 && (rport != remotePort || !sameIP(rip, remoteIP)) {
-				continue
+			if remoteIP != nil && remotePort != 0 {
+				if rport == remotePort && sameIP(rip, remoteIP) {
+					score += 2
+				} else if network != "udp" || rport != 0 || !rip.IsUnspecified() {
+					continue
+				}
 			}
 			if pid, ok := inodePIDMap()[fields[9]]; ok {
-				return pid, true
+				if network != "udp" {
+					return pid, true
+				}
+				if score > best {
+					best, owner = score, pid
+				} else if score == best && owner != pid {
+					owner = -1
+				}
 			}
 		}
 	}
-	return 0, false
+	return max(owner, 0), owner > 0
 }
 
 func sameIP(a, b net.IP) bool {

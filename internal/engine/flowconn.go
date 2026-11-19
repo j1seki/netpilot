@@ -14,16 +14,19 @@ import (
 // CloseRead/CloseWrite because the TUN relay half-closes each direction separately.
 type slotConn struct {
 	*net.TCPConn
-	sl       *Slot
-	fam      Family
-	s        *Scheduler
-	once     sync.Once
-	activity *flowActivity
-	limiter  *flowLimiter
-	appName  string
-	usageIn  atomic.Int64
-	usageOut atomic.Int64
-	onClose  func(appName string, in, out int64)
+	sl          *Slot
+	fam         Family
+	s           *Scheduler
+	once        sync.Once
+	activity    *flowActivity
+	limiter     *flowLimiter
+	appName     string
+	usageIn     atomic.Int64
+	usageOut    atomic.Int64
+	onClose     func(appName string, in, out int64)
+	traffic     *trafficCounter
+	endTraffic  func()
+	trafficOnce sync.Once
 }
 
 func (c *slotConn) Read(p []byte) (int, error) {
@@ -34,6 +37,7 @@ func (c *slotConn) Read(p []byte) (int, error) {
 	if n > 0 {
 		c.sl.bytesIn[c.fam].Add(int64(n))
 		c.usageIn.Add(int64(n))
+		c.traffic.add(n)
 		if c.activity != nil {
 			c.activity.bytes.Add(int64(n))
 		}
@@ -48,6 +52,7 @@ func (c *slotConn) Write(p []byte) (int, error) {
 	n, err := c.sl.writePaced(c.TCPConn, p, false)
 	c.sl.bytesOut[c.fam].Add(int64(n))
 	c.usageOut.Add(int64(n))
+	c.traffic.add(n)
 	if c.activity != nil {
 		c.activity.bytes.Add(int64(n))
 	}
@@ -69,7 +74,16 @@ func (c *slotConn) release() {
 
 func (c *slotConn) CloseRead() error  { c.release(); return c.TCPConn.CloseRead() }
 func (c *slotConn) CloseWrite() error { c.release(); return c.TCPConn.CloseWrite() }
-func (c *slotConn) Close() error      { c.release(); return c.TCPConn.Close() }
+func (c *slotConn) Close() error {
+	c.release()
+	err := c.TCPConn.Close()
+	c.trafficOnce.Do(func() {
+		if c.endTraffic != nil {
+			c.endTraffic()
+		}
+	})
+	return err
+}
 
 // DialPinned is DialTCP for front-ends that hand the conn to someone else to pump.
 func (b *Balancer) DialPinned(ctx context.Context, host string, port int) (net.Conn, error) {
@@ -82,14 +96,18 @@ func (b *Balancer) DialPinned(ctx context.Context, host string, port int) (net.C
 
 type slotPacketConn struct {
 	net.PacketConn
-	sl  *Slot
-	fam Family
+	sl          *Slot
+	fam         Family
+	traffic     *trafficCounter
+	endTraffic  func()
+	trafficOnce sync.Once
 }
 
 func (c *slotPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	n, a, err := c.PacketConn.ReadFrom(p)
 	if n > 0 {
 		c.sl.bytesIn[c.fam].Add(int64(n))
+		c.traffic.add(n)
 		c.sl.throttlePacket(true, n)
 	}
 	return n, a, err
@@ -99,13 +117,28 @@ func (c *slotPacketConn) WriteTo(p []byte, a net.Addr) (int, error) {
 	c.sl.throttlePacket(false, len(p))
 	n, err := c.PacketConn.WriteTo(p, a)
 	c.sl.bytesOut[c.fam].Add(int64(n))
+	c.traffic.add(n)
 	return n, err
+}
+
+func (c *slotPacketConn) Close() error {
+	err := c.PacketConn.Close()
+	c.trafficOnce.Do(func() {
+		if c.endTraffic != nil {
+			c.endTraffic()
+		}
+	})
+	return err
 }
 
 // ListenUDP opens a UDP socket pinned to one NIC (a UDP "flow" = the socket, so every datagram
 // of that flow leaves the same way). UDP flows are short and numerous (DNS), so they don't hold
 // a balancing slot: the pick still spreads them via the scheduler's tie-breaking.
 func (b *Balancer) ListenUDP(ctx context.Context, f Family) (net.PacketConn, error) {
+	return b.ListenUDPFor(ctx, f, 0)
+}
+
+func (b *Balancer) ListenUDPFor(ctx context.Context, f Family, pid int) (net.PacketConn, error) {
 	network := "udp4"
 	if f == Fam6 {
 		network = "udp6"
@@ -128,6 +161,7 @@ func (b *Balancer) ListenUDP(ctx context.Context, f Family) (net.PacketConn, err
 			lastErr = err
 			continue
 		}
-		return &slotPacketConn{PacketConn: pc, sl: sl, fam: f}, nil
+		traffic, end := b.trackProcess(pid)
+		return &slotPacketConn{PacketConn: pc, sl: sl, fam: f, traffic: traffic, endTraffic: end}, nil
 	}
 }

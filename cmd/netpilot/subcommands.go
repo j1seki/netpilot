@@ -264,12 +264,15 @@ func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer
 						m += "]"
 					}
 					state.Write(c.stateDir, state.Status{
-						PID:     os.Getpid(),
-						Mode:    m,
-						V6:      bal.V6State(),
-						Since:   since,
-						Updated: now,
-						NICs:    sched.Snapshot(),
+						Version: "net-merge " + netmerge.EmbeddedVersion() + " (NetPilot engine)", EngineSource: "builtin",
+						RoutingMode: c.mode, PrimaryAdapter: pri, SecondaryAdapter: sec,
+						PID:         os.Getpid(),
+						Mode:        m,
+						V6:          bal.V6State(),
+						Since:       since,
+						Updated:     now,
+						NICs:        sched.Snapshot(),
+						ProcessMbps: bal.ProcessRates(now),
 					})
 				}
 			}
@@ -409,6 +412,8 @@ func nmCmdRun(args []string) {
 
 	// Write status immediately so callers waiting for activation see it right away
 	state.Write(c.stateDir, state.Status{
+		Version: "net-merge " + netmerge.EmbeddedVersion() + " (NetPilot engine)", EngineSource: "builtin",
+		RoutingMode: c.mode, PrimaryAdapter: c.primary, SecondaryAdapter: c.secondary,
 		PID:     os.Getpid(),
 		Mode:    "system-wide",
 		V6:      bal.V6State(),

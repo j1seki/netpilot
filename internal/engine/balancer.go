@@ -22,8 +22,9 @@ type Balancer struct {
 	FailCooldown   time.Duration
 	v6mode         atomic.Int32
 
-	policyMu sync.RWMutex
-	policy   PolicyResolver
+	policyMu       sync.RWMutex
+	policy         PolicyResolver
+	processTraffic processTraffic
 }
 
 // V6Mode decides what happens to IPv6 flows entering the TUN.
@@ -223,6 +224,10 @@ func Relay(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler) (in, out
 // addition to the adapter-wide cap on its Slot. The limiter is shared by both
 // relay directions and remains attached to the concrete upstream TCPConn.
 func RelayLimited(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler, limitMbps float64) (in, out int64) {
+	return relayWithTraffic(client, upstream, sl, f, s, limitMbps, nil)
+}
+
+func relayWithTraffic(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler, limitMbps float64, traffic *trafficCounter) (in, out int64) {
 	activity := s.track(sl, f)
 	flowLimit := newFlowLimiter(limitMbps)
 	var wg sync.WaitGroup
@@ -236,7 +241,7 @@ func RelayLimited(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler, l
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		n, err := pumpLimited(upstream, client, &sl.bytesOut[f], sl, false, activity, flowLimit)
+		n, err := pumpLimited(upstream, client, &sl.bytesOut[f], sl, false, activity, flowLimit, traffic)
 		out = n
 		if isLinkDown(err) {
 			s.Fail(sl, f, relayFailCooldown)
@@ -244,7 +249,7 @@ func RelayLimited(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler, l
 		release()
 	}()
 	var err error
-	in, err = pumpLimited(client, upstream, &sl.bytesIn[f], sl, true, activity, flowLimit)
+	in, err = pumpLimited(client, upstream, &sl.bytesIn[f], sl, true, activity, flowLimit, traffic)
 	if isLinkDown(err) {
 		s.Fail(sl, f, relayFailCooldown)
 	}
@@ -260,10 +265,10 @@ func isLinkDown(err error) bool {
 }
 
 func pump(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activity *flowActivity) (int64, error) {
-	return pumpLimited(dst, src, counter, sl, down, activity, nil)
+	return pumpLimited(dst, src, counter, sl, down, activity, nil, nil)
 }
 
-func pumpLimited(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activity *flowActivity, flowLimit *flowLimiter) (int64, error) {
+func pumpLimited(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activity *flowActivity, flowLimit *flowLimiter, traffic *trafficCounter) (int64, error) {
 	bp := bufPool.Get().(*[]byte)
 	defer bufPool.Put(bp)
 	buf := *bp
@@ -274,6 +279,7 @@ func pumpLimited(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, 
 			total += int64(n)
 			activity.bytes.Add(int64(n))
 			counter.Add(int64(n))
+			traffic.add(n)
 			if flowLimit != nil {
 				if down {
 					flowLimit.read(n)

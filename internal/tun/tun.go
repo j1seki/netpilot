@@ -125,15 +125,18 @@ type tunProxy struct{ b *engine.Balancer }
 func (p tunProxy) DialContext(ctx context.Context, m *M.Metadata) (net.Conn, error) {
 	dst := m.DstIP.Unmap().String()
 	appName, appPath := "", ""
+	appPID := 0
 	if m.SrcIP.IsValid() && m.DstIP.IsValid() {
 		srcIP := net.IP(m.SrcIP.AsSlice())
 		dstIP := net.IP(m.DstIP.AsSlice())
 		if pid, ok := procnet.LookupPID("tcp", srcIP, m.SrcPort, dstIP, m.DstPort); ok {
 			id := procnet.Identify(pid)
 			appName, appPath = id.Name, id.Path
+			appPID = pid
 		}
 	}
 	policy := p.b.ResolvePolicy(appName, appPath, dst)
+	policy.PID = appPID
 	return p.b.DialPinnedFor(ctx, dst, int(m.DstPort), policy)
 }
 
@@ -142,7 +145,11 @@ func (p tunProxy) DialUDP(m *M.Metadata) (net.PacketConn, error) {
 	if d := m.DstIP.Unmap(); d.Is6() {
 		f = engine.Fam6
 	}
-	return p.b.ListenUDP(context.Background(), f)
+	pid := 0
+	if m.SrcIP.IsValid() && m.DstIP.IsValid() {
+		pid, _ = procnet.LookupPID("udp", m.SrcIP.AsSlice(), m.SrcPort, m.DstIP.AsSlice(), m.DstPort)
+	}
+	return p.b.ListenUDPFor(context.Background(), f, pid)
 }
 
 // Tun is the system-wide switch: On creates the adapter and routes, Off removes them. Both are

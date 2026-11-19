@@ -5,12 +5,12 @@ import {
   ExecutionModeState,
   CapabilityReport,
   NetMergeBinaryInfo,
+  NetMergeEngineSource,
 } from '../api/wails';
 import { UpdatePanel } from '../components/UpdatePanel';
 import {
   Shield,
   Terminal,
-  FolderOpen,
   CheckCircle2,
   AlertCircle,
   RefreshCw,
@@ -28,7 +28,9 @@ export const Settings: React.FC = () => {
   const [modeState, setModeState] = useState<ExecutionModeState | null>(null);
   const [capReport, setCapReport] = useState<CapabilityReport | null>(null);
   const [binInfo, setBinInfo] = useState<NetMergeBinaryInfo | null>(null);
-  const [engineSource, setEngineSource] = useState<'builtin' | 'external'>('builtin');
+  const [engineSource, setEngineSource] = useState<NetMergeEngineSource>('builtin');
+  const [releaseTags, setReleaseTags] = useState<string[]>([]);
+  const [releaseTag, setReleaseTag] = useState('');
   const [customPath, setCustomPath] = useState<string>('');
   const [closeAction, setCloseAction] = useState<'minimize' | 'close'>('minimize');
   const [showConsole, setShowConsole] = useState<boolean>(false);
@@ -51,7 +53,7 @@ export const Settings: React.FC = () => {
       setModeState(m);
       setCapReport(c);
       setBinInfo(bin);
-      setEngineSource(bin.engineSource === 'external' ? 'external' : 'builtin');
+      setEngineSource(bin.engineSource || 'builtin');
       setCustomPath(bin.customPath || '');
       setCloseAction(ca || 'minimize');
       setErrorMsg('');
@@ -86,39 +88,33 @@ export const Settings: React.FC = () => {
     }
   };
 
-  const handleEngineSourceChange = async (source: 'builtin' | 'external') => {
-    setEngineSource(source);
-    setErrorMsg('');
-    if (source === 'builtin') {
-      setSavingPath(true);
-      try {
-        const updated = await api.setNetMergeEngineSource('builtin', customPath);
-        setBinInfo(updated);
-        flashSuccess('Switched to Built-in embedded net-merge + net-merge-tray.');
-      } catch (err: any) {
-        setErrorMsg(err.message || 'Failed to switch to built-in net-merge.');
-      } finally {
-        setSavingPath(false);
-      }
-    }
-  };
-
-  const handleSaveExternalBinary = async () => {
+  const handleSaveEngine = async () => {
     setSavingPath(true);
     setErrorMsg('');
     setSuccessMsg('');
     try {
-      if (!customPath.trim()) {
-        setErrorMsg('Please enter the full path to the external net-merge binary.');
-        return;
-      }
-      const updated = await api.setNetMergeEngineSource('external', customPath.trim());
+      const updated = engineSource === 'release'
+        ? await api.installNetMergeRelease(releaseTag)
+        : await api.setNetMergeEngineSource(engineSource, engineSource === 'external' ? customPath.trim() : '');
       setBinInfo(updated);
-      flashSuccess(`Verified and activated external net-merge binary: ${updated.path}`);
+      flashSuccess(`${updated.version} selected for the next start.`);
     } catch (err: any) {
-      const updated = await api.getNetMergeBinaryInfo();
-      setBinInfo(updated);
-      setErrorMsg(err.message || 'Invalid external net-merge executable path.');
+      setErrorMsg(err.message || 'Could not change the selected engine.');
+    } finally {
+      setSavingPath(false);
+    }
+  };
+
+  const loadReleases = async () => {
+    setSavingPath(true);
+    setErrorMsg('');
+    try {
+      const tags = await api.getNetMergeReleases();
+      setReleaseTags(tags);
+      setReleaseTag(tags.includes(binInfo?.releaseTag || '') ? binInfo!.releaseTag! : tags[0] || '');
+      if (!tags.length) setErrorMsg('No verified releases are available for this platform.');
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Could not fetch release versions.');
     } finally {
       setSavingPath(false);
     }
@@ -309,139 +305,51 @@ export const Settings: React.FC = () => {
         </div>
       </div>
 
-      {/* Net-Merge Engine Binary Selection: Built-in vs External Full Path */}
+      {/* Engine version and source selection */}
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-title">
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Box size={15} color="#38bdf8" />
-            <span>Net-Merge Engine Source (Built-in vs External Binary)</span>
+            <span>Net-Merge Engine</span>
           </div>
           {binInfo && (
             <span className={`status-pill ${binInfo.isValid ? 'pass' : 'fail'}`}>
               {binInfo.isValid
-                ? engineSource === 'builtin'
-                  ? 'BUILT-IN (EMBEDDED + TRAY)'
-                  : 'EXTERNAL BINARY VERIFIED'
-                : 'BINARY NOT FOUND'}
+                ? binInfo.engineSource === 'builtin'
+                  ? 'NETPILOT ENGINE'
+                  : 'ENGINE VERIFIED'
+                : 'ENGINE UNAVAILABLE'}
             </span>
           )}
         </div>
 
         <p style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '12px' }}>
-          NetPilot embeds both <strong>net-merge</strong> and <strong>net-merge-tray</strong> directly out of the box. You can also switch to an external <code>net-merge</code> binary defined by its full path.
+          Upgrade or downgrade by selecting an official release. Stop net-merge and its SOCKS proxy before switching. The NetPilot engine is always available for Backup Failover and the in-app SOCKS proxy; official releases use Speed mode.
         </p>
 
-        <div className="grid-2" style={{ gap: '12px', marginBottom: '12px' }}>
-          {/* Option 1: Built-in Net-Merge */}
-          <div
-            onClick={() => handleEngineSourceChange('builtin')}
-            style={{
-              padding: '13px 15px',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              background: engineSource === 'builtin' ? 'rgba(56, 189, 248, 0.08)' : '#09090b',
-              border: `1px solid ${engineSource === 'builtin' ? '#38bdf8' : '#27272a'}`,
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-              <span style={{ fontWeight: 700, fontSize: '13px', color: '#fafafa' }}>
-                Use Built-in Net-Merge + Tray (Default)
-              </span>
-              {engineSource === 'builtin' && <span className="status-pill pass">SELECTED</span>}
-            </div>
-            <div style={{ fontSize: '11.5px', color: '#a1a1aa' }}>
-              Uses the embedded <code>net-merge</code> and <code>net-merge-tray</code> bundled inside NetPilot. Automatically kept up-to-date with upstream releases.
-            </div>
-          </div>
-
-          {/* Option 2: External Full Path */}
-          <div
-            onClick={() => setEngineSource('external')}
-            style={{
-              padding: '13px 15px',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              background: engineSource === 'external' ? 'rgba(245, 158, 11, 0.08)' : '#09090b',
-              border: `1px solid ${engineSource === 'external' ? '#f59e0b' : '#27272a'}`,
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-              <span style={{ fontWeight: 700, fontSize: '13px', color: '#fafafa' }}>
-                Use External Net-Merge (Full Path)
-              </span>
-              {engineSource === 'external' && <span className="status-pill warn">SELECTED</span>}
-            </div>
-            <div style={{ fontSize: '11.5px', color: '#a1a1aa' }}>
-              Specify the full filesystem path to a custom or externally installed <code>net-merge</code> / <code>net-merge.exe</code> binary.
-            </div>
-          </div>
+        <div className="engine-summary" aria-live="polite">
+          <div>Selected engine: <strong>{binInfo?.version || binInfo?.error || 'Checking…'}</strong></div>
+          {binInfo?.bundledVersion && <div>Official release included with this build: <strong>{binInfo.bundledVersion}</strong></div>}
         </div>
-
-        {/* External Path Input when External is selected */}
-        {engineSource === 'external' && (
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px' }}>
-            <FolderOpen size={15} color="#a1a1aa" />
-            <input
-              type="text"
-              placeholder="Full path to net-merge (e.g. C:\Tools\net-merge.exe or /usr/local/bin/net-merge)"
-              value={customPath}
-              onChange={e => setCustomPath(e.target.value)}
-              style={{ flex: 1 }}
-            />
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={handleSaveExternalBinary}
-              disabled={savingPath}
-            >
-              {savingPath ? 'Verifying...' : 'Verify & Use External'}
-            </button>
-          </div>
-        )}
-
-        {/* Resolved Binary Status Box */}
-        {binInfo && (
-          <div
-            style={{
-              padding: '10px 14px',
-              borderRadius: '7px',
-              background: '#09090b',
-              border: `1px solid ${binInfo.isValid ? 'rgba(16, 185, 129, 0.28)' : 'rgba(244, 63, 94, 0.35)'}`,
-              fontSize: '11.5px',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-            }}
-          >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                {binInfo.isValid ? (
-                  <CheckCircle2 size={14} color="#10b981" />
-                ) : (
-                  <AlertCircle size={14} color="#f43f5e" />
-                )}
-                <span style={{ fontWeight: 600, color: '#fafafa' }}>
-                  Active Engine:{' '}
-                  <span className="font-mono" style={{ color: binInfo.isValid ? '#34d399' : '#fb7185' }}>
-                    {binInfo.path || 'Not found'}
-                  </span>
-                </span>
-              </div>
-              <div style={{ color: '#a1a1aa', paddingLeft: '20px' }}>
-                {binInfo.isValid
-                  ? `Version: ${binInfo.version} · Source: ${binInfo.engineSource || binInfo.source}`
-                  : `Error: ${binInfo.error}`}
-              </div>
-            </div>
-
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={loadAll}
-              title="Re-verify binary"
-            >
-              <RefreshCw size={12} />
-            </button>
-          </div>
-        )}
+        <div className="engine-actions">
+          <label htmlFor="engine-source">Engine source</label>
+          <select id="engine-source" value={engineSource} disabled={savingPath} onChange={e => setEngineSource(e.target.value as NetMergeEngineSource)}>
+            <option value="builtin">NetPilot engine (Backup + Speed)</option>
+            {binInfo?.bundledVersion && <option value="bundled">Bundled official release ({binInfo.bundledVersion})</option>}
+            <option value="release">Download an official version</option>
+            <option value="external">Choose an external executable</option>
+          </select>
+          {engineSource === 'release' && <>
+            <button className="btn btn-secondary btn-sm" disabled={savingPath} onClick={loadReleases}><RefreshCw size={12} /> List releases</button>
+            {releaseTags.length > 0 && <select aria-label="Official release version" value={releaseTag} disabled={savingPath} onChange={e => setReleaseTag(e.target.value)}>
+              {releaseTags.map(tag => <option key={tag} value={tag}>{tag}</option>)}
+            </select>}
+          </>}
+          {engineSource === 'external' && <input aria-label="Full path to net-merge executable" placeholder="Full path to net-merge executable" value={customPath} disabled={savingPath} onChange={e => setCustomPath(e.target.value)} />}
+          <button className="btn btn-primary btn-sm" onClick={handleSaveEngine} disabled={savingPath || (engineSource === 'release' && !releaseTag) || (engineSource === 'external' && !customPath.trim())}>
+            {savingPath ? 'Working…' : engineSource === 'release' ? 'Download & use' : 'Use this engine'}
+          </button>
+        </div>
       </div>
 
       {/* Configuration Backup & Restore */}

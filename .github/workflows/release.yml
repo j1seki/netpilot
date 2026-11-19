@@ -48,8 +48,23 @@ jobs:
           # This test compares EmbeddedVersion() with the VERSION file on disk.
           CGO_ENABLED=0 go test ./internal/netmerge -run TestEmbeddedVersionMatchesVERSIONFile -count=1
 
+  engine:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Pin the latest stable upstream release for all artifacts
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag=$(gh api repos/net-merge/net-merge/releases/latest --jq .tag_name)
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
   windows:
-    needs: verify-engine-version
+    needs: [engine, verify-engine-version]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,48 +81,28 @@ jobs:
           npm run build
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
-      - name: Build single-binary NetPilot + embed Wintun
+      - name: Bundle verified net-merge and build NetPilot
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ENGINE_TAG: ${{ needs.engine.outputs.tag }}
+          NETPILOT_TAG: ${{ inputs.tag || github.ref_name }}
         shell: pwsh
         run: |
-          $version = 'v0.4.0'.TrimStart('v')
+          $version = $env:NETPILOT_TAG.TrimStart('v')
           New-Item -ItemType Directory -Force dist | Out-Null
-          New-Item -ItemType Directory -Force internal/netmerge/embedded/bin | Out-Null
-          # True single-binary: netpilot itself implements all net-merge subcommands (see cmd/netpilot/subcommands.go).
-          # Build net-merge CLI only if needed for wintun source; do NOT ship or embed separate net-merge binaries.
-
-          # Fetch the Wintun package for the exact net-merge version vendored in
-          # internal/netmerge/VERSION. If that upstream release is missing, use the
-          # latest available portable package rather than failing the NetPilot release.
-          $nmVersion = (Get-Content internal/netmerge/VERSION -Raw).Trim()
-          $wintunVersion = "v$nmVersion"
-          gh release view "$wintunVersion" --repo net-merge/net-merge --silent >$null 2>&1
-          if ($LASTEXITCODE -ne 0) {
-            $wintunVersion = 'v0.3.7'
-            Write-Host "net-merge $nmVersion has no portable package; using $wintunVersion"
-          }
-          $wintunVersionNumber = $wintunVersion.TrimStart('v')
-          $dl = Join-Path $env:TEMP "nm-win-$wintunVersionNumber"
-          New-Item -ItemType Directory -Force $dl | Out-Null
-          gh release download "$wintunVersion" --repo net-merge/net-merge --pattern 'net-merge-portable.zip' --dir $dl --clobber
-          Expand-Archive -Path "$dl/net-merge-portable.zip" -DestinationPath "$dl/extracted" -Force
-          Copy-Item "$dl/extracted/wintun.dll" dist/wintun.dll -Force
-          if (Test-Path "$dl/extracted/wintun-LICENSE.txt") {
-            Copy-Item "$dl/extracted/wintun-LICENSE.txt" dist/wintun-LICENSE.txt -Force
-          }
-
-          # Embed ONLY wintun.dll into the single NetPilot binary; auto-extracted next to netpilot.exe on first run.
-          Copy-Item dist/wintun.dll internal/netmerge/embedded/bin/wintun.dll -Force
+          go run scripts/bundle-net-merge.go windows amd64 $env:ENGINE_TAG
+          if ($LASTEXITCODE -ne 0) { throw 'Could not bundle official net-merge' }
+          Copy-Item internal/netmerge/embedded/bin/wintun.dll dist/wintun.dll -Force
+          Copy-Item internal/netmerge/embedded/bin/wintun-LICENSE.txt dist/wintun-LICENSE.txt -Force
 
           # Build NetPilot single binary (-H=windowsgui so no console window ever pops up; netpilot run/tray/etc. are subcommands of this binary)
           go build -trimpath -ldflags "-s -w -H=windowsgui -X netpilot/internal/branding.AppVersion=$version" -o dist/netpilot.exe ./cmd/netpilot
 
-          Write-Host "Embedded net-merge version for this build: $nmVersion (Wintun from $wintunVersionNumber)"
       - name: Build Windows installer (.exe) and Portable ZIP
+        env:
+          NETPILOT_TAG: ${{ inputs.tag || github.ref_name }}
         shell: pwsh
         run: |
-          $version = 'v0.4.0'.TrimStart('v')
+          $version = $env:NETPILOT_TAG.TrimStart('v')
           # Inno Setup's VersionInfoVersion must be numeric X.Y.Z.W. Derive it from
           # the leading version numbers, e.g. 0.4.0-beta.1 -> 0.4.0.0.
           $numericVersion = '0.0.0.0'
@@ -118,19 +113,19 @@ jobs:
           $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path $iscc)) { $iscc = (Get-Command ISCC.exe).Source }
           & $iscc "/DVersion=$version" "/DNumericVersion=$numericVersion" installer/netpilot.iss
-          Compress-Archive -Path dist/netpilot.exe, dist/wintun.dll, dist/netpilot.ico, LICENSE, THIRD-PARTY-NOTICES.md, README.md -DestinationPath dist/netpilot-windows-amd64-portable.zip -Force
+          Compress-Archive -Path dist/netpilot.exe, dist/wintun.dll, dist/wintun-LICENSE.txt, dist/netpilot.ico, LICENSE, THIRD-PARTY-NOTICES.md, README.md -DestinationPath dist/netpilot-windows-amd64-portable.zip -Force
           Get-ChildItem dist/*.exe, dist/*.zip
-          Move-Item -Path dist/netpilot-setup.exe -Destination dist/netpilot-0.4.0-installer.exe -Force
+          Move-Item -Path dist/netpilot-setup.exe -Destination "dist/netpilot-$version-installer.exe" -Force
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
-            dist/netpilot-0.4.0-installer.exe
+            dist/netpilot-*-installer.exe
             dist/netpilot-windows-amd64-portable.zip
           if-no-files-found: error
 
   macos:
-    needs: verify-engine-version
+    needs: [engine, verify-engine-version]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -146,10 +141,12 @@ jobs:
           npm ci || npm install
           npm run build
       - name: Build single-binary NetPilot macOS Universal
+        env:
+          ENGINE_TAG: ${{ needs.engine.outputs.tag }}
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
           mkdir -p dist internal/netmerge/embedded/bin
-          # True single-binary: no separate net-merge binaries; netpilot handles all subcommands.
+          go run scripts/bundle-net-merge.go darwin arm64 "$ENGINE_TAG"
 
           for arch in amd64 arm64; do
             CGO_ENABLED=1 GOARCH=$arch go build -trimpath -ldflags "-s -w -X netpilot/internal/branding.AppVersion=$v" -o dist/netpilot-$arch ./cmd/netpilot
@@ -160,7 +157,7 @@ jobs:
           want_engine=$(tr -d '[:space:]' < internal/netmerge/VERSION)
           built_engine=$(dist/netpilot version 2>/dev/null || true)
           case "$built_engine" in
-            *"net-merge $want_engine"*) echo "Verified embedded engine: $built_engine" ;;
+            *"net-merge ${want_engine#v}"*) echo "Verified embedded engine: $built_engine" ;;
             *) echo "::error::Engine version mismatch: binary reports '$built_engine', expected net-merge $want_engine"; exit 1 ;;
           esac
       - name: Build macOS DMG
@@ -216,6 +213,7 @@ jobs:
 
           mkdir -p dmg_root
           cp -R "$APP" dmg_root/
+          install -m 755 'packaging/Open NetPilot.command' 'dmg_root/Open NetPilot.command'
           ln -s /Applications dmg_root/Applications
           cp LICENSE THIRD-PARTY-NOTICES.md dmg_root/
 
@@ -228,7 +226,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    needs: verify-engine-version
+    needs: [engine, verify-engine-version]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -253,10 +251,12 @@ jobs:
           npm ci || npm install
           npm run build
       - name: Build single-binary NetPilot (Linux)
+        env:
+          ENGINE_TAG: ${{ needs.engine.outputs.tag }}
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
           mkdir -p dist internal/netmerge/embedded/bin
-          # True single-binary: no separate net-merge binaries on Linux.
+          go run scripts/bundle-net-merge.go linux amd64 "$ENGINE_TAG"
 
           CGO_ENABLED=1 go build -tags gtk3 -trimpath -ldflags "-s -w -X netpilot/internal/branding.AppVersion=$v" -o dist/netpilot ./cmd/netpilot
 
@@ -265,7 +265,7 @@ jobs:
           want_engine=$(tr -d '[:space:]' < internal/netmerge/VERSION)
           built_engine=$(./dist/netpilot version 2>/dev/null || true)
           case "$built_engine" in
-            *"net-merge $want_engine"*) echo "Verified embedded engine: $built_engine" ;;
+            *"net-merge ${want_engine#v}"*) echo "Verified embedded engine: $built_engine" ;;
             *) echo "::error::Engine version mismatch: binary reports '$built_engine', expected net-merge $want_engine"; exit 1 ;;
           esac
       - name: Build Universal Portable AppImage (All Desktop Environments)
@@ -328,7 +328,7 @@ jobs:
   linux-arm64:
     # Native arm64 runner: Wails needs cgo + arm64 GTK/WebKit, so cross-compiling the
     # AppImage on the amd64 runner is not possible without a full sysroot.
-    needs: verify-engine-version
+    needs: [engine, verify-engine-version]
     runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -353,15 +353,18 @@ jobs:
           npm ci || npm install
           npm run build
       - name: Build single-binary NetPilot (Linux arm64)
+        env:
+          ENGINE_TAG: ${{ needs.engine.outputs.tag }}
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
           mkdir -p dist internal/netmerge/embedded/bin
+          go run scripts/bundle-net-merge.go linux arm64 "$ENGINE_TAG"
           CGO_ENABLED=1 GOARCH=arm64 go build -tags gtk3 -trimpath -ldflags "-s -w -X netpilot/internal/branding.AppVersion=$v" -o dist/netpilot ./cmd/netpilot
 
           want_engine=$(tr -d '[:space:]' < internal/netmerge/VERSION)
           built_engine=$(./dist/netpilot version 2>/dev/null || true)
           case "$built_engine" in
-            *"net-merge $want_engine"*) echo "Verified embedded engine: $built_engine" ;;
+            *"net-merge ${want_engine#v}"*) echo "Verified embedded engine: $built_engine" ;;
             *) echo "::error::Engine version mismatch: binary reports '$built_engine', expected net-merge $want_engine"; exit 1 ;;
           esac
       - name: Build arm64 Portable AppImage
@@ -420,7 +423,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [windows, macos, linux, linux-arm64]
+    needs: [engine, windows, macos, linux, linux-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -440,7 +443,7 @@ jobs:
           while IFS= read -r -d '' file; do
             base=$(basename "$file")
             case "$base" in
-              netpilot-0.4.0-installer.exe)            name="netpilot-${version}-installer.exe" ;;
+              "netpilot-${version}-installer.exe") name="$base" ;;
               netpilot-windows-amd64-portable.zip) name="netpilot-${version}-windows-amd64-portable.zip" ;;
               netpilot-macos-universal.dmg)        name="netpilot-${version}-macos-universal.dmg" ;;
               netpilot-linux-amd64.AppImage)       name="netpilot-${version}-linux-amd64.AppImage" ;;
@@ -474,16 +477,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHANNEL: ${{ steps.channel.outputs.channel }}
-          VERSION: v0.4.0
+          VERSION: ${{ inputs.tag || github.ref_name }}
+          ENGINE_TAG: ${{ needs.engine.outputs.tag }}
         run: |
           tag="$VERSION"
           version="${tag#v}"
-          nm_ver=$(tr -d '[:space:]' < internal/netmerge/VERSION || echo "0.3.6")
-          nm_version="${nm_ver#v}"
-          if [ "$nm_version" != "$version" ]; then
-            echo "::error::NetPilot version $version does not match net-merge VERSION $nm_version"
-            exit 1
-          fi
+          nm_ver=$(tr -d '[:space:]' < internal/netmerge/VERSION)
           # GitHub has no separate "channel" field: the prerelease flag is the
           # channel marker. Stable releases are normal releases; beta releases
           # are prereleases and must never take Latest.
@@ -505,22 +504,25 @@ jobs:
             make_latest=true
             current=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
             if [ -n "$current" ] && [ "$current" != "$tag" ]; then
-              highest=$(printf '%s\n%s\n' "${current#v}" "$ver" | sort -V | tail -n1)
-              if [ "$highest" != "$ver" ]; then
+              highest=$(printf '%s\n%s\n' "${current#v}" "$version" | sort -V | tail -n1)
+              if [ "$highest" != "$version" ]; then
                 make_latest=false
               fi
             fi
           fi
 
           notes=$(cat <<EOF
-          NetPilot $tag — Multi-Adapter Network Control Center (single-binary NetPilot incl. net-merge engine v${nm_ver}; no separate net-merge binaries).
+          NetPilot $tag — Multi-Adapter Network Control Center, bundled with official net-merge ${ENGINE_TAG}.
 
           Release channel: **${channel_label}** — ${channel_note}
 
           Highlights:
+          - Click the Active Processes column triangles to sort by network traffic, CPU, RAM, name, or PID in either direction
+          - Responsive dashboard layouts and collapsible network adapter groups
+          - NetPilot's integrated engine is ${nm_ver}; the official engine is bundled separately
           - Beszel-inspired dark UI with real-time per-adapter telemetry
           - Speed Mode (simultaneous multi-link aggregation) & Backup Mode (primary-to-secondary automatic failover)
-          - Single-binary NetPilot (GUI + net-merge CLI + tray in one binary; auto-extracts wintun.dll on Windows)
+          - Upgrade or downgrade official net-merge releases in Settings; switch back to the bundled release or the NetPilot engine at any time
           - Silent Windows execution (no console popups) & minimize-to-tray support across Windows, macOS, and Linux Desktop Environments
 
           Packages (all include version ${version}):

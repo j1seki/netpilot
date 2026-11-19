@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"netpilot/internal/engine"
 	"netpilot/internal/nics"
+	"netpilot/internal/state"
 )
 
 func TestNetMergeController(t *testing.T) {
@@ -54,24 +56,36 @@ func TestNetMergeController(t *testing.T) {
 		t.Errorf("persisted config did not match: %+v", cfg2)
 	}
 
-	// SetSystemWide(false) always succeeds (clears state + writes ctl/off marker).
+	// Keep external status until the daemon has processed the stop marker.
+	state.Write(tempDir, state.Status{PID: 84321, Updated: time.Now(), Version: "net-merge 0.3.6", EngineSource: "release"})
+	st, _ = ctrl.GetStatus()
+	if !st.IsRunning || st.RunningVersion != "net-merge 0.3.6" || st.Binary.EngineSource != "builtin" {
+		t.Fatalf("running version must come from the live engine, not settings: %+v", st)
+	}
+	if _, err := ctrl.SetEngineSource("builtin", ""); err == nil {
+		t.Fatal("engine switching must be blocked while the daemon is active")
+	}
 	if err := ctrl.SetSystemWide(false); err != nil {
 		t.Fatalf("SetSystemWide(false) failed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tempDir, "ctl", "off")); err != nil {
 		t.Errorf("expected 'off' marker file, got: %v", err)
 	}
+	if _, ok := state.Read(tempDir); !ok {
+		t.Fatal("GUI removed the running daemon's status")
+	}
+	state.Clear(tempDir)
 
 	// SetSystemWide(true) must NOT fake success when no daemon/admin is available.
 	// Use an external config pointing at a nonexistent binary so the failure is fast
 	// and deterministic (no 12s daemon spawn).
 	extCtrl := NewController(tempDir)
-	extCfg := extCtrl.GetConfig()
-	extCfg.EngineSource = "external"
-	extCfg.BinaryPath = filepath.Join(tempDir, "does-not-exist-net-merge")
-	if err := extCtrl.SaveConfig(extCfg); err != nil {
-		t.Fatalf("SaveConfig(external) failed: %v", err)
+	missing := filepath.Join(tempDir, "does-not-exist-net-merge")
+	if _, err := extCtrl.SetCustomBinaryPath(missing); err == nil {
+		t.Fatal("must not select a nonexistent engine")
 	}
+	// Reproduce a previously selected executable being removed from disk.
+	extCtrl.config.EngineSource, extCtrl.config.BinaryPath = "external", missing
 	if err := extCtrl.SetSystemWide(true); err == nil {
 		t.Errorf("expected SetSystemWide(true) to return an error for a missing binary, got nil")
 	}
@@ -88,6 +102,25 @@ func TestNetMergeController(t *testing.T) {
 	// Turning off again after a failed start must still succeed.
 	if err := extCtrl.SetSystemWide(false); err != nil {
 		t.Fatalf("SetSystemWide(false) after failed start failed: %v", err)
+	}
+}
+
+func TestRoutingConfigDoesNotNeedRuntimeDirectory(t *testing.T) {
+	root := t.TempDir()
+	runtimeDir := filepath.Join(root, "not-yet-created-var-run-directory")
+	settingsDir := filepath.Join(root, "Application Support", "NetPilot")
+	c := newController(runtimeDir, settingsDir)
+	defer close(c.stopCh)
+	if err := c.SetRoutingMode("backup", "primary", "secondary"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(runtimeDir); !os.IsNotExist(err) {
+		t.Fatalf("GUI must not write to runtime directory: %v", err)
+	}
+	reopened := newController(runtimeDir, settingsDir)
+	defer close(reopened.stopCh)
+	if cfg := reopened.GetConfig(); cfg.RoutingMode != "backup" || cfg.PrimaryAdapter != "primary" || cfg.SecondaryAdapter != "secondary" {
+		t.Fatalf("routing preference did not survive restart: %+v", cfg)
 	}
 }
 

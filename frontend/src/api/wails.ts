@@ -78,6 +78,9 @@ export interface ProcessInfo {
   bytesSent: number;
   bytesReceived: number;
   currentMbps: number;
+  networkMbps?: number;
+  cpuPercent?: number;
+  memoryBytes?: number;
   assignedNic: string;
   ruleMatched?: string;
   lastActive: string;
@@ -196,16 +199,20 @@ export interface NetMergeSlotStats {
   LimitMbps: number;
 }
 
+export type NetMergeEngineSource = 'builtin' | 'bundled' | 'release' | 'external';
+
 export interface NetMergeBinaryInfo {
   path: string;
   trayPath?: string;
   customPath: string;
-  engineSource?: 'builtin' | 'external';
+  engineSource?: NetMergeEngineSource;
   exists: boolean;
-  source: 'builtin' | 'custom' | 'same-folder' | 'path' | 'system' | 'none';
+  source: NetMergeEngineSource | 'custom' | 'same-folder' | 'path' | 'system' | 'none';
   version: string;
   isValid: boolean;
   error?: string;
+  bundledVersion?: string;
+  releaseTag?: string;
 }
 
 export interface NetMergeConfig {
@@ -219,7 +226,7 @@ export interface NetMergeConfig {
   weights: Record<string, number>;
   showConsole: boolean;
   autostart: boolean;
-  engineSource?: 'builtin' | 'external';
+  engineSource?: NetMergeEngineSource;
   binaryPath?: string;
   routingMode?: 'speed' | 'backup';
   primaryAdapter?: string;
@@ -246,6 +253,18 @@ export interface NetMergeStatus {
   nics: NetMergeSlotStats[];
   limits: Record<string, number>;
   binary?: NetMergeBinaryInfo;
+  runningVersion?: string;
+  runningSource?: NetMergeEngineSource;
+  restartForMode?: boolean;
+}
+
+export function engineVersionLabel(status: NetMergeStatus | null) {
+  if (!status) return 'Checking engine…';
+  if (status.isRunning) {
+    const source = status.runningSource === 'bundled' ? ' (bundled)' : status.runningSource === 'release' ? ' (downloaded)' : status.runningSource === 'external' ? ' (external)' : '';
+    return status.runningVersion ? `Running: ${status.runningVersion}${source}` : 'Running: version not reported';
+  }
+  return `Selected: ${status.binary?.version || 'engine unavailable'}`;
 }
 
 export interface TTLSetting {
@@ -812,7 +831,7 @@ export const api = {
     throw new Error('Failed to set net-merge binary path');
   },
 
-  async setNetMergeEngineSource(source: 'builtin' | 'external', path: string = ''): Promise<NetMergeBinaryInfo> {
+  async setNetMergeEngineSource(source: NetMergeEngineSource, path: string = ''): Promise<NetMergeBinaryInfo> {
     const res = await fetchApi<NetMergeBinaryInfo>('netmerge/binary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -820,6 +839,16 @@ export const api = {
     });
     if (res) return res;
     throw new Error('Failed to update net-merge engine source');
+  },
+
+  async getNetMergeReleases(): Promise<string[]> {
+    return requireApi(await fetchApi<string[]>('netmerge/releases'), 'netmerge/releases');
+  },
+
+  async installNetMergeRelease(tag: string): Promise<NetMergeBinaryInfo> {
+    return requireApi(await fetchApi<NetMergeBinaryInfo>('netmerge/releases', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag }),
+    }), 'netmerge/releases');
   },
 
   async setNetMergeRoutingMode(mode: 'speed' | 'backup', primary: string = '', secondary: string = ''): Promise<void> {

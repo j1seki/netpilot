@@ -24,12 +24,18 @@ const macStateDir = "/var/run/net-merge"
 const macLimitsDir = "/Library/Application Support/net-merge"
 
 type Status struct {
-	PID     int
-	Mode    string
-	V6      string
-	Since   time.Time
-	Updated time.Time
-	NICs    []engine.SlotStats
+	Version          string `json:",omitempty"`
+	EngineSource     string `json:",omitempty"`
+	RoutingMode      string `json:",omitempty"`
+	PrimaryAdapter   string `json:",omitempty"`
+	SecondaryAdapter string `json:",omitempty"`
+	PID              int
+	Mode             string
+	V6               string
+	Since            time.Time
+	Updated          time.Time
+	NICs             []engine.SlotStats
+	ProcessMbps      map[int]float64 `json:",omitempty"`
 }
 
 func DefaultDir() string {
@@ -62,7 +68,7 @@ func Write(dir string, st Status) {
 	}
 	tmp := filepath.Join(dir, "status.json.tmp")
 	if os.WriteFile(tmp, b, 0o644) == nil {
-		os.Rename(tmp, filepath.Join(dir, "status.json"))
+		_ = replaceFile(tmp, filepath.Join(dir, "status.json"))
 	}
 }
 

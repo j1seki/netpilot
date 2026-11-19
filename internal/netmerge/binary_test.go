@@ -111,8 +111,8 @@ func TestBinaryResolutionAndValidation(t *testing.T) {
 	if !sameFolderInfo.IsValid || !sameFolderInfo.Exists {
 		t.Fatalf("expected same-folder binary to be valid and exist, got: %+v", sameFolderInfo)
 	}
-	if sameFolderInfo.Source != "same-folder" {
-		t.Fatalf("expected source 'same-folder', got %q", sameFolderInfo.Source)
+	if sameFolderInfo.Source != "builtin" {
+		t.Fatalf("a neighboring executable must not override the NetPilot engine, got %q", sameFolderInfo.Source)
 	}
 	t.Logf("Same folder test passed: %+v", sameFolderInfo)
 

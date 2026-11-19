@@ -121,6 +121,8 @@ func (b *Balancer) handleSocks5(c net.Conn) {
 	}
 	c.SetDeadline(time.Time{})
 	socksReply(c, repOK)
-	in, out := RelayLimited(c, up, sl, fam, b.S, policy.BandwidthLimitMbps)
+	traffic, stopTracking := b.trackProcess(app.PID)
+	defer stopTracking()
+	in, out := relayWithTraffic(c, up, sl, fam, b.S, policy.BandwidthLimitMbps, traffic)
 	b.reportUsage(policy.AppName, in, out)
 }

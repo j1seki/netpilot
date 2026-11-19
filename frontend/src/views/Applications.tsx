@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { ProcessIcon } from '../components/ProcessIcon';
 import { api, ProcessInfo, InterfaceInfo } from '../api/wails';
-import { Search, Globe, Video, MessageSquare, DownloadCloud, Cpu, RefreshCw, SlidersHorizontal, Zap, Gauge, ShieldAlert } from 'lucide-react';
+import { Search, Globe, RefreshCw, SlidersHorizontal, Zap, Gauge, ShieldAlert } from 'lucide-react';
 
 export const Applications: React.FC = () => {
   const [apps, setApps] = useState<ProcessInfo[]>([]);
@@ -26,16 +27,6 @@ export const Applications: React.FC = () => {
     const interval = setInterval(() => loadData().catch((e) => console.error(e)), 3000);
     return () => clearInterval(interval);
   }, []);
-
-  const getIcon = (hint: string) => {
-    switch (hint) {
-      case 'globe': return <Globe size={16} color="#38bdf8" />;
-      case 'video': return <Video size={16} color="#4ade80" />;
-      case 'message-square': return <MessageSquare size={16} color="#fbbf24" />;
-      case 'download-cloud': return <DownloadCloud size={16} color="#c084fc" />;
-      default: return <Cpu size={16} color="#94a3b8" />;
-    }
-  };
 
   const filtered = apps.filter(a =>
     a.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -110,7 +101,7 @@ export const Applications: React.FC = () => {
               <tr key={app.pid}>
                 <td>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    {getIcon(app.iconHint)}
+                    <ProcessIcon pid={app.pid} executable={app.executable} />
                     <div>
                       <div style={{ fontWeight: 600 }}>{app.name}</div>
                       <div className="font-mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>

@@ -60,11 +60,16 @@ chmod +x netpilot-linux-arm64.AppImage
 > - **Fedora / RHEL:** `sudo dnf install webkit2gtk4.1`
 > - **Arch Linux:** `sudo pacman -S webkit2gtk-4.1`
 
+### Choosing a net-merge engine
+
+**Settings → Net-Merge Engine** lets you select the bundled official release, download a newer or older official version, or switch back to NetPilot's integrated engine. Stop merging and the SOCKS proxy before switching. The integrated engine supports Backup Failover and per-app routing; official downloads use Speed mode. Release builds bundle the latest stable upstream net-merge separately from the integrated engine.
+
+On macOS, install NetPilot in Applications. If macOS blocks a copy you downloaded from the official release page, use **Privacy & Security → Open Anyway**, or the DMG's **Open NetPilot.command** helper to verify the bundle and remove quarantine from that copy after confirming.
+
 ### Automatic updates
 
 NetPilot checks GitHub for a newer build on startup and every six hours, and can download, verify and
-install it without leaving the app. Open **Settings → Automatic Updates** (also on the **Connectivity**
-page) and pick a channel:
+install it without leaving the app. Open **Settings → Automatic Updates** and pick a channel:
 
 | Channel | Receives | GitHub meaning |
 | :--- | :--- | :--- |
@@ -104,6 +109,7 @@ npm run build
 cd ..
 
 # 4. Build the single NetPilot binary (GUI + net-merge CLI + tray in one file)
+go run scripts/bundle-net-merge.go
 #    On Linux add -tags gtk3; on Windows add -ldflags "-H=windowsgui" to hide the console.
 go build -trimpath -ldflags "-s -w" -o dist/netpilot ./cmd/netpilot
 

@@ -27,24 +27,11 @@ Pop-Location
 Write-Host "Building single-binary NetPilot (netpilot = GUI + net-merge CLI + tray)..."
 New-Item -ItemType Directory -Force internal\netmerge\embedded\bin | Out-Null
 
-# 3. Pull official wintun.dll from net-merge/net-merge release
-Write-Host "Fetching official Wintun driver from net-merge/net-merge..."
-$tempDir = Join-Path $env:TEMP "net-merge-dl"
-if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
-New-Item -ItemType Directory $tempDir | Out-Null
-
-Push-Location $tempDir
-gh release download --repo net-merge/net-merge --pattern 'net-merge-portable.zip'
-Expand-Archive -Path net-merge-portable.zip -DestinationPath extracted -Force
-Pop-Location
-
-Copy-Item "$tempDir\extracted\wintun.dll" dist\wintun.dll -Force
-Copy-Item "$tempDir\extracted\wintun-LICENSE.txt" dist\wintun-LICENSE.txt -Force
+# 3. Embed the latest verified official engine and its Wintun driver.
+Invoke-Native 'bundle official net-merge' { go run scripts/bundle-net-merge.go windows amd64 }
+Copy-Item internal/netmerge/embedded/bin/wintun.dll dist/wintun.dll -Force
+Copy-Item internal/netmerge/embedded/bin/wintun-LICENSE.txt dist/wintun-LICENSE.txt -Force
 Copy-Item packaging\netpilot.ico dist\netpilot.ico -Force
-Remove-Item $tempDir -Recurse -Force
-
-# Embed ONLY wintun.dll into the single NetPilot binary (auto-extracted next to netpilot.exe)
-Copy-Item dist\wintun.dll internal\netmerge\embedded\bin\wintun.dll -Force
 
 # 4. Build NetPilot GUI (-H=windowsgui)
 Write-Host "Building NetPilot single binary (wintun.dll embedded)..."

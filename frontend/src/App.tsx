@@ -5,6 +5,7 @@ import {
   InterfaceInfo,
   NetMergeStatus,
   subscribeTelemetry,
+  engineVersionLabel,
 } from './api/wails';
 import { Sparkline } from './components/Charts';
 import { DashboardView } from './views/DashboardView';
@@ -144,12 +145,9 @@ export const App: React.FC = () => {
       overflow: 'hidden',
     }}>
       {/* Top header */}
-      <header style={{
-        height: '54px',
-        minHeight: '54px',
+      <header className="app-header" style={{
         backgroundColor: '#0c0c0f',
         borderBottom: '1px solid #232329',
-        padding: '0 18px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -172,7 +170,7 @@ export const App: React.FC = () => {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div className="app-brand-status" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ fontSize: '14.5px', fontWeight: 700, color: '#fafafa', letterSpacing: '-0.02em' }}>
                   {branding?.name || 'NetPilot'}
                 </span>
@@ -213,6 +211,7 @@ export const App: React.FC = () => {
                   </span>
                 )}
               </div>
+              <div className="engine-version">{engineVersionLabel(netMergeStatus)}</div>
             </div>
           </div>
         </div>
@@ -247,7 +246,7 @@ export const App: React.FC = () => {
         </div>
 
         {/* Navigation */}
-        <nav style={{
+        <nav className="app-nav" aria-label="Main navigation" style={{
           display: 'flex',
           alignItems: 'center',
           gap: '2px',
@@ -261,6 +260,7 @@ export const App: React.FC = () => {
             return (
               <button
                 key={item.id}
+                aria-current={active ? 'page' : undefined}
                 onClick={() => switchTab(item.id)}
                 style={{
                   display: 'flex',
@@ -286,10 +286,9 @@ export const App: React.FC = () => {
       </header>
 
       {/* Main Content Area */}
-      <main style={{
+      <main className="app-content" style={{
         flex: 1,
         overflowY: 'auto',
-        padding: '16px 20px',
         backgroundColor: '#09090b',
       }}>
         <div style={{ display: currentTab === 'dashboard' ? 'block' : 'none' }}>

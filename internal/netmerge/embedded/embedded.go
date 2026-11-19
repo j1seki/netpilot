@@ -3,14 +3,63 @@ package embedded
 import (
 	"bytes"
 	"embed"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 )
 
 //go:embed bin/*
 var binFS embed.FS
+
+func ReleaseTag() string {
+	b, _ := binFS.ReadFile("bin/release.tag")
+	parts := strings.Fields(string(b))
+	arch := runtime.GOARCH
+	if runtime.GOOS == "darwin" {
+		arch = "universal"
+	}
+	if len(parts) != 2 || parts[1] != runtime.GOOS+"/"+arch {
+		return ""
+	}
+	return parts[0]
+}
+
+var releaseMu sync.Mutex
+var releasePaths = map[string]string{}
+
+func ReleaseCLI(dir string) (string, error) {
+	tag := ReleaseTag()
+	if tag == "" {
+		return "", fmt.Errorf("no bundled release for this platform")
+	}
+	releaseMu.Lock()
+	defer releaseMu.Unlock()
+	if p := releasePaths[dir]; p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	cli := "net-merge"
+	if runtime.GOOS == "windows" {
+		cli += ".exe"
+	}
+	dst := filepath.Join(dir, "bundled-"+tag)
+	if err := os.MkdirAll(dst, 0o700); err != nil {
+		return "", err
+	}
+	if runtime.GOOS == "windows" && extractOne(dst, "wintun.dll") == "" {
+		return "", fmt.Errorf("bundled Wintun is unavailable")
+	}
+	p := extractOne(dst, cli)
+	if p == "" {
+		return "", fmt.Errorf("bundled net-merge executable is unavailable")
+	}
+	releasePaths[dir] = p
+	return p, nil
+}
 
 var (
 	extractOnce sync.Once

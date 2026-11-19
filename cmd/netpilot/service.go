@@ -30,6 +30,7 @@ import (
 	"netpilot/internal/logger"
 	"netpilot/internal/mode"
 	"netpilot/internal/netmerge"
+	"netpilot/internal/netmerge/releases"
 	"netpilot/internal/nettools"
 	"netpilot/internal/nics"
 	"netpilot/internal/notify"
@@ -748,12 +749,19 @@ func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 // adapter is "net-merge" and active routing rules are evaluated.
 func (s *NetPilotService) DiscoverApplications() []apps.ProcessInfo {
 	procs := s.appManager.Discover()
+	var rates map[int]float64
+	if s.netmergeCtrl != nil {
+		rates = s.netmergeCtrl.ProcessRates()
+	}
 	isActive := s.netmergeCtrl != nil && s.netmergeCtrl.IsActive()
 	defaultAdapter := "System Default"
 	if isActive {
 		defaultAdapter = "net-merge"
 	}
 	for i := range procs {
+		if rate, ok := rates[procs[i].PID]; ok {
+			procs[i].NetworkMbps = &rate
+		}
 		procs[i].AssignedNIC = defaultAdapter
 		if !isActive {
 			continue
@@ -2218,6 +2226,17 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "applications":
 		_ = json.NewEncoder(w).Encode(s.DiscoverApplications())
 
+	case path == "applications/icon" && r.Method == http.MethodGet:
+		pid, _ := strconv.Atoi(r.URL.Query().Get("pid"))
+		icon := s.appManager.Icon(pid, r.URL.Query().Get("executable"))
+		if len(icon) == 0 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+		_, _ = w.Write(icon)
+
 	case path == "rules":
 		if r.Method == http.MethodPost {
 			var rule db.RuleRecord
@@ -2442,6 +2461,37 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				_ = json.NewEncoder(w).Encode(map[string]string{})
 			}
 		}
+
+	case path == "netmerge/releases" && r.Method == http.MethodGet:
+		tags, err := releases.List(r.Context(), runtime.GOOS, runtime.GOARCH)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(tags)
+
+	case path == "netmerge/releases" && r.Method == http.MethodPost && s.netmergeCtrl != nil:
+		if contentType := r.Header.Get("Content-Type"); contentType != "application/json" {
+			w.WriteHeader(http.StatusUnsupportedMediaType)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Expected a JSON request"})
+			return
+		}
+		var body struct {
+			Tag string `json:"tag"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid release selection"})
+			return
+		}
+		info, err := s.netmergeCtrl.InstallRelease(r.Context(), body.Tag)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(info)
 
 	case path == "netmerge/binary":
 		if r.Method == http.MethodPost {

@@ -111,8 +111,9 @@ export const NetMergeView: React.FC = () => {
           secondaryAdapter: sec,
         });
       }
-      showToast(
-        mode === 'backup'
+      showToast(status?.restartForMode
+        ? 'Routing preference saved. Stop and start net-merge to apply it.'
+        : mode === 'backup'
           ? `Switched to Backup Failover mode (Primary: ${pri || 'OS default'} → Secondary: ${sec || 'auto'}).`
           : 'Switched to Speed Aggregation mode (all healthy adapters used simultaneously; no primary/secondary).'
       );
@@ -185,7 +186,8 @@ export const NetMergeView: React.FC = () => {
   };
 
   const isRunning = status?.isRunning || false;
-  const routingMode = status?.routingMode || config?.routingMode || 'speed';
+  const routingMode = config?.routingMode || status?.routingMode || 'speed';
+  const canUseBackup = !config?.engineSource || config.engineSource === 'builtin';
   const adapterNames = interfaces.length > 0
     ? interfaces.filter(i => i.isUp).map(i => i.name)
     : (status?.nics || []).map(n => n.Name);
@@ -265,11 +267,6 @@ export const NetMergeView: React.FC = () => {
               <span className={`status-pill ${isRunning ? 'pass' : 'blocked'}`}>
                 {isRunning ? 'ACTIVE · net-merge' : 'STANDBY · System Default'}
               </span>
-              {status?.binary?.version && (
-                <span className="font-mono" style={{ fontSize: '10.5px', color: '#71717a' }}>
-                  {status.binary.version}
-                </span>
-              )}
             </div>
             <div style={{ fontSize: '11.5px', color: '#a1a1aa', marginTop: '3px' }}>
               {isRunning
@@ -305,10 +302,8 @@ export const NetMergeView: React.FC = () => {
         {/* Speed Mode Card */}
         <div
           className="card"
-          onClick={() => handleSwitchRoutingMode('speed')}
           style={{
             marginBottom: 0,
-            cursor: 'pointer',
             border: `1px solid ${routingMode !== 'backup' ? '#38bdf8' : '#232329'}`,
             background: routingMode !== 'backup' ? 'rgba(56, 189, 248, 0.05)' : '#121215',
             transition: 'all 0.14s ease',
@@ -321,9 +316,9 @@ export const NetMergeView: React.FC = () => {
                 Speed Mode (Multi-Link Aggregation)
               </span>
             </div>
-            <span className={`status-pill ${routingMode !== 'backup' ? 'pass' : 'blocked'}`}>
-              {routingMode !== 'backup' ? 'SELECTED (DEFAULT)' : 'SELECT'}
-            </span>
+            <button className="btn btn-secondary btn-sm" type="button" aria-pressed={routingMode !== 'backup'} disabled={routingMode !== 'backup'} onClick={() => handleSwitchRoutingMode('speed')}>
+              {routingMode !== 'backup' ? 'Selected' : 'Use Speed'}
+            </button>
           </div>
           <p style={{ fontSize: '11.5px', color: '#a1a1aa', lineHeight: 1.5 }}>
             Default behavior of <strong>net-merge</strong>: utilizes all healthy network adapters simultaneously using weighted least-busy-flows scheduling for maximum combined download and upload speed.
@@ -337,10 +332,8 @@ export const NetMergeView: React.FC = () => {
         {/* Backup Mode Card */}
         <div
           className="card"
-          onClick={() => handleSwitchRoutingMode('backup')}
           style={{
             marginBottom: 0,
-            cursor: 'pointer',
             border: `1px solid ${routingMode === 'backup' ? '#f59e0b' : '#232329'}`,
             background: routingMode === 'backup' ? 'rgba(245, 158, 11, 0.05)' : '#121215',
             transition: 'all 0.14s ease',
@@ -353,9 +346,9 @@ export const NetMergeView: React.FC = () => {
                 Backup Mode (Primary → Failover Only)
               </span>
             </div>
-            <span className={`status-pill ${routingMode === 'backup' ? 'warn' : 'blocked'}`}>
-              {routingMode === 'backup' ? 'SELECTED' : 'SELECT'}
-            </span>
+            <button className="btn btn-secondary btn-sm" type="button" aria-pressed={routingMode === 'backup'} disabled={!canUseBackup || routingMode === 'backup'} onClick={() => handleSwitchRoutingMode('backup')}>
+              {routingMode === 'backup' ? 'Selected' : canUseBackup ? 'Use Backup' : 'Requires NetPilot engine'}
+            </button>
           </div>
           <p style={{ fontSize: '11.5px', color: '#a1a1aa', lineHeight: 1.5, marginBottom: '10px' }}>
             Routes 100% of traffic through the <strong>Primary Adapter</strong> while it is online. Automatically switches to the <strong>Secondary Adapter</strong> only when the primary connection fails, and switches back upon recovery.
