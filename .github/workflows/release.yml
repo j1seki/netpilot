@@ -120,12 +120,12 @@ jobs:
           & $iscc "/DVersion=$version" "/DNumericVersion=$numericVersion" installer/netpilot.iss
           Compress-Archive -Path dist/netpilot.exe, dist/wintun.dll, dist/netpilot.ico, LICENSE, THIRD-PARTY-NOTICES.md, README.md -DestinationPath dist/netpilot-windows-amd64-portable.zip -Force
           Get-ChildItem dist/*.exe, dist/*.zip
-          Rename-Item -Path dist/netpilot-installer.exe -NewName dist/netpilot-0.4.0-installer.exe
+          Rename-Item -Path dist/netpilot-setup.exe -NewName dist/netpilot-0.4.0-installer.exe -Force
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
-            dist/netpilot-installer.exe
+            dist/netpilot-0.4.0-installer.exe
             dist/netpilot-windows-amd64-portable.zip
           if-no-files-found: error
 
@@ -440,7 +440,7 @@ jobs:
           while IFS= read -r -d '' file; do
             base=$(basename "$file")
             case "$base" in
-              netpilot-installer.exe)                  name="netpilot-${version}-installer.exe" ;;
+              netpilot-0.4.0-installer.exe)            name="netpilot-${version}-installer.exe" ;;
               netpilot-windows-amd64-portable.zip) name="netpilot-${version}-windows-amd64-portable.zip" ;;
               netpilot-macos-universal.dmg)        name="netpilot-${version}-macos-universal.dmg" ;;
               netpilot-linux-amd64.AppImage)       name="netpilot-${version}-linux-amd64.AppImage" ;;
