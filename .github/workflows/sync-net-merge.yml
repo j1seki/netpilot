@@ -39,19 +39,20 @@ jobs:
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          want="${{ inputs.tag }}"
+          want="$INPUT_TAG"
           if [ -z "$want" ]; then
             want=$(gh api repos/net-merge/net-merge/releases/latest --jq .tag_name)
           fi
           want="${want#v}"
-          have=""
-          if [ -f internal/netmerge/VERSION ]; then
-            have=$(tr -d '[:space:]' < internal/netmerge/VERSION)
-          fi
+          have=$(tr -d '[:space:]' < internal/netmerge/UPSTREAM_VERSION)
+          have="${have#v}"
+          tag_pattern='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          [[ "$have" =~ $tag_pattern && "$want" =~ $tag_pattern ]]
           echo "latest=$want" >> "$GITHUB_OUTPUT"
           echo "current=$have" >> "$GITHUB_OUTPUT"
-          echo "Upstream net-merge latest: v$want (current embedded: v$have)"
+          echo "Upstream net-merge target: v$want (current synced source: v$have)"
           if [ "$want" = "$have" ] && [ "${{ github.event_name }}" = "schedule" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else

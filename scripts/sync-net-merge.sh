@@ -10,7 +10,7 @@
 # shipped a new VERSION while the engine fixes from that release were missing.
 # Instead this script performs a three-way merge for every file:
 #
-#   base   = the net-merge tag currently recorded in internal/netmerge/VERSION
+#   base   = the upstream tag recorded in internal/netmerge/UPSTREAM_VERSION
 #   ours   = the working tree
 #   theirs = the requested net-merge tag
 #
@@ -34,12 +34,13 @@ if [ -z "$new_tag" ]; then
 fi
 new_tag="${new_tag#v}"
 
-have_tag=""
-if [ -f internal/netmerge/VERSION ]; then
-  have_tag=$(tr -d '[:space:]' < internal/netmerge/VERSION)
-fi
-if [ -z "$have_tag" ]; then
-  have_tag="$new_tag"
+upstream_version=internal/netmerge/UPSTREAM_VERSION
+have_tag=$(tr -d '[:space:]' < "$upstream_version")
+have_tag="${have_tag#v}"
+tag_pattern='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+if [[ ! "$have_tag" =~ $tag_pattern || ! "$new_tag" =~ $tag_pattern ]]; then
+  echo "Invalid net-merge upstream version: base '$have_tag', requested '$new_tag'" >&2
+  exit 1
 fi
 
 work=$(mktemp -d)
@@ -161,5 +162,5 @@ if [ "$conflicts" -ne 0 ]; then
   exit 1
 fi
 
-echo "$new_tag" > internal/netmerge/VERSION
+echo "$new_tag" > "$upstream_version"
 echo ">> Synced net-merge v${new_tag} (was v${have_tag})"
