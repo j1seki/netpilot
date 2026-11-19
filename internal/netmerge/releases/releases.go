@@ -101,19 +101,30 @@ func get(ctx context.Context, address, accept string, max int64) ([]byte, error)
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", "NetPilot")
+	if token, _ := ctx.Value(downloadTokenKey{}).(string); token != "" && req.URL.Scheme == "https" && req.URL.Host == "api.github.com" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	res, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub returned HTTP %d", res.StatusCode)
+		return nil, fmt.Errorf("%s%s returned HTTP %d", req.URL.Host, req.URL.Path, res.StatusCode)
 	}
 	b, err := io.ReadAll(io.LimitReader(res.Body, max+1))
 	if int64(len(b)) > max {
 		return nil, fmt.Errorf("GitHub response exceeds size limit")
 	}
 	return b, err
+}
+
+type downloadTokenKey struct{}
+
+// WithDownloadToken supplies CI credentials explicitly. Desktop downloads use an
+// ordinary context and never read credentials from the user's environment.
+func WithDownloadToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, downloadTokenKey{}, token)
 }
 
 // Download verifies the archive against the SHA-256 from the official GitHub API.

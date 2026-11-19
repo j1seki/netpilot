@@ -84,6 +84,7 @@ jobs:
       - name: Bundle verified net-merge and build NetPilot
         env:
           ENGINE_TAG: ${{ needs.engine.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NETPILOT_TAG: ${{ inputs.tag || github.ref_name }}
         shell: pwsh
         run: |
@@ -143,6 +144,7 @@ jobs:
       - name: Build single-binary NetPilot macOS Universal
         env:
           ENGINE_TAG: ${{ needs.engine.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
           mkdir -p dist internal/netmerge/embedded/bin
@@ -156,10 +158,7 @@ jobs:
 
           want_engine=$(tr -d '[:space:]' < internal/netmerge/VERSION)
           built_engine=$(dist/netpilot version 2>/dev/null || true)
-          case "$built_engine" in
-            *"net-merge ${want_engine#v}"*) echo "Verified embedded engine: $built_engine" ;;
-            *) echo "::error::Engine version mismatch: binary reports '$built_engine', expected net-merge $want_engine"; exit 1 ;;
-          esac
+          bash scripts/check-engine-version.sh "$want_engine" "$built_engine"
       - name: Build macOS DMG
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
@@ -253,6 +252,7 @@ jobs:
       - name: Build single-binary NetPilot (Linux)
         env:
           ENGINE_TAG: ${{ needs.engine.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
           mkdir -p dist internal/netmerge/embedded/bin
@@ -264,10 +264,7 @@ jobs:
           # `version` is a pure CLI subcommand (no webview), so it is safe to run here.
           want_engine=$(tr -d '[:space:]' < internal/netmerge/VERSION)
           built_engine=$(./dist/netpilot version 2>/dev/null || true)
-          case "$built_engine" in
-            *"net-merge ${want_engine#v}"*) echo "Verified embedded engine: $built_engine" ;;
-            *) echo "::error::Engine version mismatch: binary reports '$built_engine', expected net-merge $want_engine"; exit 1 ;;
-          esac
+          bash scripts/check-engine-version.sh "$want_engine" "$built_engine"
       - name: Build Universal Portable AppImage (All Desktop Environments)
         run: |
           set -euo pipefail
@@ -355,6 +352,7 @@ jobs:
       - name: Build single-binary NetPilot (Linux arm64)
         env:
           ENGINE_TAG: ${{ needs.engine.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           v="${{ inputs.tag || github.ref_name }}"; v="${v#v}"
           mkdir -p dist internal/netmerge/embedded/bin
@@ -363,10 +361,7 @@ jobs:
 
           want_engine=$(tr -d '[:space:]' < internal/netmerge/VERSION)
           built_engine=$(./dist/netpilot version 2>/dev/null || true)
-          case "$built_engine" in
-            *"net-merge ${want_engine#v}"*) echo "Verified embedded engine: $built_engine" ;;
-            *) echo "::error::Engine version mismatch: binary reports '$built_engine', expected net-merge $want_engine"; exit 1 ;;
-          esac
+          bash scripts/check-engine-version.sh "$want_engine" "$built_engine"
       - name: Build arm64 Portable AppImage
         run: |
           set -euo pipefail

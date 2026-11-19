@@ -27,7 +27,8 @@ func main() {
 	}
 	dir := "internal/netmerge/embedded/bin"
 	versionFile := filepath.Join(dir, "release.tag")
-	resolved, files, err := releases.Download(context.Background(), tag, goos, arch)
+	ctx := releases.WithDownloadToken(context.Background(), os.Getenv("GH_TOKEN"))
+	resolved, files, err := releases.Download(ctx, tag, goos, arch)
 	if err != nil {
 		log.Fatal(err)
 	}

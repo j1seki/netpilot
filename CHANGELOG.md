@@ -3,7 +3,12 @@
 What changed in each release. Each version's section becomes its GitHub release notes, so add the
 entry here before pushing a version tag.
 
-## [0.4.1] - 2026-11-19
+## [0.4.2] - 2026-11-19
+
+- Fixed release builds: authenticate upstream net-merge downloads and accept integrated engine versions with or without a leading `v`.
+- Includes all changes from the unpublished v0.4.1 build below.
+
+## [0.4.1] - 2026-11-19 (unpublished)
 
 - Active Processes shows native app icons and sortable Network, CPU, RAM, Process, and PID columns. Click a column again to reverse the order.
 - Dashboard layout adapts to narrower windows. Adapter groups can collapse, and adapters can be hidden without affecting routing.
