@@ -479,11 +479,11 @@ jobs:
           tag="$VERSION"
           version="${tag#v}"
           nm_ver=$(tr -d '[:space:]' < internal/netmerge/VERSION || echo "0.3.6")
-          if [ "$nm_ver" != "$version" ]; then
-            echo "::error::NetPilot version $version does not match net-merge VERSION $nm_ver"
+          nm_version="${nm_ver#v}"
+          if [ "$nm_version" != "$version" ]; then
+            echo "::error::NetPilot version $version does not match net-merge VERSION $nm_version"
             exit 1
           fi
-
           # GitHub has no separate "channel" field: the prerelease flag is the
           # channel marker. Stable releases are normal releases; beta releases
           # are prereleases and must never take Latest.
