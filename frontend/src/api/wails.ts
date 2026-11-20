@@ -79,6 +79,7 @@ export interface ProcessInfo {
   bytesReceived: number;
   currentMbps: number;
   networkMbps?: number;
+  networkSource?: 'windows-etw' | 'linux-tcp' | 'netpilot';
   cpuPercent?: number;
   memoryBytes?: number;
   assignedNic: string;
@@ -90,6 +91,26 @@ export interface ProcessInfo {
   dataQuotaMb?: number;
   dataUsedMb?: number;
   quotaExceeded?: boolean;
+}
+
+export interface ProcessInspection {
+  at: string;
+  process: ProcessInfo;
+  sockets: { protocol: string; local: string; remote?: string }[];
+  socketError?: string;
+  dnsEndpoints: string[];
+  systemResolvers: string[];
+  savedRuleDns?: string;
+  activityEnabled: boolean;
+  activity: { at: string; protocol: string; destination: string; adapter: string; dnsQuestion?: string }[];
+}
+
+export interface DiagnosticMCPStatus {
+  running: boolean;
+  endpoint?: string;
+  token?: string;
+  certificate?: string;
+  addresses: { ip: string; label: string; mode: 'loopback' | 'tailscale' | 'lan' }[];
 }
 
 export interface RuleRecord {
@@ -328,6 +349,7 @@ export interface ScenarioAssertion {
   expected: string;
   actual: string;
   passed: boolean;
+  detail?: string;
 }
 
 export interface ScenarioResult {
@@ -363,16 +385,21 @@ export interface SuiteReport {
   failed: number;
   skipped: number;
   blocked: number;
+  notRun: number;
   durationMs: number;
   cases: TestCaseResult[];
 }
 
 export interface UnifiedTestReport {
+  schema: string;
+  appVersion: string;
+  safeMode: boolean;
   total: number;
   passed: number;
   failed: number;
   skipped: number;
   blocked: number;
+  notRun: number;
   disruptiveCount: number;
   durationMs: number;
   suites: SuiteReport[];
@@ -652,6 +679,36 @@ export const api = {
     return requireApi(res, 'applications');
   },
 
+  async getProcessTrafficStatus(): Promise<{ source?: ProcessInfo['networkSource']; detail: string }> {
+    const res = await fetchApi<{ source?: ProcessInfo['networkSource']; detail: string }>('applications/traffic');
+    return requireApi(res, 'applications/traffic');
+  },
+
+  async getDiagnosticMCP(): Promise<DiagnosticMCPStatus> {
+    const res = await fetchApi<DiagnosticMCPStatus>('diagnostics/mcp');
+    return requireApi(res, 'diagnostics/mcp');
+  },
+
+  async setDiagnosticMCP(enabled: boolean, address: string): Promise<DiagnosticMCPStatus> {
+    const res = await fetchApi<DiagnosticMCPStatus>('diagnostics/mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, address }),
+    });
+    return requireApi(res, 'diagnostics/mcp');
+  },
+
+  async inspectApplication(process: Pick<ProcessInfo, 'pid' | 'name' | 'executable'>, signal: AbortSignal): Promise<ProcessInspection> {
+    const { pid, name, executable } = process;
+    const res = await fetchApi<ProcessInspection>('applications/inspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pid, name, executable }),
+      signal,
+    });
+    return requireApi(res, 'applications/inspect');
+  },
+
   async getRules(): Promise<RuleRecord[]> {
     const res = await fetchApi<RuleRecord[]>('rules');
     return requireApi(res, 'rules');
@@ -681,9 +738,22 @@ export const api = {
     return requireApi(res, `suite?suite=${suite}`);
   },
 
-  async runAllUnified(skipDisruptive: boolean = true): Promise<UnifiedTestReport> {
-    const res = await fetchApi<UnifiedTestReport>(`testrunner/run-all?skipDisruptive=${skipDisruptive}`);
-    return requireApi(res, `testrunner/run-all?skipDisruptive=${skipDisruptive}`);
+  async runAllUnified(adapter = ''): Promise<UnifiedTestReport> {
+    const res = await fetchApi<UnifiedTestReport>('testrunner/run-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adapter }),
+    });
+    return requireApi(res, 'testrunner/run-all');
+  },
+
+  async saveDiagnosticFile(kind: 'tests' | 'diagnostics', report: unknown): Promise<boolean> {
+    const res = await fetchApi<{ saved: boolean }>('testrunner/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, report }),
+    });
+    return requireApi(res, 'testrunner/export').saved;
   },
 
   async getFailoverStatus(): Promise<InterfaceHealth[]> {

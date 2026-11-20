@@ -7,10 +7,42 @@
 package procnet
 
 import (
+	"context"
+	"errors"
 	"net"
+	"sort"
 	"sync"
 	"time"
 )
+
+// Socket is a TCP or UDP endpoint reported by the host's socket table.
+type Socket struct {
+	Protocol string `json:"protocol"`
+	Local    string `json:"local"`
+	Remote   string `json:"remote,omitempty"`
+}
+
+// Sockets snapshots endpoints owned by pid. An unconnected socket has no remote.
+func Sockets(ctx context.Context, pid int) ([]Socket, error) {
+	if pid <= 0 {
+		return nil, errors.New("invalid process ID")
+	}
+	rows, err := processSockets(ctx, pid)
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if a.Protocol != b.Protocol {
+			return a.Protocol < b.Protocol
+		}
+		if a.Remote != b.Remote {
+			return a.Remote < b.Remote
+		}
+		return a.Local < b.Local
+	})
+	if rows == nil {
+		rows = []Socket{}
+	}
+	return rows, err
+}
 
 // Identity describes the application that owns a flow.
 type Identity struct {

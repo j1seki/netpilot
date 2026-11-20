@@ -9,7 +9,8 @@ licenses (license texts are in each project's repository and in the Go module ca
 | [gVisor](https://github.com/google/gvisor) (netstack) | Apache-2.0 | userland TCP/IP stack |
 | [wireguard-go](https://git.zx2c4.com/wireguard-go) / [wintun Go bindings](https://git.zx2c4.com/wintun-go) | MIT | Windows TUN device access |
 | [fyne.io/systray](https://github.com/fyne-io/systray) | Apache-2.0 | system tray icon |
-| [vishvananda/netlink](https://github.com/vishvananda/netlink) | Apache-2.0 | Linux TUN addresses and routes, default-route discovery |
+| [vishvananda/netlink](https://github.com/vishvananda/netlink) | Apache-2.0 | Linux TUN addresses and routes, default-route discovery, TCP counters |
+| [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk) | Apache-2.0 and MIT | Diagnostics MCP server |
 | golang.org/x/sys, golang.org/x/net, golang.org/x/time, golang.org/x/crypto | BSD-3-Clause | Windows and Linux system APIs, support code |
 | Other transitive modules (see `go.mod` / `go.sum`) | MIT / Apache-2.0 / BSD | |
 

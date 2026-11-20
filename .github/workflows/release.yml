@@ -491,6 +491,7 @@ jobs:
           VERSION: ${{ inputs.tag || github.ref_name }}
           ENGINE_TAG: ${{ needs.engine.outputs.tag }}
         run: |
+          set -euo pipefail
           tag="$VERSION"
           version="${tag#v}"
           nm_ver=$(tr -d '[:space:]' < internal/netmerge/VERSION)
@@ -522,19 +523,22 @@ jobs:
             fi
           fi
 
+          changes=$(awk -v version="$version" '
+            /^## \[/ {
+              if (found) exit
+              found = index($0, "## [" version "]") == 1
+              next
+            }
+            found { print }
+          ' CHANGELOG.md)
           notes=$(cat <<EOF
           NetPilot $tag — Multi-Adapter Network Control Center, bundled with official net-merge ${ENGINE_TAG}.
 
           Release channel: **${channel_label}** — ${channel_note}
 
-          Highlights:
-          - Click the Active Processes column triangles to sort by network traffic, CPU, RAM, name, or PID in either direction
-          - Responsive dashboard layouts and collapsible network adapter groups
-          - NetPilot's integrated engine is ${nm_ver}; the official engine is bundled separately
-          - Beszel-inspired dark UI with real-time per-adapter telemetry
-          - Speed Mode (simultaneous multi-link aggregation) & Backup Mode (primary-to-secondary automatic failover)
-          - Upgrade or downgrade official net-merge releases in Settings; switch back to the bundled release or the NetPilot engine at any time
-          - Silent Windows execution (no console popups) & minimize-to-tray support across Windows, macOS, and Linux Desktop Environments
+          NetPilot's integrated engine is ${nm_ver}. The official engine is bundled separately.
+
+          ${changes}
 
           Packages (all include version ${version}):
           - Linux: netpilot-${version}-linux-amd64.AppImage & netpilot-${version}-linux-arm64.AppImage (portable across all Linux desktop environments)

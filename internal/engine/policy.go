@@ -140,6 +140,7 @@ func (b *Balancer) DialPinnedFor(ctx context.Context, host string, port int, pol
 		return nil, &dialError{rep: repFailure, err: errNotTCP}
 	}
 	traffic, endTraffic := b.trackProcess(policy.PID)
+	b.recordProcessTCP(policy.PID, host, port, sl.Name)
 	return &slotConn{
 		TCPConn:    tcp,
 		sl:         sl,

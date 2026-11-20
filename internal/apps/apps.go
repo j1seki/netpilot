@@ -24,6 +24,7 @@ type ProcessInfo struct {
 	BytesReceived      int64     `json:"bytesReceived"`
 	CurrentMbps        float64   `json:"currentMbps"`
 	NetworkMbps        *float64  `json:"networkMbps,omitempty"`
+	NetworkSource      string    `json:"networkSource,omitempty"`
 	CPUPercent         *float64  `json:"cpuPercent,omitempty"`
 	MemoryBytes        *uint64   `json:"memoryBytes,omitempty"`
 	AssignedNIC        string    `json:"assignedNic"`

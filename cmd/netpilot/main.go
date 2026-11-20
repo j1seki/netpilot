@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -43,7 +44,10 @@ func main() {
 
 	headless := flag.Bool("headless", false, "run headless without desktop window")
 	runScenarios := flag.Bool("run-scenarios", false, "execute all simulation scenarios and exit")
-	runSuite := flag.String("run-suite", "", "execute platform test suite (common, linux, windows, macos, scenarios) and exit")
+	runSuite := flag.String("run-suite", "", "execute test suite (common, linux, windows, macos, tether, live) and exit")
+	testReport := flag.String("test-report", "", "run the full unified suite and write results as JSON to this path")
+	safeTests := flag.Bool("safe-tests", false, "skip checks marked disruptive in -test-report")
+	tetherAdapter := flag.String("tether-adapter", "", "desktop adapter to use for the tether check in -test-report")
 	reqMode := flag.String("mode", "", "initial execution mode (dry-run or live); use -run-scenarios for simulations")
 	dbPath := flag.String("db", "", "path to SQLite database (default: ~/.config/netpilot/netpilot.db)")
 	showConsole := flag.Bool("console", false, "Show Windows console/terminal window (hidden by default)")
@@ -98,6 +102,25 @@ func main() {
 	testRunner := testrunner.NewRunner(detector, database, ringLog)
 
 	// CLI execution paths
+	if *testReport != "" {
+		testService := NetPilotService{testRunner: testRunner, scenarios: scenarioEng}
+		report := testService.RunAllUnified(*safeTests, *tetherAdapter)
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err == nil {
+			err = os.WriteFile(*testReport, append(data, '\n'), 0o600)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "could not export tests: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Passed %d/%d, failed %d, skipped %d, blocked %d, not run %d. Report: %s\n",
+			report.Passed, report.Total, report.Failed, report.Skipped, report.Blocked, report.NotRun, *testReport)
+		if report.Failed > 0 {
+			os.Exit(1)
+		}
+		return
+	}
+
 	if *runScenarios {
 		fmt.Printf("=== Running All Deterministic Simulation Scenarios for %s ===\n", branding.AppName)
 		results := scenarioEng.RunAll()
@@ -125,7 +148,7 @@ func main() {
 		fmt.Printf("Suite: %s | Target: %s | Total: %d | Passed: %d | Failed: %d | Skipped: %d | Blocked: %d (%.2fms)\n",
 			rep.Suite, rep.TargetOS, rep.Total, rep.Passed, rep.Failed, rep.Skipped, rep.Blocked, rep.DurationMs)
 		for _, c := range rep.Cases {
-			fmt.Printf("  - [%s] %-8s %-40s (%.2fms) %s\n", c.Classification, c.Status, c.Name, c.DurationMs, c.Reason)
+			fmt.Printf("  - [%s] %-8s %-40s (%.2fms) %s\n", c.Classification, c.Status, c.Name, c.DurationMs, c.Reason+c.Output)
 		}
 		if rep.Failed > 0 {
 			os.Exit(1)
@@ -180,7 +203,15 @@ func main() {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	trafficDone := make(chan struct{})
+	go func() {
+		defer close(trafficDone)
+		service.hostTraffic.Run(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-trafficDone
+	}()
 
 	go func() {
 		ticker := time.NewTicker(time.Second)
@@ -218,6 +249,7 @@ func main() {
 
 	stopForwarding := func() {
 		cancel()
+		service.mcp.stop()
 		_ = server.Close()
 		if err := service.stopForwarding(); err != nil {
 			fmt.Fprintf(os.Stderr, "stop NetPilot forwarding on exit: %v\n", err)
@@ -263,14 +295,12 @@ func main() {
 	app.OnShutdown(stopForwarding)
 	service.SetUpdateQuitFunc(app.Quit)
 
-	mainWin := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:     branding.WindowTitle,
-		Width:     1320,
-		Height:    860,
-		MinWidth:  760,
-		MinHeight: 540,
-		Hidden:    *startHidden && isLinuxTrayHostAvailable(),
-	})
+	mainWin := app.Window.NewWithOptions(desktopWindowOptions(*startHidden && isLinuxTrayHostAvailable()))
+	service.desktopTests.send = mainWin.ExecJS
+	service.promptReportPath = func(filename string) (string, error) {
+		return app.Dialog.SaveFile().AttachToWindow(mainWin).AddFilter("JSON report", "*.json").
+			SetFilename(filename).CanCreateDirectories(true).PromptForSingleSelection()
+	}
 
 	showMainWindow := func() {
 		mainWin.Show()
@@ -555,5 +585,20 @@ func main() {
 	if err := app.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "application run error: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func desktopWindowOptions(hidden bool) application.WebviewWindowOptions {
+	return application.WebviewWindowOptions{
+		Title:           branding.WindowTitle,
+		Width:           1320,
+		Height:          860,
+		MinWidth:        760,
+		MinHeight:       540,
+		Hidden:          hidden,
+		DevToolsEnabled: true,
+		KeyBindings: map[string]func(application.Window){
+			"F12": application.Window.OpenDevTools,
+		},
 	}
 }

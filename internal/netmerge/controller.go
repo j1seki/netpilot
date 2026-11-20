@@ -90,6 +90,7 @@ type Controller struct {
 	tunOn         bool
 	tunSince      time.Time
 	stopCh        chan struct{}
+	stopMonitor   sync.Once
 	cachedAuto    bool
 	lastAutoAt    time.Time
 	launchedPID   int
@@ -341,16 +342,36 @@ func (c *Controller) IsForwarding() bool {
 // ProcessRates reports attributed traffic from the integrated TUN or SOCKS engine.
 func (c *Controller) ProcessRates() map[int]float64 {
 	c.mu.RLock()
-	live := c.tunOn || c.socksRunning
+	tunOn, socksOn := c.tunOn, c.socksRunning
 	b := c.balancer
 	c.mu.RUnlock()
-	if live && b != nil {
-		return b.ProcessRates(time.Now())
+	var local map[int]float64
+	if (tunOn || socksOn) && b != nil {
+		local = b.ProcessRates(time.Now())
 	}
-	if st, ok := state.Read(c.stateDir); ok {
+	if tunOn {
+		return local
+	}
+	if st, ok := state.Read(c.stateDir); ok && len(st.ProcessMbps) != 0 {
+		// The state snapshot belongs to a separate process. The local SOCKS
+		// listener can still carry its own flows while that tunnel is up.
+		for pid, rate := range local {
+			st.ProcessMbps[pid] += rate
+		}
 		return st.ProcessMbps
 	}
-	return nil
+	return local
+}
+
+// InspectProcess returns request metadata from forwarding in this process.
+// Separate engines only expose the operating system's socket snapshot to the UI.
+func (c *Controller) InspectProcess(pid int) ([]engine.ProcessActivity, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.balancer == nil || (!c.tunOn && !c.socksRunning) {
+		return nil, false
+	}
+	return c.balancer.InspectProcess(pid), true
 }
 
 // DefaultAdapterName returns "net-merge" when net-merge is active, or "System Default" when inactive.
@@ -714,6 +735,12 @@ func (c *Controller) stopLocalTunnelLocked() {
 		c.tunOn = false
 		state.Clear(c.stateDir)
 	}
+}
+
+// Close stops monitoring and shuts down forwarding owned by this controller.
+func (c *Controller) Close() error {
+	c.stopMonitor.Do(func() { close(c.stopCh) })
+	return c.StopOwned()
 }
 
 // StopOwned shuts down forwarding started by this desktop instance.

@@ -22,9 +22,11 @@ type Balancer struct {
 	FailCooldown   time.Duration
 	v6mode         atomic.Int32
 
-	policyMu       sync.RWMutex
-	policy         PolicyResolver
-	processTraffic processTraffic
+	policyMu          sync.RWMutex
+	policy            PolicyResolver
+	processTraffic    processTraffic
+	processInspection processInspection
+	inspectedPID      atomic.Int64
 }
 
 // V6Mode decides what happens to IPv6 flows entering the TUN.

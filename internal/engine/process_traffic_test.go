@@ -21,7 +21,13 @@ func TestProcessRatesCountLiveAndRecentlyClosedFlows(t *testing.T) {
 		t.Fatalf("unexpected rates: %v", rates)
 	}
 	second.add(250_000)
-	if rates := b.ProcessRates(now.Add(time.Second)); rates[12] != 2 || rates[23] != 0 {
+	if rates := b.ProcessRates(now.Add(time.Second)); rates[12] != 2 || rates[23] != 8.0/3 {
 		t.Fatalf("unexpected next sample: %v", rates)
+	}
+	if rates := b.ProcessRates(now.Add(5 * time.Second)); rates[12] != 0 || rates[23] != 0 {
+		t.Fatalf("expected measured idle rates: %v", rates)
+	}
+	if _, ok := b.ProcessRates(now.Add(16 * time.Second))[12]; !ok {
+		t.Fatal("an idle process with an open flow should remain measurable")
 	}
 }

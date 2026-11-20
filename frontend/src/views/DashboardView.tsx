@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   api,
   InterfaceInfo,
@@ -8,6 +8,8 @@ import {
 } from '../api/wails';
 import { Sparkline } from '../components/Charts';
 import { ProcessIcon } from '../components/ProcessIcon';
+import { formatProcessRate, groupProcesses, type ProcessMetrics, type ProcessSort, type ProcessSortKey } from '../processes';
+import { AppInspection } from '../components/AppInspection';
 import { AdapterGroupButton, AdapterHideButton, useAdapterVisibility } from '../components/AdapterVisibility';
 import {
   Plus,
@@ -19,6 +21,8 @@ import {
   Edit3,
   Search,
   Activity,
+  ChevronRight,
+  ScanSearch,
   GitMerge,
   Eye,
   EyeOff,
@@ -32,45 +36,41 @@ interface AdapterWithHistory extends InterfaceInfo {
   txHistory: number[];
 }
 
-type ProcessSortKey = 'name' | 'pid' | 'networkMbps' | 'cpuPercent' | 'memoryBytes';
-type ProcessSort = { key: ProcessSortKey; direction: 'ascending' | 'descending' };
 const processColumns: [ProcessSortKey, string][] = [
   ['name', 'Process'], ['pid', 'PID'], ['networkMbps', 'Network'], ['cpuPercent', 'CPU'], ['memoryBytes', 'RAM'],
 ];
-
-function compareProcesses(a: ProcessInfo, b: ProcessInfo, { key, direction }: ProcessSort) {
-  const order = direction === 'ascending' ? 1 : -1;
-  if (key === 'name') return order * a.name.localeCompare(b.name) || a.pid - b.pid;
-  const left = a[key], right = b[key];
-  if (left == null && right != null) return 1;
-  if (left != null && right == null) return -1;
-  return order * ((left ?? 0) - (right ?? 0)) || a.name.localeCompare(b.name) || a.pid - b.pid;
-}
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function formatProcessRate(mbps: number | undefined): string {
-  if (mbps == null) return '—';
-  if (mbps >= 1) return `${mbps.toFixed(2)} Mbps`;
-  if (mbps >= 0.001) return `${(mbps * 1000).toFixed(1)} Kbps`;
-  return `${Math.round(mbps * 1_000_000)} bps`;
+function ProcessMetricCells({ process, grouped = false }: { process: ProcessMetrics; grouped?: boolean }) {
+  return <>
+    <td className="font-mono process-pid" title={grouped ? 'Lowest matching PID in this group' : undefined}>{process.pid}</td>
+    <td className="font-mono process-metric" title={grouped ? 'Sum of measured process rates in this group'
+      : { 'windows-etw': 'Host TCP and UDP via Windows ETW', 'linux-tcp': 'Host TCP socket counters', netpilot: 'Attributed NetPilot forwarding' }[process.networkSource ?? 'netpilot']}>
+      {formatProcessRate(process.networkMbps)}
+    </td>
+    <td className="font-mono process-metric">{process.cpuPercent == null ? '—' : `${process.cpuPercent.toFixed(1)}%`}</td>
+    <td className="font-mono process-metric">{process.memoryBytes == null ? '—' : `${(process.memoryBytes / 2 ** 20).toFixed(1)} MiB`}</td>
+  </>;
 }
 
 export const DashboardView: React.FC = () => {
   const [interfaces, setInterfaces] = useState<AdapterWithHistory[]>([]);
   const [nmStatus, setNmStatus] = useState<NetMergeStatus | null>(null);
   const [apps, setApps] = useState<ProcessInfo[]>([]);
+  const [traffic, setTraffic] = useState<{ source?: ProcessInfo['networkSource']; detail: string } | null>(null);
+  const refreshSequence = useRef({ started: 0, applied: 0 });
+  const [inspectedApp, setInspectedApp] = useState<ProcessInfo | null>(null);
   const [rules, setRules] = useState<RuleRecord[]>([]);
   const [appSearch, setAppSearch] = useState<string>('');
-  const [processPage, setProcessPage] = useState(0);
+  const [openProcessGroups, setOpenProcessGroups] = useState<Map<string, boolean>>(() => new Map());
   const [processSort, setProcessSort] = useState<ProcessSort>({ key: 'name', direction: 'ascending' });
   const sortProcessesBy = (key: ProcessSortKey) => {
     setProcessSort(prev => ({ key, direction: prev.key === key
       ? (prev.direction === 'ascending' ? 'descending' : 'ascending')
       : (key === 'name' || key === 'pid' ? 'ascending' : 'descending') }));
-    setProcessPage(0);
   };
   const visibility = useAdapterVisibility(interfaces);
   const [errorMsg, setErrorMsg] = useState<string>('');
@@ -90,15 +90,19 @@ export const DashboardView: React.FC = () => {
   const [modalQuota, setModalQuota] = useState<string>('');
 
   const loadData = async () => {
+    const request = ++refreshSequence.current.started;
     // Load each section independently. A single failing endpoint (for example net-merge
     // status on a host where the daemon is not installed) must never blank out the
     // adapter and process tables the way a Promise.all rejection used to.
-    const [ifacesRes, appsRes, rulesRes, nmRes] = await Promise.allSettled([
+    const [ifacesRes, appsRes, rulesRes, nmRes, trafficRes] = await Promise.allSettled([
       api.getInterfaces(),
       api.getApplications(),
       api.getRules(),
       api.getNetMergeStatus(),
+      api.getProcessTrafficStatus(),
     ]);
+    if (request < refreshSequence.current.applied) return;
+    refreshSequence.current.applied = request;
 
     const problems: string[] = [];
 
@@ -134,6 +138,7 @@ export const DashboardView: React.FC = () => {
     } else {
       problems.push(`processes: ${errorText(appsRes.reason)}`);
     }
+    if (trafficRes.status === 'fulfilled') setTraffic(trafficRes.value);
 
     if (rulesRes.status === 'fulfilled') {
       setRules(rulesRes.value);
@@ -265,18 +270,19 @@ export const DashboardView: React.FC = () => {
   };
 
   const q = appSearch.trim().toLowerCase();
-  const filteredApps = apps.filter(a => !q || a.name.toLowerCase().includes(q) || a.executable.toLowerCase().includes(q) || String(a.pid) === q)
-    .sort((a, b) => compareProcesses(a, b, processSort));
-  const pageSize = 50;
-  const page = Math.min(processPage, Math.max(0, Math.ceil(filteredApps.length / pageSize) - 1));
-  const pageStart = page * pageSize;
+  const processGroups = useMemo(() => groupProcesses(apps, q, processSort), [apps, q, processSort]);
   const hasProcessRates = apps.some(app => app.networkMbps != null);
   const integratedActive = nmStatus?.socksRunning || (nmStatus?.isRunning && nmStatus.runningSource === 'builtin');
-  const networkMessage = hasProcessRates
-    ? 'Network shows measured TCP and UDP traffic through NetPilot, not all system traffic.'
-    : integratedActive
-      ? 'Waiting for attributable traffic. Try starting a new download while NetPilot is running.'
-      : 'To measure per-app traffic, start the NetPilot engine or its SOCKS proxy. Standby and official net-merge releases don’t report per-app bytes.';
+  const networkMessage = traffic?.source
+    ? traffic.detail
+    : [traffic?.detail, integratedActive || hasProcessRates ? 'NetPilot forwarding rates are available when traffic can be attributed.' : 'No attributable traffic yet.'].filter(Boolean).join(' ');
+
+  const inspectButton = (app: ProcessInfo) => (
+    <button type="button" className="btn btn-secondary btn-sm process-inspect"
+      onClick={() => setInspectedApp(app)} aria-label={`Inspect ${app.name} (PID ${app.pid})`}>
+      <ScanSearch size={12} /> Inspect
+    </button>
+  );
 
   // Compute total load across slots
   const totalSlotsActive = (nmStatus?.nics || []).reduce((acc, s) => acc + (s.Active || 0), 0);
@@ -302,6 +308,7 @@ export const DashboardView: React.FC = () => {
           </button>
         </div>
       )}
+      {inspectedApp && <AppInspection process={inspectedApp} onClose={() => setInspectedApp(null)} />}
       {/* Beszel-Style "All Systems / Network Adapters" Table Card */}
       <div className="card netpilot-enter" style={{ marginBottom: 0, padding: '0', overflow: 'hidden' }}>
         <div className="adapter-card-heading" style={{
@@ -682,29 +689,34 @@ export const DashboardView: React.FC = () => {
           )}
         </div>
 
-        {/* RIGHT SEGMENT: Live Running Processes */}
-        <div className="card" style={{ marginBottom: 0 }}>
-          <div className="card-title">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-              <Activity size={14} color="#38bdf8" />
-              <span>Active Processes ({apps.length})</span>
+        <section className="card process-panel" aria-labelledby="active-processes-title">
+          <div className="card-title process-panel-header">
+            <div className="panel-identity">
+              <span className="panel-icon"><Activity size={16} aria-hidden="true" /></span>
+              <h2 id="active-processes-title">Active Processes</h2>
+              <span className="process-panel-count tabular-nums">{apps.length}</span>
             </div>
 
-            <div style={{ position: 'relative', width: '180px' }}>
-              <Search size={12} color="#71717a" style={{ position: 'absolute', left: '9px', top: '8px' }} />
+            <div className="process-search">
+              <Search size={14} aria-hidden="true" />
               <input
-                type="text"
-                placeholder="Search processes..."
+                type="search"
+                placeholder="Search processes"
                 aria-label="Search processes by name, path or PID"
                 value={appSearch}
-                onChange={e => { setAppSearch(e.target.value); setProcessPage(0); }}
-                style={{ width: '100%', paddingLeft: '26px', paddingRight: '8px', paddingTop: '4px', paddingBottom: '4px', fontSize: '11.5px' }}
+                onChange={e => setAppSearch(e.target.value)}
               />
             </div>
           </div>
 
-          <p className="process-network-note">{networkMessage}</p>
-          <div style={{ maxHeight: '340px', overflow: 'auto' }}>
+          <div className="process-legend">
+            <p>{networkMessage}</p>
+            <div className="process-legend-values">
+              <span><b className="font-mono">0</b> Measured idle</span>
+              <span><b className="font-mono">—</b> Unavailable</span>
+            </div>
+          </div>
+          <div className="process-table-scroll" role="region" aria-label="Active Processes" tabIndex={0}>
             <table className="data-table process-table">
               <thead>
                 <tr>
@@ -718,71 +730,88 @@ export const DashboardView: React.FC = () => {
                       </button>
                     </th>;
                   })}
-                  <th>Adapter</th>
-                  <th style={{ textAlign: 'right' }}>Rule</th>
+                  <th scope="col">Adapter</th>
+                  <th scope="col" style={{ textAlign: 'right' }}>Rule</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredApps.slice(pageStart, pageStart + pageSize).map(app => {
-                  const matchedRule = getAppRule(app.name);
-                  return (
-                    <tr key={`${app.pid}-${app.name}`}>
-                      <td>
-                        <div className="process-name">
-                          <ProcessIcon pid={app.pid} executable={app.executable} />
-                          <div className="process-identity">
-                            <div className="process-name-text" title={app.name}>{app.name}</div>
-                            {(app.socketCount ?? 0) > 0 && (
-                              <div style={{ fontSize: '10px', color: '#71717a' }}>
-                                {app.socketCount} sockets
-                              </div>
-                            )}
+                {processGroups.map(group => {
+                  const first = group.processes.find(app => app.pid === group.pid) ?? group.processes[0];
+                  const grouped = group.processes.length > 1;
+                  const expanded = openProcessGroups.get(group.key) ?? Boolean(q);
+                  return <React.Fragment key={group.key}>
+                    {grouped && (
+                      <tr className="process-group-row">
+                        <td>
+                          <div className="process-name">
+                            <ProcessIcon pid={first.pid} executable={first.executable} />
+                            <span className="process-name-text" title={first.executable || group.name}>{group.name}</span>
+                            {inspectButton(first)}
+                            <button type="button" className="process-group-button" aria-expanded={expanded}
+                              aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.name} (${group.processes.length} processes)`}
+                              onClick={() => setOpenProcessGroups(prev => new Map(prev).set(group.key, !(prev.get(group.key) ?? Boolean(q))))}>
+                              <span className="process-count">{group.processes.length}</span>
+                              <ChevronRight size={14} aria-hidden="true" />
+                            </button>
                           </div>
-                        </div>
-                      </td>
-                      <td className="font-mono" style={{ fontSize: '11px', color: '#71717a' }}>
-                        {app.pid}
-                      </td>
-                      <td className="font-mono process-metric">{formatProcessRate(app.networkMbps)}</td>
-                      <td className="font-mono process-metric">{app.cpuPercent == null ? '—' : `${app.cpuPercent.toFixed(1)}%`}</td>
-                      <td className="font-mono process-metric">{app.memoryBytes == null ? '—' : `${(app.memoryBytes / 2 ** 20).toFixed(1)} MiB`}</td>
-                      <td>
-                        {!isMergeActive ? (
-                          <span style={{ fontSize: '11px', color: '#71717a' }}>
-                            System Default
-                          </span>
-                        ) : systemAppRules && matchedRule ? (
-                          <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 600 }}>
-                            {formatRouteSummary(matchedRule)}
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 500 }}>
-                            net-merge
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ padding: '3px 8px', fontSize: '11px', whiteSpace: 'nowrap' }}
-                          onClick={() => openModalForRule(matchedRule, app.name, app.executable)}
-                        >
-                          {matchedRule ? 'Edit' : '+ Rule'}
-                        </button>
-                      </td>
-                    </tr>
-                  );
+                        </td>
+                        <ProcessMetricCells process={group} grouped />
+                        <td colSpan={2}></td>
+                      </tr>
+                    )}
+                    {(!grouped || expanded) && group.processes.map(app => {
+                      const matchedRule = getAppRule(app.name);
+                      return (
+                        <tr key={app.pid} className={grouped ? 'process-child-row' : undefined}>
+                          <td>
+                            <div className="process-name">
+                              <ProcessIcon pid={app.pid} executable={app.executable} />
+                              <div className="process-identity">
+                                <div className="process-name-text" title={app.name}>{app.name}</div>
+                                {(app.socketCount ?? 0) > 0 && (
+                                  <div style={{ fontSize: '10px', color: '#71717a' }}>
+                                    {app.socketCount} sockets
+                                  </div>
+                                )}
+                              </div>
+                              {inspectButton(app)}
+                            </div>
+                          </td>
+                          <ProcessMetricCells process={app} />
+                          <td>
+                            {!isMergeActive ? (
+                              <span style={{ fontSize: '11px', color: '#71717a' }}>
+                                System Default
+                              </span>
+                            ) : systemAppRules && matchedRule ? (
+                              <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 600 }}>
+                                {formatRouteSummary(matchedRule)}
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 500 }}>
+                                net-merge
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: '3px 8px', fontSize: '11px', whiteSpace: 'nowrap' }}
+                              onClick={() => openModalForRule(matchedRule, app.name, app.executable)}
+                            >
+                              {matchedRule ? 'Edit' : '+ Rule'}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </React.Fragment>;
                 })}
-                {!filteredApps.length && <tr><td colSpan={7}>{q ? 'No matching processes.' : 'No processes found yet.'}</td></tr>}
+                {!processGroups.length && <tr><td colSpan={7}>{q ? 'No matching processes.' : 'No processes found yet.'}</td></tr>}
               </tbody>
             </table>
           </div>
-          {filteredApps.length > pageSize && <div className="process-pagination">
-            <span>{pageStart + 1}–{Math.min(pageStart + pageSize, filteredApps.length)} of {filteredApps.length}</span>
-            <button className="btn btn-secondary btn-sm" disabled={page === 0} onClick={() => setProcessPage(page - 1)}>Previous</button>
-            <button className="btn btn-secondary btn-sm" disabled={pageStart + pageSize >= filteredApps.length} onClick={() => setProcessPage(page + 1)}>Next</button>
-          </div>}
-        </div>
+        </section>
       </div>
 
       {/* Add / Modify App Policy Modal */}

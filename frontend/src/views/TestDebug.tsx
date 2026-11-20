@@ -2,21 +2,24 @@ import React, { useEffect, useState } from 'react';
 import {
   api,
   CapabilityReport,
+  InterfaceInfo,
   ScenarioResult,
   SuiteReport,
   LogEntry,
   UnifiedTestReport,
 } from '../api/wails';
 import { DonutChart } from '../components/Charts';
+import { DiagnosticMCP } from '../components/DiagnosticMCP';
 import {
   Play,
+  RefreshCw,
+  Download,
   AlertTriangle,
   Server,
   Cpu,
   Monitor,
   Zap,
   ShieldCheck,
-  ShieldAlert,
 } from 'lucide-react';
 
 type SubTab =
@@ -25,7 +28,22 @@ type SubTab =
   | 'scenarios'
   | 'capabilities'
   | 'logs'
-  | 'diagnostics';
+  | 'diagnostics'
+  | 'mcp';
+
+function ScenarioAssertions({ scenario }: { scenario: ScenarioResult }) {
+  const assertions = scenario.assertions ?? [];
+  if (assertions.length === 0) return <>{scenario.error || 'No assertions recorded'}</>;
+  const passed = assertions.filter(assertion => assertion.passed).length;
+  return <details>
+    <summary>{passed}/{assertions.length} assertions passed</summary>
+    {scenario.error && <p>{scenario.error}</p>}
+    <ul>{assertions.map((item, index) => <li key={`${item.name}-${index}`}>
+      {item.name} · {item.passed ? 'Pass' : 'Fail'} · Expected {item.expected}, got {item.actual}
+      {item.detail && ` · ${item.detail}`}
+    </li>)}</ul>
+  </details>;
+}
 
 export const TestDebug: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SubTab>('unified');
@@ -39,7 +57,12 @@ export const TestDebug: React.FC = () => {
   // One-click unified runner state
   const [unifiedReport, setUnifiedReport] = useState<UnifiedTestReport | null>(null);
   const [isRunningAll, setIsRunningAll] = useState(false);
-  const [skipDisruptive, setSkipDisruptive] = useState(true);
+  const [tetherAdapters, setTetherAdapters] = useState<InterfaceInfo[]>([]);
+  const [tetherAdapter, setTetherAdapter] = useState('');
+  const [runLabel, setRunLabel] = useState('');
+  const [finishedLabel, setFinishedLabel] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportNotice, setExportNotice] = useState('');
 
   // Platform suite state
   const [activeSuiteReport, setActiveSuiteReport] = useState<SuiteReport | null>(null);
@@ -70,6 +93,19 @@ export const TestDebug: React.FC = () => {
     loadInitial().catch((e) => console.error(e));
   }, []);
 
+  const refreshTetherAdapters = async () => {
+    try {
+      const interfaces = await api.getInterfaces();
+      const available = interfaces.filter(iface => iface.isUp && !iface.isVirtual);
+      setTetherAdapters(available);
+      setTetherAdapter(prev => available.some(iface => iface.name === prev) ? prev : '');
+    } catch (err) {
+      setErrorMsg(`Could not refresh adapters: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  useEffect(() => { void refreshTetherAdapters(); }, []);
+
   // Periodic log refresh
   useEffect(() => {
     if (isLogPaused || activeTab !== 'logs') return;
@@ -85,9 +121,10 @@ export const TestDebug: React.FC = () => {
     setIsRunningAll(true);
     setErrorMsg('');
     try {
-      const report = await api.runAllUnified(skipDisruptive);
+      const report = await api.runAllUnified(tetherAdapter);
       setUnifiedReport(report);
       setScenarios(report.scenarios || []);
+      setFinishedLabel(runLabel.trim());
     } catch (err: any) {
       setErrorMsg(`Unified test run failed: ${err?.message || String(err)}`);
     } finally {
@@ -119,6 +156,20 @@ export const TestDebug: React.FC = () => {
     }
   };
 
+  const exportReport = async (kind: 'tests' | 'diagnostics', report: unknown) => {
+    setExporting(true);
+    setExportNotice('');
+    setErrorMsg('');
+    try {
+      const contents = typeof report === 'string' ? JSON.parse(report) : report;
+      if (await api.saveDiagnosticFile(kind, contents)) setExportNotice('JSON report saved.');
+    } catch (err) {
+      setErrorMsg(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // Build chart segments for test report
   const chartSegments = unifiedReport ? [
     { label: 'Passed', value: unifiedReport.passed, color: '#10b981' },
@@ -129,6 +180,7 @@ export const TestDebug: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {exportNotice && <p role="status">{exportNotice}</p>}
       {errorMsg && (
         <div style={{
           padding: '9px 12px',
@@ -143,105 +195,85 @@ export const TestDebug: React.FC = () => {
       )}
 
       {/* Test & Debug Compact Tab Bar */}
-      <div className="tab-bar" style={{ marginBottom: '4px' }}>
-        <button className={`tab-btn ${activeTab === 'unified' ? 'active' : ''}`} onClick={() => setActiveTab('unified')}>
-          ⚡ One-Click Suite & Scenarios
+      <div className="tab-bar diagnostics-tabs" role="group" aria-label="Diagnostics views">
+        <button className={`tab-btn ${activeTab === 'unified' ? 'active' : ''}`} aria-pressed={activeTab === 'unified'} onClick={() => setActiveTab('unified')}>
+          Test suite
         </button>
-        <button className={`tab-btn ${activeTab === 'platforms' ? 'active' : ''}`} onClick={() => setActiveTab('platforms')}>
-          Platform Suites
+        <button className={`tab-btn ${activeTab === 'platforms' ? 'active' : ''}`} aria-pressed={activeTab === 'platforms'} onClick={() => setActiveTab('platforms')}>
+          Platforms
         </button>
-        <button className={`tab-btn ${activeTab === 'scenarios' ? 'active' : ''}`} onClick={() => setActiveTab('scenarios')}>
-          Scenario Explorer
+        <button className={`tab-btn ${activeTab === 'scenarios' ? 'active' : ''}`} aria-pressed={activeTab === 'scenarios'} onClick={() => setActiveTab('scenarios')}>
+          Scenarios
         </button>
-        <button className={`tab-btn ${activeTab === 'capabilities' ? 'active' : ''}`} onClick={() => setActiveTab('capabilities')}>
-          Capability Matrix
+        <button className={`tab-btn ${activeTab === 'capabilities' ? 'active' : ''}`} aria-pressed={activeTab === 'capabilities'} onClick={() => setActiveTab('capabilities')}>
+          Capabilities
         </button>
-        <button className={`tab-btn ${activeTab === 'logs' ? 'active' : ''}`} onClick={() => setActiveTab('logs')}>
-          Structured Logs ({logs.length})
+        <button className={`tab-btn ${activeTab === 'logs' ? 'active' : ''}`} aria-pressed={activeTab === 'logs'} onClick={() => setActiveTab('logs')}>
+          Logs ({logs.length})
         </button>
-        <button className={`tab-btn ${activeTab === 'diagnostics' ? 'active' : ''}`} onClick={() => { setActiveTab('diagnostics'); handleGenerateDiagnostics(); }}>
-          Sanitized Bundle
+        <button className={`tab-btn ${activeTab === 'diagnostics' ? 'active' : ''}`} aria-pressed={activeTab === 'diagnostics'} onClick={() => { setActiveTab('diagnostics'); handleGenerateDiagnostics(); }}>
+          Redacted bundle
         </button>
+        <button className={`tab-btn ${activeTab === 'mcp' ? 'active' : ''}`} aria-pressed={activeTab === 'mcp'} onClick={() => setActiveTab('mcp')}>MCP</button>
       </div>
 
       {/* VIEW 1: ONE-CLICK UNIFIED SUITE & SCENARIO RUNNER */}
       {activeTab === 'unified' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {/* Action & Safety Banner */}
-          <div className="card" style={{ marginBottom: 0 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '14px' }}>
-              <div>
-                <h3 style={{ fontSize: '14.5px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Zap size={17} color="#facc15" /> One-Click Test Suite & Scenario Verification
-                </h3>
-                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                  Executes host platform suites, pure-Go integration logic, and deterministic network scenarios simultaneously.
-                </p>
+          <section className="card diagnostics-run" aria-labelledby="diagnostics-run-title">
+            <div className="card-title">
+              <div className="panel-identity">
+                <span className="panel-icon"><Zap size={16} aria-hidden="true" /></span>
+                <div>
+                  <h2 id="diagnostics-run-title">Run diagnostics</h2>
+                  <p>Run every automated check and export the results.</p>
+                </div>
               </div>
-
-              {/* Safety Shield Switch + Run Button */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-                <label style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  background: skipDisruptive ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-                  border: `1px solid ${skipDisruptive ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-                  padding: '5px 9px',
-                  borderRadius: 'var(--radius-sm)',
-                  cursor: 'pointer',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  color: skipDisruptive ? '#34d399' : '#f87171',
-                }}>
-                  <input
-                    type="checkbox"
-                    checked={skipDisruptive}
-                    onChange={e => setSkipDisruptive(e.target.checked)}
-                    style={{ accentColor: '#10b981', cursor: 'pointer' }}
-                  />
-                  {skipDisruptive ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
-                  {skipDisruptive ? 'Skip Disruptive Tests (Safe Mode)' : 'Allow Network-Affecting Tests'}
-                </label>
-
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={handleRunAllUnified}
-                  disabled={isRunningAll}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, padding: '6px 12px', fontSize: '11.5px' }}
-                >
-                  <Play size={12} />
-                  {isRunningAll ? 'Executing Unified Suite...' : 'Run All Tests & Scenarios'}
+              {isRunningAll && <span className="status-pill blocked" role="status">Running tests</span>}
+            </div>
+            <div className="diagnostic-controls">
+              <div className="diagnostic-field">
+                <label htmlFor="diagnostics-tether">Tether adapter</label>
+                <div className="diagnostic-field-row">
+                  <select id="diagnostics-tether" value={tetherAdapter} onChange={e => setTetherAdapter(e.target.value)} disabled={isRunningAll}>
+                    <option value="">Auto-detect by adapter name</option>
+                    {tetherAdapters.map(iface => <option key={iface.name} value={iface.name}>{iface.displayName || iface.name}</option>)}
+                  </select>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={refreshTetherAdapters} disabled={isRunningAll}>
+                    <RefreshCw size={13} aria-hidden="true" /> Refresh adapters
+                  </button>
+                </div>
+              </div>
+              <div className="diagnostic-field">
+                <label htmlFor="diagnostics-run-label">Run label</label>
+                <input id="diagnostics-run-label" placeholder="Baseline or phone connected" value={runLabel} maxLength={100}
+                  onChange={e => setRunLabel(e.target.value)} disabled={isRunningAll} />
+              </div>
+            </div>
+            <div className="diagnostics-run-footer">
+              <div className="diagnostic-actions">
+                {unifiedReport && <button type="button" className="btn btn-secondary" disabled={exporting || isRunningAll}
+                  onClick={() => exportReport('tests', { ...unifiedReport, label: finishedLabel })}>
+                  <Download size={13} aria-hidden="true" /> Export test results
+                </button>}
+                <button type="button" className="btn btn-primary" onClick={handleRunAllUnified} disabled={isRunningAll}>
+                  <Play size={13} aria-hidden="true" />
+                  {isRunningAll ? 'Running tests…' : 'Run all tests'}
                 </button>
               </div>
             </div>
-
-            {/* Warning if disruptive tests allowed */}
-            {!skipDisruptive && (
-              <div style={{
-                marginTop: '10px',
-                padding: '6px 10px',
-                borderRadius: '4px',
-                background: 'rgba(245, 158, 11, 0.15)',
-                border: '1px solid rgba(245, 158, 11, 0.35)',
-                color: '#fbbf24',
-                fontSize: '11px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}>
-                <AlertTriangle size={13} />
-                <strong>Warning:</strong> Disruptive mode enabled. Scenarios that simulate link failure or route rollback may flap network interfaces or temporarily drop active connections.
-              </div>
-            )}
-          </div>
+            <p className="diagnostic-feedback diagnostic-warning">
+              <AlertTriangle size={14} aria-hidden="true" />
+              Includes disruption tests that inject link failure and route rollback into test traffic.
+            </p>
+          </section>
 
           {/* Metrics & Donut Chart Summary */}
           {unifiedReport && (
             <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 2fr', gap: '10px' }}>
               <div className="card" style={{ marginBottom: 0 }}>
                 <div className="card-title">
-                  <span>Execution Breakdown</span>
+                  <span>{finishedLabel || 'Execution breakdown'}</span>
                   <span className="font-mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                     {unifiedReport.durationMs.toFixed(1)} ms total
                   </span>
@@ -255,7 +287,7 @@ export const TestDebug: React.FC = () => {
                 />
               </div>
 
-              <div className="card" style={{ marginBottom: 0, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', padding: '12px' }}>
+              <div className="card" style={{ marginBottom: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))', gap: '8px', padding: '12px' }}>
                 <div style={{ background: 'rgba(16, 185, 129, 0.1)', padding: '8px 10px', borderRadius: '4px' }}>
                   <div style={{ fontSize: '10.5px', color: '#6ee7b7' }}>Passed</div>
                   <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: '#34d399' }}>
@@ -263,13 +295,13 @@ export const TestDebug: React.FC = () => {
                   </div>
                 </div>
                 <div style={{ background: 'rgba(245, 158, 11, 0.1)', padding: '8px 10px', borderRadius: '4px' }}>
-                  <div style={{ fontSize: '10.5px', color: '#fde68a' }}>Skipped (Shielded)</div>
+                  <div style={{ fontSize: '10.5px', color: '#fde68a' }}>Skipped</div>
                   <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: '#fbbf24' }}>
                     {unifiedReport.skipped}
                   </div>
                 </div>
                 <div style={{ background: 'rgba(139, 92, 246, 0.1)', padding: '8px 10px', borderRadius: '4px' }}>
-                  <div style={{ fontSize: '10.5px', color: '#c4b5fd' }}>Blocked (Env)</div>
+                  <div style={{ fontSize: '10.5px', color: '#c4b5fd' }}>Blocked</div>
                   <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: '#a78bfa' }}>
                     {unifiedReport.blocked}
                   </div>
@@ -280,6 +312,7 @@ export const TestDebug: React.FC = () => {
                     {unifiedReport.failed}
                   </div>
                 </div>
+
               </div>
             </div>
           )}
@@ -303,7 +336,7 @@ export const TestDebug: React.FC = () => {
                     <th>Network Impact</th>
                     <th>Status</th>
                     <th>Duration</th>
-                    <th>Outcome / Output</th>
+                    <th>Evidence</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -329,7 +362,7 @@ export const TestDebug: React.FC = () => {
                       <td>
                         <span className={`status-pill ${
                           c.status === 'PASS' ? 'pass' :
-                          c.status === 'SKIPPED' ? 'skipped' :
+                          c.status === 'SKIPPED' || c.status === 'NOT RUN' ? 'skipped' :
                           c.status === 'BLOCKED' ? 'blocked' : 'fail'
                         }`} style={{ fontSize: '10px', padding: '1px 6px' }}>
                           {c.status}
@@ -339,7 +372,8 @@ export const TestDebug: React.FC = () => {
                         {c.durationMs.toFixed(2)} ms
                       </td>
                       <td style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                        {c.reason || (c.output ? c.output.trim().slice(0, 70) : 'Passed cleanly')}
+                        {c.reason || c.output || '—'}
+
                       </td>
                     </tr>
                   )))}
@@ -412,15 +446,7 @@ export const TestDebug: React.FC = () => {
                       {sc.durationMs.toFixed(2)} ms
                     </td>
                     <td style={{ fontSize: '11px' }}>
-                      {sc.status === 'SKIPPED' ? (
-                        <span style={{ color: '#fbbf24' }}>
-                          {sc.disruptionWarning || sc.error || 'Skipped to preserve active host connection'}
-                        </span>
-                      ) : (
-                        <span style={{ color: '#6ee7b7' }}>
-                          ✓ {sc.assertions?.length || 2} assertions validated
-                        </span>
-                      )}
+                      <ScenarioAssertions scenario={sc} />
                     </td>
                   </tr>
                 ))}
@@ -524,7 +550,7 @@ export const TestDebug: React.FC = () => {
                         </span>
                       </td>
                       <td className="font-mono" style={{ fontSize: '11px' }}>{c.durationMs.toFixed(2)} ms</td>
-                      <td style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{c.reason || 'Verified'}</td>
+                      <td style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{c.output || c.reason || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -580,7 +606,7 @@ export const TestDebug: React.FC = () => {
                     </span>
                   </td>
                   <td className="font-mono" style={{ fontSize: '11px' }}>{sc.durationMs.toFixed(2)} ms</td>
-                  <td style={{ fontSize: '11px', color: '#6ee7b7' }}>✓ {sc.assertions?.length || 2} Passed</td>
+                  <td style={{ fontSize: '11px' }}><ScenarioAssertions scenario={sc} /></td>
                 </tr>
               ))}
             </tbody>
@@ -664,11 +690,17 @@ export const TestDebug: React.FC = () => {
         </div>
       )}
 
+      {activeTab === 'mcp' && <DiagnosticMCP />}
+
       {/* VIEW 6: Sanitized Diagnostic Report */}
       {activeTab === 'diagnostics' && (
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <span>Redacted System Diagnostic Bundle</span>
+            <button className="btn btn-secondary btn-sm" disabled={!diagJson || exporting}
+              onClick={() => exportReport('diagnostics', diagJson)}>
+              <Download size={12} /> Export bundle
+            </button>
             <button className="btn btn-secondary btn-sm" onClick={handleGenerateDiagnostics}>
               Regenerate
             </button>

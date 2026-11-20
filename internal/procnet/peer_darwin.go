@@ -3,6 +3,8 @@
 package procnet
 
 import (
+	"context"
+	"errors"
 	"net"
 	"os/exec"
 	"strings"
@@ -12,6 +14,29 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+func processSockets(ctx context.Context, pid int) ([]Socket, error) {
+	out, err := exec.CommandContext(ctx, "/usr/sbin/lsof", "-nP", "-a", "-p", itoa(pid), "-i", "-F", "Pn").Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 && len(exit.Stderr) == 0 {
+			return nil, nil // lsof found no matching descriptors
+		}
+		return nil, err
+	}
+	var sockets []Socket
+	var protocol string
+	for _, line := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "P"):
+			protocol = line[1:]
+		case strings.HasPrefix(line, "n") && (protocol == "TCP" || protocol == "UDP"):
+			local, remote, _ := strings.Cut(line[1:], "->")
+			sockets = append(sockets, Socket{Protocol: protocol, Local: local, Remote: remote})
+		}
+	}
+	return sockets, nil
+}
 
 func peerPID(conn net.Conn) (int, bool) {
 	sc, ok := conn.(syscall.Conn)

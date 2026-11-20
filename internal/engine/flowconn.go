@@ -98,6 +98,8 @@ type slotPacketConn struct {
 	net.PacketConn
 	sl          *Slot
 	fam         Family
+	balancer    *Balancer
+	pid         int
 	traffic     *trafficCounter
 	endTraffic  func()
 	trafficOnce sync.Once
@@ -118,6 +120,9 @@ func (c *slotPacketConn) WriteTo(p []byte, a net.Addr) (int, error) {
 	n, err := c.PacketConn.WriteTo(p, a)
 	c.sl.bytesOut[c.fam].Add(int64(n))
 	c.traffic.add(n)
+	if n > 0 {
+		c.balancer.recordProcessUDP(c.pid, a, c.sl.Name, p[:n])
+	}
 	return n, err
 }
 
@@ -162,6 +167,6 @@ func (b *Balancer) ListenUDPFor(ctx context.Context, f Family, pid int) (net.Pac
 			continue
 		}
 		traffic, end := b.trackProcess(pid)
-		return &slotPacketConn{PacketConn: pc, sl: sl, fam: f, traffic: traffic, endTraffic: end}, nil
+		return &slotPacketConn{PacketConn: pc, sl: sl, fam: f, balancer: b, pid: pid, traffic: traffic, endTraffic: end}, nil
 	}
 }

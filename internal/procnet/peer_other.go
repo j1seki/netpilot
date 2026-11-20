@@ -2,7 +2,15 @@
 
 package procnet
 
-import "net"
+import (
+	"context"
+	"errors"
+	"net"
+)
+
+func processSockets(context.Context, int) ([]Socket, error) {
+	return nil, errors.New("socket inspection is unavailable on this platform")
+}
 
 func peerPID(net.Conn) (int, bool) { return 0, false }
 

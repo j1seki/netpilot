@@ -1,11 +1,11 @@
-// Package testrunner executes environment-aware test suites in-process without spawning
-// external go test subprocesses (which would require a Go toolchain or flash console windows on Windows).
+// Package testrunner executes environment-aware NetPilot test suites without a Go toolchain.
 package testrunner
 
 import (
+	"context"
 	"fmt"
 	"net"
-	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -31,6 +31,8 @@ const (
 	SuiteWindows   PlatformSuite = "windows"
 	SuiteMacOS     PlatformSuite = "macos"
 	SuiteScenarios PlatformSuite = "scenarios"
+	SuiteTether    PlatformSuite = "tether"
+	SuiteLive      PlatformSuite = "live"
 )
 
 // TestStatus represents test execution state.
@@ -47,7 +49,7 @@ const (
 // CaseResult holds the outcome of an individual test case.
 type CaseResult struct {
 	Name              string     `json:"name"`
-	Classification    string     `json:"classification"` // Unit, Integration, System, Manual
+	Classification    string     `json:"classification"` // Unit, Integration, System
 	Status            TestStatus `json:"status"`
 	DurationMs        float64    `json:"durationMs"`
 	Output            string     `json:"output,omitempty"`
@@ -58,11 +60,15 @@ type CaseResult struct {
 
 // UnifiedTestReport aggregates all platform suites and scenarios in a single one-click report.
 type UnifiedTestReport struct {
+	Schema          string                     `json:"schema"`
+	AppVersion      string                     `json:"appVersion"`
+	SafeMode        bool                       `json:"safeMode"`
 	Total           int                        `json:"total"`
 	Passed          int                        `json:"passed"`
 	Failed          int                        `json:"failed"`
 	Skipped         int                        `json:"skipped"`
 	Blocked         int                        `json:"blocked"`
+	NotRun          int                        `json:"notRun"`
 	DisruptiveCount int                        `json:"disruptiveCount"`
 	DurationMs      float64                    `json:"durationMs"`
 	Suites          []SuiteReport              `json:"suites"`
@@ -113,8 +119,20 @@ type inProcTest struct {
 }
 
 func runCaseList(tests []inProcTest) []CaseResult {
+	return runCaseListFiltered(tests, false)
+}
+
+func runCaseListFiltered(tests []inProcTest, skipDisruptive bool) []CaseResult {
 	var out []CaseResult
 	for _, tc := range tests {
+		if skipDisruptive && tc.affectsConnection {
+			out = append(out, CaseResult{
+				Name: tc.name, Classification: tc.classification, Status: StatusSkipped,
+				Reason: "Disruptive check excluded by safe mode", AffectsConnection: true,
+				DisruptionWarning: tc.disruptionWarning,
+			})
+			continue
+		}
 		t0 := time.Now()
 		st, msg := tc.fn()
 		dur := float64(time.Since(t0).Microseconds()) / 1000.0
@@ -139,8 +157,12 @@ func runCaseList(tests []inProcTest) []CaseResult {
 	return out
 }
 
-// RunSuite executes the specified platform suite directly in-process (zero external processes).
+// RunSuite executes the specified platform suite.
 func (r *Runner) RunSuite(suite PlatformSuite) SuiteReport {
+	return r.runSuite(suite, "", false)
+}
+
+func (r *Runner) runSuite(suite PlatformSuite, tetherAdapter string, skipDisruptive bool) SuiteReport {
 	start := time.Now()
 	capRep := r.capDetector.Detect()
 	runID := logger.RandomID()
@@ -182,32 +204,98 @@ func (r *Runner) RunSuite(suite PlatformSuite) SuiteReport {
 		cases = r.runLinuxCases(capRep)
 	case SuiteMacOS:
 		cases = r.runMacOSCases(capRep)
+	case SuiteTether:
+		cases = runCaseList([]inProcTest{{
+			name: "Tether adapter IPv4 connectivity", classification: "System",
+			fn: func() (TestStatus, string) { return checkTetherLink(tetherAdapter) },
+		}})
+	case SuiteLive:
+		cases = runCaseListFiltered(append([]inProcTest{
+			{name: "SOCKS routing rule and bandwidth cap", classification: "Integration", fn: checkProxyRulesAndCap},
+			{name: "Process identity", classification: "Integration", fn: checkHostProcessIdentity},
+			{name: "TTL preview, apply and restore", classification: "Integration", fn: checkTTLTransaction},
+			{name: "Read host TTL", classification: "System", fn: checkLiveTTLInspection},
+			{name: "DNS lookup", classification: "Integration", fn: checkDNS},
+			{name: "Update release feed", classification: "System", fn: checkUpdateFeed},
+		}, liveRoutingChecks(tetherAdapter)...), skipDisruptive)
+	default:
+		r.recordBlockedSuite(&report, "Unknown or unsupported suite selection")
+		r.saveReport(report)
+		return report
 	}
 
-	for _, cr := range cases {
-		report.Cases = append(report.Cases, cr)
-		report.Total++
-		switch cr.Status {
-		case StatusPass:
-			report.Passed++
-		case StatusFail:
-			report.Failed++
-		case StatusSkipped:
-			report.Skipped++
-		case StatusBlocked:
-			report.Blocked++
-		default:
-			report.NotRun++
-		}
-	}
-
-	report.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+	addCases(&report, cases)
+	report.DurationMs = elapsedMs(start)
 	r.saveReport(report)
 	return report
 }
 
+type Check struct {
+	Name string
+	Run  func() (TestStatus, string)
+}
+
+// RunChecks runs application-level checks and appends their results to the unified report.
+func (r *Runner) RunChecks(report *UnifiedTestReport, suite PlatformSuite, checks []Check) {
+	start := time.Now()
+	tests := make([]inProcTest, 0, len(checks))
+	for _, check := range checks {
+		tests = append(tests, inProcTest{name: check.Name, classification: "Integration", fn: check.Run})
+	}
+	env := runtime.GOOS + "/" + runtime.GOARCH
+	result := SuiteReport{
+		RunID: logger.RandomID(), Suite: suite, TargetOS: runtime.GOOS,
+		ExecutionEnv: env, EnvironmentSummary: env, RanAt: start,
+	}
+	addCases(&result, runCaseList(tests))
+	result.DurationMs = elapsedMs(start)
+	r.saveReport(result)
+	report.addSuite(result)
+	report.DurationMs = elapsedMs(report.RanAt)
+}
+
+func elapsedMs(start time.Time) float64 {
+	return float64(time.Since(start).Microseconds()) / 1000
+}
+
+func addCases(suite *SuiteReport, cases []CaseResult) {
+	suite.Cases = append(suite.Cases, cases...)
+	for _, c := range cases {
+		suite.Total++
+		switch c.Status {
+		case StatusPass:
+			suite.Passed++
+		case StatusFail:
+			suite.Failed++
+		case StatusSkipped:
+			suite.Skipped++
+		case StatusBlocked:
+			suite.Blocked++
+		default:
+			suite.NotRun++
+		}
+	}
+}
+
+func (report *UnifiedTestReport) addSuite(suite SuiteReport) {
+	report.Suites = append(report.Suites, suite)
+	report.Total += suite.Total
+	report.Passed += suite.Passed
+	report.Failed += suite.Failed
+	report.Skipped += suite.Skipped
+	report.Blocked += suite.Blocked
+	report.NotRun += suite.NotRun
+	for _, c := range suite.Cases {
+		if c.AffectsConnection {
+			report.DisruptiveCount++
+		}
+	}
+}
+
 func (r *Runner) runCommonCases(capRep capability.Report) []CaseResult {
 	return runCaseList([]inProcTest{
+		{name: "TestProcessInspectorLoopback", classification: "Integration", fn: checkProcessSockets},
+		{name: "TestStandbyProcessTraffic", classification: "Integration", fn: checkStandbyTraffic},
 		{
 			name:           "TestApplicationIdentityCentralization",
 			classification: "Unit",
@@ -284,14 +372,17 @@ func (r *Runner) runCommonCases(capRep capability.Report) []CaseResult {
 			},
 		},
 		{
-			name:           "TestRateLimitingAndUsageAccounting",
+			name:           "TestAdapterTrafficRateAccounting",
 			classification: "Unit",
 			fn: func() (TestStatus, string) {
-				memDB, _ := db.Open(":memory:")
+				memDB, err := db.Open(":memory:")
+				if err != nil {
+					return StatusFail, err.Error()
+				}
 				defer memDB.Close()
 				col := analytics.NewCollector(memDB)
 				col.RecordNICSample("eth0", 1000000, 500000)
-				time.Sleep(15 * time.Millisecond)
+				time.Sleep(60 * time.Millisecond) // The collector requires more than 50 ms between samples.
 				col.RecordNICSample("eth0", 2000000, 1000000)
 				nics, _ := col.Snapshot()
 				for _, n := range nics {
@@ -331,13 +422,6 @@ func (r *Runner) runWindowsCases(capRep capability.Report) []CaseResult {
 					}
 				}
 				return StatusFail, "missing windows capability item"
-			},
-		},
-		{
-			name:           "TestWindowsSocketErrorMapping",
-			classification: "Unit",
-			fn: func() (TestStatus, string) {
-				return StatusPass, "WSAETIMEDOUT (10060) and WSAENETUNREACH (10051) mapped to failover triggers"
 			},
 		},
 		{
@@ -407,17 +491,27 @@ func (r *Runner) runLinuxCases(capRep capability.Report) []CaseResult {
 				return StatusPass, fmt.Sprintf("Sampled %d interfaces from /proc/net/dev", len(nics))
 			},
 		},
-		{
-			name:           "TestLinuxIsolatedNetworkNamespace",
-			classification: "Integration",
-			fn: func() (TestStatus, string) {
-				if os.Geteuid() != 0 {
-					return StatusSkipped, "Requires root / CAP_SYS_ADMIN for CLONE_NEWNET"
-				}
-				return StatusPass, "Network namespace isolation verified"
-			},
-		},
+		{name: "Linux isolated network namespace", classification: "System", fn: checkLinuxNamespace},
 	})
+}
+
+func checkLinuxNamespace() (TestStatus, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "unshare", "--net", "--", "cat", "/proc/net/dev").CombinedOutput()
+	if err != nil {
+		return StatusBlocked, fmt.Sprintf("Cannot start a disposable network namespace: %v %s", err, strings.TrimSpace(string(output)))
+	}
+	var seen []string
+	for _, line := range strings.Split(string(output), "\n") {
+		if name, _, ok := strings.Cut(line, ":"); ok {
+			seen = append(seen, strings.TrimSpace(name))
+		}
+	}
+	if len(seen) != 1 || seen[0] != "lo" {
+		return StatusFail, fmt.Sprintf("Unexpected interfaces in isolated namespace: %v", seen)
+	}
+	return StatusPass, "The child process observed only loopback in its private network namespace"
 }
 
 func (r *Runner) runMacOSCases(capRep capability.Report) []CaseResult {
@@ -426,14 +520,21 @@ func (r *Runner) runMacOSCases(capRep capability.Report) []CaseResult {
 			name:           "TestMacOSCapabilityDetection",
 			classification: "Unit",
 			fn: func() (TestStatus, string) {
-				return StatusPass, "macOS Darwin routing capabilities verified"
+				if capRep.Environment.RuntimeOS != "darwin" {
+					return StatusFail, "expected macOS runtime"
+				}
+				return StatusPass, "Darwin runtime detected"
 			},
 		},
 		{
-			name:           "TestMacOSRouteCommandFormatting",
-			classification: "Unit",
+			name:           "macOS interface enumeration",
+			classification: "Integration",
 			fn: func() (TestStatus, string) {
-				return StatusPass, "BSD route -n syntax verified"
+				ifaces, err := net.Interfaces()
+				if err != nil || len(ifaces) == 0 {
+					return StatusFail, "no macOS interfaces enumerated"
+				}
+				return StatusPass, fmt.Sprintf("Enumerated %d macOS interfaces", len(ifaces))
 			},
 		},
 	})
@@ -460,7 +561,7 @@ func (r *Runner) recordBlockedSuite(report *SuiteReport, reason string) {
 }
 
 // RunAllUnified runs platform tests for the current host OS, common tests, and scenarios in one click.
-func (r *Runner) RunAllUnified(skipDisruptive bool, scEng *scenarios.Engine) UnifiedTestReport {
+func (r *Runner) RunAllUnified(skipDisruptive bool, scEng *scenarios.Engine, tetherAdapter string) UnifiedTestReport {
 	start := time.Now()
 	var suites []SuiteReport
 
@@ -475,6 +576,8 @@ func (r *Runner) RunAllUnified(skipDisruptive bool, scEng *scenarios.Engine) Uni
 	case "darwin":
 		suites = append(suites, r.RunSuite(SuiteMacOS))
 	}
+	suites = append(suites, r.runSuite(SuiteTether, tetherAdapter, skipDisruptive))
+	suites = append(suites, r.runSuite(SuiteLive, tetherAdapter, skipDisruptive))
 
 	var scenarioResults []scenarios.ScenarioResult
 	if scEng != nil {
@@ -482,22 +585,15 @@ func (r *Runner) RunAllUnified(skipDisruptive bool, scEng *scenarios.Engine) Uni
 	}
 
 	report := UnifiedTestReport{
-		Suites:    suites,
-		Scenarios: scenarioResults,
-		RanAt:     start,
+		Schema:     "netpilot-test-report-v1",
+		AppVersion: branding.AppVersion,
+		SafeMode:   skipDisruptive,
+		Scenarios:  scenarioResults,
+		RanAt:      start,
 	}
 
-	for _, s := range suites {
-		report.Total += s.Total
-		report.Passed += s.Passed
-		report.Failed += s.Failed
-		report.Skipped += s.Skipped
-		report.Blocked += s.Blocked
-		for _, c := range s.Cases {
-			if c.AffectsConnection {
-				report.DisruptiveCount++
-			}
-		}
+	for _, suite := range suites {
+		report.addSuite(suite)
 	}
 
 	for _, sc := range scenarioResults {

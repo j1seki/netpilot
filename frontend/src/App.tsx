@@ -7,6 +7,7 @@ import {
   subscribeTelemetry,
   engineVersionLabel,
 } from './api/wails';
+import { listenForDesktopTests } from './desktopTests';
 import { Sparkline } from './components/Charts';
 import { DashboardView } from './views/DashboardView';
 import { NetMergeView } from './views/NetMergeView';
@@ -53,6 +54,7 @@ function initialTab(): MainTab {
 }
 
 export const App: React.FC = () => {
+  useEffect(listenForDesktopTests, []);
   const startTab = initialTab();
   const [currentTab, setCurrentTab] = useState<MainTab>(startTab);
   const [branding, setBranding] = useState<BrandingInfo | null>(null);
@@ -246,36 +248,16 @@ export const App: React.FC = () => {
         </div>
 
         {/* Navigation */}
-        <nav className="app-nav" aria-label="Main navigation" style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '2px',
-          backgroundColor: '#121215',
-          border: '1px solid #232329',
-          padding: '3px',
-          borderRadius: '8px',
-        }}>
+        <nav className="app-nav" aria-label="Main navigation">
           {navItems.map(item => {
             const active = currentTab === item.id;
             return (
               <button
+                type="button"
+                className="app-nav-link"
                 key={item.id}
                 aria-current={active ? 'page' : undefined}
                 onClick={() => switchTab(item.id)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  padding: '5px 10px',
-                  borderRadius: '5px',
-                  fontSize: '11.5px',
-                  fontWeight: active ? 600 : 500,
-                  cursor: 'pointer',
-                  backgroundColor: active ? '#27272a' : 'transparent',
-                  color: active ? '#fafafa' : '#a1a1aa',
-                  border: 'none',
-                  transition: 'all 0.12s ease',
-                }}
               >
                 {item.icon}
                 <span>{item.label}</span>

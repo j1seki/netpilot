@@ -3,6 +3,7 @@
 package procnet
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -14,6 +15,56 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+func processSockets(ctx context.Context, pid int) ([]Socket, error) {
+	base := filepath.Join("/proc", strconv.Itoa(pid))
+	fds, err := os.ReadDir(filepath.Join(base, "fd"))
+	if err != nil {
+		return nil, err
+	}
+	inodes := make(map[string]bool, len(fds))
+	for _, fd := range fds {
+		target, err := os.Readlink(filepath.Join(base, "fd", fd.Name()))
+		if err != nil {
+			continue
+		}
+		if inode, ok := strings.CutPrefix(target, "socket:["); ok {
+			inodes[strings.TrimSuffix(inode, "]")] = true
+		}
+	}
+	var sockets []Socket
+	var firstErr error
+	for _, table := range []string{"tcp", "tcp6", "udp", "udp6"} {
+		if err := ctx.Err(); err != nil {
+			return sockets, err
+		}
+		data, err := os.ReadFile(filepath.Join(base, "net", table))
+		if err != nil {
+			if firstErr == nil && !(os.IsNotExist(err) && strings.HasSuffix(table, "6")) {
+				firstErr = err
+			}
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 10 || !inodes[fields[9]] {
+				continue
+			}
+			v6 := strings.HasSuffix(table, "6")
+			local, localPort, localErr := parseProcEndpoint(fields[1], v6)
+			remote, remotePort, remoteErr := parseProcEndpoint(fields[2], v6)
+			if localErr != nil || remoteErr != nil {
+				continue
+			}
+			row := Socket{Protocol: strings.ToUpper(table[:3]), Local: net.JoinHostPort(local.String(), strconv.Itoa(int(localPort)))}
+			if remotePort != 0 {
+				row.Remote = net.JoinHostPort(remote.String(), strconv.Itoa(int(remotePort)))
+			}
+			sockets = append(sockets, row)
+		}
+	}
+	return sockets, firstErr
+}
 
 func peerPID(conn net.Conn) (int, bool) {
 	sc, ok := conn.(syscall.Conn)
@@ -32,10 +83,17 @@ func peerPID(conn net.Conn) (int, bool) {
 			pid, got = int(ucred.Pid), true
 		}
 	})
-	if err != nil {
+	if err == nil && got {
+		return pid, true
+	}
+	// SO_PEERCRED applies to Unix sockets. Match the client side of a
+	// loopback TCP connection in the kernel's live socket table.
+	local, localOK := conn.LocalAddr().(*net.TCPAddr)
+	remote, remoteOK := conn.RemoteAddr().(*net.TCPAddr)
+	if !localOK || !remoteOK || !local.IP.IsLoopback() || !remote.IP.IsLoopback() {
 		return 0, false
 	}
-	return pid, got
+	return lookupLinuxPID("tcp", remote.IP, uint16(remote.Port), local.IP, uint16(local.Port), true)
 }
 
 func processInfo(pid int) (string, string) {
@@ -76,10 +134,10 @@ var inodeCache = struct {
 
 const inodeCacheTTL = 2 * time.Second
 
-func inodePIDMap() map[string]int {
+func inodePIDMap(refresh bool) map[string]int {
 	inodeCache.Lock()
 	defer inodeCache.Unlock()
-	if inodeCache.m != nil && time.Since(inodeCache.at) < inodeCacheTTL {
+	if !refresh && inodeCache.m != nil && time.Since(inodeCache.at) < inodeCacheTTL {
 		return inodeCache.m
 	}
 	out := make(map[string]int)
@@ -112,6 +170,10 @@ func inodePIDMap() map[string]int {
 }
 
 func lookupPID(network string, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16) (int, bool) {
+	return lookupLinuxPID(network, localIP, localPort, remoteIP, remotePort, false)
+}
+
+func lookupLinuxPID(network string, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16, refreshMissingOwner bool) (int, bool) {
 	files := []string{"/proc/net/tcp", "/proc/net/tcp6"}
 	var best, owner int
 	if network == "udp" {
@@ -149,7 +211,12 @@ func lookupPID(network string, localIP net.IP, localPort uint16, remoteIP net.IP
 					continue
 				}
 			}
-			if pid, ok := inodePIDMap()[fields[9]]; ok {
+			pid, ok := inodePIDMap(false)[fields[9]]
+			if !ok && refreshMissingOwner {
+				pid, ok = inodePIDMap(true)[fields[9]]
+				refreshMissingOwner = false
+			}
+			if ok {
 				if network != "udp" {
 					return pid, true
 				}

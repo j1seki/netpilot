@@ -3,6 +3,32 @@
 What changed in each release. Each version's section becomes its GitHub release notes, so add the
 entry here before pushing a version tag.
 
+## [0.4.3] - 2026-11-20
+
+### Active Processes and diagnostics
+
+- Expand process groups in a continuous list with sticky sort controls. The Network column shows zero for measured idle traffic and a dash when measurement is unavailable.
+- Show process traffic without starting Net-Merge where OS counters are available. Windows uses ETW for this measurement.
+- Inspect open sockets, recent activity forwarded by the integrated engine, and DNS endpoints visible to NetPilot.
+- Run the automated suite from Test & Debug and export the report as JSON. Checks that can affect connectivity are marked.
+- Start and stop a token protected diagnostics MCP endpoint on a local, Tailscale, or LAN address. Open the desktop web inspector with F12.
+
+### Desktop reliability
+
+- Dry-Run now enforces inspection mode for tunnel, proxy, and host network changes. TTL previews remain available.
+- The Net-Merge panel preserves edits during polling and reports failed proxy, speed-cap, and cleanup actions.
+- Closing NetPilot stops the forwarding it started. Stopping the desktop SOCKS5 proxy closes active connections, and the listener accepts IPv4 loopback addresses.
+- Linux desktop autostart opens NetPilot in standby and uses the original AppImage path.
+- The dashboard aligns latency and adapter-role headings, shows the active failover adapter, and keeps process names readable at the default window size.
+- VM adapter fallback requires a default route and filters out recognized VPNs. The elevated NetPilot runner uses the configured scheduling, probe targets, and adapter weights.
+- Reinstalling an official engine can repair a damaged download. An update check in progress preserves the selected release channel.
+
+### Known limitations
+
+- NetPilot saves and displays per-app DNS settings. Resolver selection stays with the app or operating system.
+- The automated Backup Mode check verifies failover and recovery through a simulated link failure in an isolated engine. Physical adapter disconnects with the live tunnel remain unverified.
+- Applying the Hotspot Saver connection profile switches Net-Merge to Speed mode, including when Backup Mode is selected.
+
 ## [0.4.2] - 2026-11-19
 
 - Fixed release builds: authenticate upstream net-merge downloads and accept integrated engine versions with or without a leading `v`.
@@ -77,16 +103,6 @@ vendored **net-merge v0.3.7** engine; earlier published releases still embedded 
   value.
 
 ## [Unreleased]
-
-### Desktop reliability
-
-- Dry-Run now enforces inspection mode for tunnel, proxy, and host network changes. TTL previews remain available.
-- The Net-Merge panel preserves edits during polling and reports failed proxy, speed-cap, and cleanup actions.
-- Closing NetPilot stops the forwarding it started. Stopping the desktop SOCKS5 proxy closes active connections, and the listener accepts IPv4 loopback addresses.
-- Linux desktop autostart opens NetPilot in standby and uses the original AppImage path.
-- The dashboard aligns latency and adapter-role headings, shows the active failover adapter, and keeps process names readable at the default window size.
-- VM adapter fallback requires a default route and filters out recognized VPNs. The elevated NetPilot runner uses the configured scheduling, probe targets, and adapter weights.
-- Reinstalling an official engine can repair a damaged download. An update check in progress preserves the selected release channel.
 
 ### Added
 - **In-app automatic updates with stable and beta channels.** Settings now offers a Stable channel

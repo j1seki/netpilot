@@ -33,7 +33,7 @@ func TestPeerPIDIdentifiesLoopbackClient(t *testing.T) {
 
 	pid, ok := PeerPID(server)
 	if !ok {
-		t.Skip("peer credentials unavailable in this environment")
+		t.Fatal("could not identify the test process's TCP socket")
 	}
 	if pid != os.Getpid() {
 		t.Fatalf("PeerPID = %d, want %d", pid, os.Getpid())

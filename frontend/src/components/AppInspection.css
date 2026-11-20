@@ -1,0 +1,157 @@
+.app-inspection {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(850px, calc(100% - 32px));
+  max-height: min(720px, calc(100% - 32px));
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid #323c47;
+  border-radius: 15px;
+  box-shadow: 0 20px 60px #0008;
+}
+
+.app-inspection[open] {
+  display: flex;
+  flex-direction: column;
+  animation: inspection-open 170ms cubic-bezier(.2, .75, .35, 1) both;
+}
+
+.app-inspection::backdrop { background: #03060ad6; }
+@keyframes inspection-open {
+  from { opacity: 0; transform: translateY(7px) scale(.99); }
+  to { opacity: 1; transform: none; }
+}
+
+.inspection-header {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border-color);
+  background: linear-gradient(115deg, #14232a, #14161c 63%);
+}
+.inspection-header .process-icon {
+  width: 44px;
+  height: 44px;
+  flex-basis: 44px;
+  border: 1px solid #334552;
+  border-radius: 10px;
+  background: #22333d;
+  color: #9ddcf5;
+}
+.inspection-header .process-icon img { width: 28px; height: 28px; }
+.inspection-header .process-icon svg { width: 20px; height: 20px; }
+.inspection-identity { flex: 1; min-width: 0; }
+.inspection-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.inspection-title h2 { min-width: 0; overflow-wrap: anywhere; font-size: 19px; font-weight: 650; line-height: 1.18; }
+.inspection-pid {
+  border: 1px solid #344652;
+  border-radius: 5px;
+  padding: 2px 6px;
+  color: #a7ccdd;
+  background: #172630;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.inspection-path {
+  margin-top: 5px;
+  overflow: hidden;
+  color: #aab6c1;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+.inspection-close { align-self: flex-start; padding: 6px; color: var(--text-secondary); }
+
+.inspection-body { min-height: 0; overflow: auto; padding: 16px 20px; }
+.inspection-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, .85fr)) minmax(0, 1.3fr);
+  margin-bottom: 14px;
+  overflow: hidden;
+  background: #101217;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+}
+.inspection-summary > div { min-width: 0; padding: 10px 13px; }
+.inspection-summary > div + div { border-inline-start: 1px solid var(--border-color); }
+.inspection-summary dt { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 11px; }
+.inspection-summary dt svg { flex-shrink: 0; color: #7e9aaf; }
+.inspection-summary dd { margin-top: 2px; font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+.inspection-summary dd .inspection-muted { display: block; font-weight: 400; }
+
+.inspection-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(184px, 1fr); align-items: start; gap: 12px; }
+.inspection-connections, .inspection-dns { min-width: 0; background: #101217; border: 1px solid var(--border-color); border-radius: 9px; }
+.inspection-switcher { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px; border-bottom: 1px solid var(--border-color); }
+.inspection-switcher button[aria-pressed='true'] { background: #152834; border-color: #294755; color: #a6ddf2; }
+.inspection-view { min-height: 122px; }
+.inspection-view > .inspection-help { padding: 9px 12px; }
+.inspection-table-scroll { max-height: 265px; overflow: auto; }
+.inspection-table th { position: sticky; top: 0; background: #151820; color: #a1acb8; }
+.inspection-table td { vertical-align: top; overflow-wrap: anywhere; }
+.inspection-table :is(th, td) { padding: 7px 10px; }
+.inspection-table-sockets th:first-child { width: 84px; }
+.inspection-table .inspection-time { white-space: nowrap; font-size: 10px; color: var(--text-secondary); }
+.inspection-endpoint { font-size: 11px; overflow-wrap: anywhere; user-select: text; }
+.inspection-remote { display: flex; align-items: center; gap: 5px; margin-top: 2px; color: #96afbe; }
+.inspection-remote svg { flex-shrink: 0; }
+.inspection-protocol {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #232934;
+  color: #bbccda;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.inspection-dns { padding: 13px; }
+.inspection-dns h3 { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; font-size: 13px; }
+.inspection-dns h3 svg { color: #89c9eb; }
+.inspection-dns dl { display: grid; gap: 10px; }
+.inspection-dns dt { margin-bottom: 3px; color: #b5bbc5; font-size: 11px; }
+.inspection-addresses { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; min-width: 0; }
+.inspection-addresses li { min-width: 0; }
+.inspection-addresses code {
+  display: inline-block;
+  padding: 2px 6px;
+  border: 1px solid #293542;
+  border-radius: 4px;
+  background: #19202b;
+  color: #d3e4ee;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.inspection-dns .inspection-help { margin-top: 11px; }
+.inspection-muted, .inspection-help { color: #a1a9b6; font-size: 11px; }
+.inspection-empty { padding: 23px 13px; text-align: center; color: var(--text-secondary); }
+.inspection-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 11px;
+  border: 1px solid #61333c;
+  border-radius: 7px;
+  background: #2b1c23;
+  color: #ffadba;
+  overflow-wrap: anywhere;
+}
+.inspection-alert svg { flex-shrink: 0; }
+
+.inspection-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; padding: 9px 20px; border-top: 1px solid var(--border-color); background: #12151b; color: var(--text-secondary); font-size: 11px; }
+.inspection-connection-state { display: inline-flex; align-items: center; gap: 7px; }
+.inspection-connection-state .beszel-dot { width: 6px; height: 6px; box-shadow: none; }
+.inspection-connection-state .online { background: #42cba1; }
+
+@media (max-width: 640px) {
+  .inspection-grid { grid-template-columns: minmax(0, 1fr); }
+  .inspection-header, .inspection-body, .inspection-footer { padding-inline: 12px; }
+  .inspection-summary > div { padding-inline: 8px; }
+  .inspection-summary dd { font-size: 14px; }
+}

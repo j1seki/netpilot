@@ -35,6 +35,7 @@ import (
 	"netpilot/internal/nettools"
 	"netpilot/internal/nics"
 	"netpilot/internal/notify"
+	"netpilot/internal/procnet"
 	"netpilot/internal/profiles"
 	"netpilot/internal/rules"
 	"netpilot/internal/scenarios"
@@ -62,26 +63,31 @@ type cachedLatency struct {
 
 // NetPilotService is the backend RPC service exposed to the Wails 3 React frontend.
 type NetPilotService struct {
-	networkMu    sync.RWMutex
-	shuttingDown bool
-	database     *db.Database
-	ringLog      *logger.RingLogger
-	capDetector  *capability.Detector
-	modeCtrl     *mode.Controller
-	ruleEngine   *rules.Engine
-	failoverSM   *failover.StateMachine
-	appManager   *apps.Manager
-	analytics    *analytics.Collector
-	scenarios    *scenarios.Engine
-	diagnostics  *diagnostics.Generator
-	testRunner   *testrunner.Runner
-	netmergeCtrl *netmerge.Controller
-	ttlManager   *ttlmgr.Manager
-	wanMu        sync.RWMutex
-	wanCache     map[string]cachedWAN
-	latencyMu    sync.RWMutex
-	latencyCache map[string]cachedLatency
-	latencyOnce  sync.Once
+	hostTraffic      procnet.TrafficMonitor
+	mcp              diagnosticMCP
+	networkMu        sync.RWMutex
+	shuttingDown     bool
+	database         *db.Database
+	ringLog          *logger.RingLogger
+	capDetector      *capability.Detector
+	modeCtrl         *mode.Controller
+	ruleEngine       *rules.Engine
+	failoverSM       *failover.StateMachine
+	appManager       *apps.Manager
+	analytics        *analytics.Collector
+	scenarios        *scenarios.Engine
+	diagnostics      *diagnostics.Generator
+	testRunner       *testrunner.Runner
+	testRunMu        sync.Mutex
+	desktopTests     desktopTestBridge
+	promptReportPath func(string) (string, error)
+	netmergeCtrl     *netmerge.Controller
+	ttlManager       *ttlmgr.Manager
+	wanMu            sync.RWMutex
+	wanCache         map[string]cachedWAN
+	latencyMu        sync.RWMutex
+	latencyCache     map[string]cachedLatency
+	latencyOnce      sync.Once
 
 	profileStore *profiles.Store
 	hotspotFile  string
@@ -784,6 +790,7 @@ func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 // adapter is "net-merge" and active routing rules are evaluated.
 func (s *NetPilotService) DiscoverApplications() []apps.ProcessInfo {
 	procs := s.appManager.Discover()
+	host := s.hostTraffic.Snapshot()
 	var rates map[int]float64
 	if s.netmergeCtrl != nil {
 		rates = s.netmergeCtrl.ProcessRates()
@@ -796,6 +803,10 @@ func (s *NetPilotService) DiscoverApplications() []apps.ProcessInfo {
 	for i := range procs {
 		if rate, ok := rates[procs[i].PID]; ok {
 			procs[i].NetworkMbps = &rate
+			procs[i].NetworkSource = "netpilot"
+		} else if rate, ok := host.Rates[procs[i].PID]; ok {
+			procs[i].NetworkMbps = &rate
+			procs[i].NetworkSource = host.Source
 		}
 		procs[i].AssignedNIC = defaultAdapter
 		if !isActive {
@@ -862,8 +873,12 @@ func (s *NetPilotService) RunAllScenarios() []scenarios.ScenarioResult {
 }
 
 // RunAllUnified executes all platform suites and scenarios in a single one-click run.
-func (s *NetPilotService) RunAllUnified(skipDisruptive bool) testrunner.UnifiedTestReport {
-	return s.testRunner.RunAllUnified(skipDisruptive, s.scenarios)
+func (s *NetPilotService) RunAllUnified(skipDisruptive bool, tetherAdapter string) testrunner.UnifiedTestReport {
+	s.testRunMu.Lock()
+	defer s.testRunMu.Unlock()
+	report := s.testRunner.RunAllUnified(skipDisruptive, s.scenarios, tetherAdapter)
+	s.testRunner.RunChecks(&report, "application", s.applicationChecks())
+	return report
 }
 
 // RunPlatformSuite executes a platform test suite.
@@ -2136,6 +2151,7 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Action routes must never run just because a client navigated to their URL.
 	switch path {
 	case "hotspot/apply", "hotspot/revert", "hotspot/auto", "speedtest/run", "profiles/apply",
+		"applications/inspect", "testrunner/run-all", "testrunner/export", "testrunner/desktop-result",
 		"notifications/test", "netmerge/toggle", "netmerge/autostart", "netmerge/limit",
 		"netmerge/cleanup", "netmerge/socks", "netmerge/routing-mode", "system/console",
 		"ttl/apply", "ttl/restore", "tools/ping", "tools/dns", "tools/port", "tools/wol",
@@ -2320,6 +2336,15 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "applications":
 		_ = json.NewEncoder(w).Encode(s.DiscoverApplications())
 
+	case path == "applications/traffic":
+		_ = json.NewEncoder(w).Encode(s.hostTraffic.Snapshot())
+
+	case path == "applications/inspect":
+		s.serveProcessInspection(w, r)
+
+	case path == "diagnostics/mcp":
+		s.serveDiagnosticMCP(w, r)
+
 	case path == "applications/icon" && r.Method == http.MethodGet:
 		pid, _ := strconv.Atoi(r.URL.Query().Get("pid"))
 		icon := s.appManager.Icon(pid, r.URL.Query().Get("executable"))
@@ -2402,9 +2427,19 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(rep)
 
 	case path == "testrunner/run-all":
-		skipDisruptive := r.URL.Query().Get("skipDisruptive") != "false"
-		rep := s.RunAllUnified(skipDisruptive)
-		_ = json.NewEncoder(w).Encode(rep)
+		var body struct {
+			Adapter string `json:"adapter"`
+		}
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
+		_ = json.NewEncoder(w).Encode(s.RunAllUnified(false, body.Adapter))
+
+	case path == "testrunner/desktop-result":
+		s.desktopTests.serveResult(w, r)
+
+	case path == "testrunner/export":
+		s.serveTestReportExport(w, r)
 
 	case path == "adapter-caps":
 		if r.Method == http.MethodPost {
