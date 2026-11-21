@@ -2,6 +2,7 @@ package nics
 
 import (
 	"fmt"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -12,6 +13,7 @@ type adapterInfo struct {
 	v4, v6  bool   // has an IPv4 / IPv6 default gateway (can reach the internet over that family)
 	virtual string // why this is not real network hardware; empty if it is
 	desc    string
+	mobile  bool
 }
 
 // IANA ifType values for real network hardware. Tunnels (131), PPP (23), "proprietary virtual"
@@ -50,6 +52,11 @@ func adapterInfos() (map[int]adapterInfo, error) {
 				continue
 			}
 			info := adapterInfo{desc: windows.UTF16PtrToString(a.Description)}
+			description := strings.ToLower(info.desc)
+			info.mobile = a.IfType == 243 || a.IfType == 244 ||
+				strings.Contains(description, "remote ndis") || strings.Contains(description, "rndis") ||
+				strings.Contains(description, "apple mobile device") ||
+				strings.Contains(description, "internet sharing device")
 			if !physicalIfType(a.IfType) {
 				info.virtual = fmt.Sprintf("tunnel/virtual interface type %d (%s)", a.IfType, info.desc)
 			}
@@ -72,10 +79,23 @@ func adapterInfos() (map[int]adapterInfo, error) {
 				cur := m[int(idx)]
 				cur.v4, cur.v6 = cur.v4 || info.v4, cur.v6 || info.v6
 				cur.virtual, cur.desc = info.virtual, info.desc
+				cur.mobile = cur.mobile || info.mobile
 				m[int(idx)] = cur
 			}
 		}
 		return m, nil
 	}
 	return nil, windows.ERROR_BUFFER_OVERFLOW
+}
+
+// MobileAdapterHints identifies Windows mobile broadband and USB-sharing drivers.
+func MobileAdapterHints() map[int]bool {
+	infos, _ := adapterInfos()
+	mobile := make(map[int]bool)
+	for index, info := range infos {
+		if info.mobile && info.virtual == "" {
+			mobile[index] = true
+		}
+	}
+	return mobile
 }

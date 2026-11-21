@@ -1,4 +1,5 @@
 import type { ProcessInfo } from './api/wails';
+import { rateValue, volumeValue } from './metricUnits';
 import { formatProcessRate, groupProcesses } from './processes';
 
 function checkProcessSort() {
@@ -30,9 +31,22 @@ export function listenForDesktopTests() {
     void fetch('/api/testrunner/desktop-result', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, passed: checkProcessSort() }),
+      body: JSON.stringify({ id, passed: event.type === 'netpilot:test-process-sort' ? checkProcessSort() : checkMetricUnits() }),
     }).catch(() => {});
   };
   window.addEventListener('netpilot:test-process-sort', respond);
-  return () => window.removeEventListener('netpilot:test-process-sort', respond);
+  window.addEventListener('netpilot:test-metric-units', respond);
+  return () => {
+    window.removeEventListener('netpilot:test-process-sort', respond);
+    window.removeEventListener('netpilot:test-metric-units', respond);
+  };
+}
+
+function checkMetricUnits() {
+  return volumeValue(1024, 'GiB') === 1
+    && volumeValue(1024, 'GB') === 1.073741824
+    && volumeValue(1, 'MB') === 1.048576
+    && rateValue(8, 'MB/s') === 1
+    && rateValue(1, 'Kbps') === 1000
+    && rateValue(1000, 'Gbps') === 1;
 }

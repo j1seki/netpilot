@@ -184,6 +184,15 @@ type RuleRecord struct {
 
 // SaveRule inserts or updates a routing rule.
 func (d *Database) SaveRule(r RuleRecord) error {
+	return d.saveRule(r, false)
+}
+
+// EditRule changes a policy while preserving usage recorded since the editor opened.
+func (d *Database) EditRule(r RuleRecord) error {
+	return d.saveRule(r, true)
+}
+
+func (d *Database) saveRule(r RuleRecord, preserveUsage bool) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -199,7 +208,7 @@ func (d *Database) SaveRule(r RuleRecord) error {
 		priority = excluded.priority,
 		bandwidth_limit_mbps = excluded.bandwidth_limit_mbps,
 		data_quota_mb = excluded.data_quota_mb,
-		data_used_mb = excluded.data_used_mb,
+		data_used_mb = CASE WHEN ? THEN rules.data_used_mb ELSE excluded.data_used_mb END,
 		custom_dns = excluded.custom_dns,
 		enabled = excluded.enabled,
 		updated_at = CURRENT_TIMESTAMP;
@@ -209,7 +218,15 @@ func (d *Database) SaveRule(r RuleRecord) error {
 		enabledInt = 1
 	}
 
-	_, err := d.db.Exec(query, r.ID, r.AppName, r.AppPath, r.DomainPattern, r.PreferredInterface, r.FallbackInterface, r.Priority, r.BandwidthLimitMbps, r.DataQuotaMB, r.DataUsedMB, r.CustomDNS, enabledInt)
+	_, err := d.db.Exec(query, r.ID, r.AppName, r.AppPath, r.DomainPattern, r.PreferredInterface, r.FallbackInterface, r.Priority, r.BandwidthLimitMbps, r.DataQuotaMB, r.DataUsedMB, r.CustomDNS, enabledInt, preserveUsage)
+	return err
+}
+
+// AddRuleUsage increments a rule's quota counter without modifying its policy.
+func (d *Database) AddRuleUsage(id string, mb float64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.db.Exec("UPDATE rules SET data_used_mb = data_used_mb + ? WHERE id = ?", mb, id)
 	return err
 }
 
@@ -353,6 +370,32 @@ func (d *Database) SaveAdapterCap(ac AdapterCapRecord) error {
 		enabledInt = 1
 	}
 	_, err := d.db.Exec(query, ac.InterfaceName, ac.RxLimitMbps, ac.TxLimitMbps, ac.DataQuotaMB, ac.DataUsedMB, enabledInt)
+	return err
+}
+
+// AddAdapterUsage records a counter delta without overwriting quota or cap edits.
+func (d *Database) AddAdapterUsage(adapter string, mb float64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.db.Exec("UPDATE adapter_caps SET data_used_mb = data_used_mb + ? WHERE interface_name = ? AND enabled = 1", mb, adapter)
+	return err
+}
+
+// SetAdapterQuota changes the quota independently of the counters and legacy rate fields.
+func (d *Database) SetAdapterQuota(adapter string, mb float64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.db.Exec(`
+		INSERT INTO adapter_caps (interface_name, data_quota_mb, enabled) VALUES (?, ?, 1)
+		ON CONFLICT(interface_name) DO UPDATE SET data_quota_mb = excluded.data_quota_mb,
+			enabled = 1, updated_at = CURRENT_TIMESTAMP`, adapter, mb)
+	return err
+}
+
+func (d *Database) ResetAdapterUsage(adapter string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.db.Exec("UPDATE adapter_caps SET data_used_mb = 0 WHERE interface_name = ?", adapter)
 	return err
 }
 

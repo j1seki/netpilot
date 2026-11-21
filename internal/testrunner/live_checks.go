@@ -150,10 +150,10 @@ func checkTetherLink(adapterName string) (TestStatus, string) {
 		if adapterName != "" {
 			return StatusBlocked, "Selected adapter was not found on this host"
 		}
-		return StatusBlocked, "No tether candidate found by name. Connect the phone and select its desktop adapter to test it."
+		return StatusSkipped, "Auto-detection found no USB or cellular adapter. Select your PC’s Wi-Fi or USB adapter to test a specific hotspot connection."
 	}
 	if len(candidates) > 1 {
-		return StatusBlocked, "Several adapters match tether naming. Select the phone's adapter to test it."
+		return StatusSkipped, "Several USB or cellular adapters were detected. Choose the adapter connected to your hotspot to run this check."
 	}
 	iface := candidates[0]
 	if iface.Flags&net.FlagUp == 0 {

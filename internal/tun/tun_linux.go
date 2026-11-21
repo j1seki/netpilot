@@ -1,6 +1,7 @@
 package tun
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -29,7 +30,10 @@ func configure(name string, _ int, ip4 netip.Prefix) (int, error) {
 		return idx, fmt.Errorf("bring up: %w", err)
 	}
 	for _, dst := range routes4 {
-		if err := netlink.RouteReplace(tunRoute(idx, dst)); err != nil {
+		if err := netlink.RouteAdd(tunRoute(idx, dst)); err != nil {
+			if errors.Is(err, unix.EEXIST) {
+				return idx, fmt.Errorf("route %s is already in use; check for an active VPN or another tunnel", dst)
+			}
 			return idx, fmt.Errorf("route %s: %w", dst, err)
 		}
 	}
@@ -39,7 +43,7 @@ func configure(name string, _ int, ip4 netip.Prefix) (int, error) {
 		logx.Printf("warning: IPv6 not captured: %v\n", err)
 	} else {
 		for _, dst := range routes6 {
-			if err := netlink.RouteReplace(tunRoute(idx, dst)); err != nil {
+			if err := netlink.RouteAdd(tunRoute(idx, dst)); err != nil {
 				logx.Printf("warning: IPv6 route %s: %v\n", dst, err)
 			}
 		}

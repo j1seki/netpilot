@@ -1,6 +1,7 @@
 package netmerge
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -71,6 +72,28 @@ func TestStopOwnedLeavesIndependentEngineRunning(t *testing.T) {
 	}
 	if !state.TakeMarker(dir, "off") {
 		t.Fatal("missing stop marker for engine started by this controller")
+	}
+}
+
+func TestCleanupStaleRefusesIndependentEngine(t *testing.T) {
+	dir := t.TempDir()
+	c := NewController(dir)
+	defer close(c.stopCh)
+	state.Write(dir, state.Status{PID: 12345, Updated: time.Now()})
+	if err := c.CleanupStale(); err == nil {
+		t.Fatal("cleanup accepted while the independent engine is active")
+	}
+	if current, ok := state.Read(dir); !ok || current.PID != 12345 {
+		t.Fatal("cleanup removed the independent engine's status")
+	}
+}
+
+func TestHasTunnelUplinkRequiresEnabledAddressFamily(t *testing.T) {
+	ipv6 := nics.Nic{IP6: net.ParseIP("2001:db8::1")}
+	ipv4 := nics.Nic{IP: net.ParseIP("192.0.2.1")}
+	if hasTunnelUplink(nil, true) || hasTunnelUplink([]nics.Nic{ipv6}, false) ||
+		!hasTunnelUplink([]nics.Nic{ipv6}, true) || !hasTunnelUplink([]nics.Nic{ipv4}, false) {
+		t.Fatal("tunnel startup accepted the wrong uplink set")
 	}
 }
 
@@ -208,5 +231,58 @@ func TestUpdateSchedulerFromDiscoveryDistinguishesEmptyScanFromError(t *testing.
 	}
 	if got := sched.Snapshot(); len(got) != 1 || !got[0].Present {
 		t.Fatalf("adapter should be re-added after a later non-empty scan: %+v", got)
+	}
+}
+
+type routeProbePolicy struct{ flow engine.FlowPolicy }
+
+func (p routeProbePolicy) Resolve(string, string, string) engine.FlowPolicy { return p.flow }
+func (p routeProbePolicy) ReportUsage(engine.FlowPolicy, int64, int64)      {}
+
+func TestRuleRouteProbeReportsPinnedSocketAndFallback(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	target := listener.Addr().(*net.TCPAddr)
+	scheduler := engine.NewScheduler([]nics.Nic{
+		{Name: "primary", IP: target.IP, Weight: 1},
+		{Name: "backup", IP: target.IP, Weight: 1},
+	})
+	balancer := engine.NewBalancer(scheduler)
+	ctrl := Controller{balancer: balancer, socksRunning: true}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	for _, test := range []struct{ preferred, fallback, want string }{
+		{"primary", "", "primary"},
+		{"missing", "backup", "backup"},
+	} {
+		balancer.SetPolicyResolver(routeProbePolicy{engine.FlowPolicy{
+			RuleID: "fixture", PreferredNIC: test.preferred, FallbackNIC: test.fallback,
+		}})
+		result, err := ctrl.TestRuleRoute(ctx, "example", "", target.IP.String(), target.Port)
+		if err != nil || result.RuleID != "fixture" || result.Adapter != test.want ||
+			result.SourceIP != target.IP.String() || result.Peer != target.String() {
+			t.Fatalf("live probe for %+v returned %+v, %v", test, result, err)
+		}
+		if tcp, ok := listener.(*net.TCPListener); ok {
+			_ = tcp.SetDeadline(time.Now().Add(time.Second))
+		}
+		conn, err := listener.Accept()
+		if err != nil {
+			t.Fatalf("probe did not open an actual connection: %v", err)
+		}
+		_ = conn.Close()
+	}
+
+	balancer.SetPolicyResolver(routeProbePolicy{engine.FlowPolicy{RuleID: "fixture", PreferredNIC: "missing"}})
+	if _, err := ctrl.TestRuleRoute(ctx, "example", "", target.IP.String(), target.Port); err == nil {
+		t.Fatal("probe silently escaped a missing strict pin")
+	}
+	ctrl.socksRunning = false
+	if _, err := ctrl.TestRuleRoute(ctx, "example", "", target.IP.String(), target.Port); err == nil {
+		t.Fatal("probe succeeded with the local forwarder stopped")
 	}
 }

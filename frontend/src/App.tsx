@@ -8,6 +8,7 @@ import {
   engineVersionLabel,
 } from './api/wails';
 import { listenForDesktopTests } from './desktopTests';
+import { NotificationBanner } from './components/Notifications';
 import { Sparkline } from './components/Charts';
 import { DashboardView } from './views/DashboardView';
 import { NetMergeView } from './views/NetMergeView';
@@ -146,6 +147,7 @@ export const App: React.FC = () => {
       color: '#fafafa',
       overflow: 'hidden',
     }}>
+      <NotificationBanner />
       {/* Top header */}
       <header className="app-header" style={{
         backgroundColor: '#0c0c0f',
@@ -218,8 +220,8 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Center: Live Host Bandwidth Telemetry + Quick Power Switch */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        {/* Center: Live host bandwidth */}
+        <div className="app-bandwidth">
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -236,12 +238,12 @@ export const App: React.FC = () => {
             <div className="font-mono" style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '11.5px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#38bdf8', fontWeight: 600 }}>
                 <ArrowDown size={12} />
-                <span>{activeRxStr}</span>
+                <span className="app-bandwidth-rate">{activeRxStr}</span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#f59e0b', fontWeight: 600 }}>
                 <ArrowUp size={12} />
-                <span>{activeTxStr}</span>
+                <span className="app-bandwidth-rate">{activeTxStr}</span>
               </div>
             </div>
           </div>
@@ -288,7 +290,7 @@ export const App: React.FC = () => {
         )}
         {visitedTabs.rules && (
           <div style={{ display: currentTab === 'rules' ? 'block' : 'none' }}>
-            <RoutingRules />
+            <RoutingRules active={currentTab === 'rules'} goToProcesses={() => switchTab('dashboard')} />
           </div>
         )}
         {visitedTabs.usage && (

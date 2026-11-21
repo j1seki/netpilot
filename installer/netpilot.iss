@@ -55,8 +55,8 @@ Source: "THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 [Icons]
-Name: "{autoprograms}\NetPilot"; Filename: "{app}\netpilot.exe"; IconFilename: "{app}\netpilot.ico"; Comment: "NetPilot - Multi-Network Manager & Bandwidth Aggregator"
-Name: "{autodesktop}\NetPilot"; Filename: "{app}\netpilot.exe"; IconFilename: "{app}\netpilot.ico"; Tasks: desktopicon
+Name: "{autoprograms}\NetPilot"; Filename: "{app}\netpilot.exe"; IconFilename: "{app}\netpilot.ico"; AppUserModelID: "com.netpilot.desktop"; Comment: "NetPilot - Multi-Network Manager & Bandwidth Aggregator"
+Name: "{autodesktop}\NetPilot"; Filename: "{app}\netpilot.exe"; IconFilename: "{app}\netpilot.ico"; AppUserModelID: "com.netpilot.desktop"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\netpilot.exe"; Description: "Launch NetPilot now"; Flags: nowait postinstall skipifsilent

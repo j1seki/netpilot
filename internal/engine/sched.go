@@ -160,14 +160,15 @@ const (
 // failover in Backup mode. Automatic mode discounts idle TCP sockets; static mode
 // retains weighted least-open-flows. Data transfer accounting stays lock-free.
 type Scheduler struct {
-	mu         sync.Mutex
-	slots      []*Slot
-	auto       bool
-	mode       RoutingMode
-	primaryNIC string
-	backupNIC  string
-	limits     map[string]float64 // adapter name -> Mbit/s, 0 or absent = unlimited
-	now        func() time.Time
+	mu          sync.Mutex
+	slots       []*Slot
+	auto        bool
+	mode        RoutingMode
+	primaryNIC  string
+	backupNIC   string
+	limits      map[string]float64 // configured caps in Mbit/s
+	quotaLimits map[string]float64 // temporary quota caps in Mbit/s
+	now         func() time.Time
 
 	latencyAware bool
 	probe4       []string
@@ -321,7 +322,7 @@ func (s *Scheduler) SetLimit(name string, mbitPerSec float64) {
 	}
 	for _, sl := range s.slots {
 		if sl.key == name {
-			sl.setLimit(mbitPerSec)
+			sl.setLimit(s.effectiveLimit(sl.key))
 		}
 	}
 }
@@ -337,8 +338,33 @@ func (s *Scheduler) SetLimits(limits map[string]float64) {
 		}
 	}
 	for _, sl := range s.slots {
-		sl.setLimit(s.limits[sl.key])
+		sl.setLimit(s.effectiveLimit(sl.key))
 	}
+}
+
+// SetQuotaLimits overlays the lower of each manual cap and its quota throttle.
+func (s *Scheduler) SetQuotaLimits(limits map[string]float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.quotaLimits = make(map[string]float64, len(limits))
+	for name, rate := range limits {
+		if name != "" && rate > 0 {
+			s.quotaLimits[name] = rate
+		}
+	}
+	for _, sl := range s.slots {
+		if next := s.effectiveLimit(sl.key); next != sl.limitMbps() {
+			sl.setLimit(next)
+		}
+	}
+}
+
+func (s *Scheduler) effectiveLimit(name string) float64 {
+	configured, quota := s.limits[name], s.quotaLimits[name]
+	if quota > 0 && (configured == 0 || quota < configured) {
+		return quota
+	}
+	return configured
 }
 
 // Limits returns the caps by adapter name in Mbit/s, for saving and for `net-merge status`.
@@ -384,7 +410,7 @@ func (s *Scheduler) Update(nics []nics.Nic) {
 		if found == nil {
 			sl := &Slot{Name: n.Name, Index: n.Index, key: n.Name, weight: [2]float64{n.Weight, n.Weight}, present: true}
 			sl.addr.Store(na)
-			sl.setLimit(s.limits[n.Name])
+			sl.setLimit(s.effectiveLimit(n.Name))
 			s.slots = append(s.slots, sl)
 			continue
 		}
@@ -557,8 +583,12 @@ func (s *Scheduler) AcquireFor(f Family, skip map[string]struct{}) *Slot {
 
 // AcquireForAllowed is AcquireFor restricted to adapter names in allowed. A nil or empty
 // allowed set means every adapter. It backs per-application adapter pinning: the caller
-// offers the preferred adapter first, then the fallback, then the full pool.
+// offers the preferred adapter first, then any configured fallback.
 func (s *Scheduler) AcquireForAllowed(f Family, allowed, skip map[string]struct{}) *Slot {
+	return s.acquireFor(f, allowed, skip, false, false)
+}
+
+func (s *Scheduler) acquireFor(f Family, allowed, skip map[string]struct{}, requireUsable, fastest bool) *Slot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -585,6 +615,9 @@ func (s *Scheduler) AcquireForAllowed(f Family, allowed, skip map[string]struct{
 		case sl.state[f] == stateUp:
 			t = 0
 		}
+		if requireUsable && (t == 2 || fastest && !sl.rttOK[f]) {
+			continue
+		}
 		tiers[t] = append(tiers[t], sl)
 	}
 	var pool []*Slot
@@ -600,14 +633,12 @@ func (s *Scheduler) AcquireForAllowed(f Family, allowed, skip map[string]struct{
 	// In Backup (active-passive failover) mode, always pick the primary adapter if it is in the
 	// best healthy tier; only when the primary fails or cools down does traffic switch to the
 	// secondary (or first healthy fallback) adapter.
-	if s.mode == ModeBackup {
+	if s.mode == ModeBackup && !fastest {
 		var best *Slot
-		if s.primaryNIC != "" {
-			for _, sl := range pool {
-				if sl.Name == s.primaryNIC {
-					best = sl
-					break
-				}
+		for _, sl := range pool {
+			if sl.Name == s.primaryNIC || s.primaryNIC == "" && sl.Name != s.backupNIC {
+				best = sl
+				break
 			}
 		}
 		if best == nil && s.backupNIC != "" {
@@ -643,6 +674,9 @@ func (s *Scheduler) AcquireForAllowed(f Family, allowed, skip map[string]struct{
 			// latency-sensitive flows avoid a congested cellular link without starving it
 			// when it is genuinely the only low-load option.
 			score += (sl.rttEWMA[f] + 0.5*sl.jitterEWMA[f]) / 20
+		}
+		if fastest {
+			score = sl.rttEWMA[f]
 		}
 		if score < bestScore {
 			best, bestScore = sl, score
@@ -716,6 +750,7 @@ func (s *Scheduler) Fail(sl *Slot, f Family, cooldown time.Duration) {
 func (s *Scheduler) Snapshot() []SlotStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
 	out := make([]SlotStats, 0, len(s.slots))
 	for _, sl := range s.slots {
 		a := sl.addr.Load()
@@ -737,9 +772,15 @@ func (s *Scheduler) Snapshot() []SlotStats {
 		}
 		if a.ip4 != nil {
 			st.IP, st.State = a.ip4.String(), sl.state[Fam4].String()
+			if now.Before(sl.downUntil[Fam4]) {
+				st.State = stateDown.String()
+			}
 		}
 		if a.ip6 != nil {
 			st.IP6, st.State6 = a.ip6.String(), sl.state[Fam6].String()
+			if now.Before(sl.downUntil[Fam6]) {
+				st.State6 = stateDown.String()
+			}
 		}
 		out = append(out, st)
 	}

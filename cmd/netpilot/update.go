@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"netpilot/internal/branding"
-	"netpilot/internal/notify"
 	"netpilot/internal/update"
 )
 
@@ -428,12 +427,11 @@ func (s *NetPilotService) updateLoop(ctx context.Context) {
 		}
 		st := s.checkForUpdate(ctx, false)
 		if st.UpdateAvailable && st.Latest != "" {
-			if settings.LastNotified != st.Latest {
+			if settings.LastNotified != st.Latest && s.getNotifications().Preferences.Updates {
 				body := fmt.Sprintf("NetPilot %s is available on the %s channel. Open NetPilot to install it.",
 					st.Latest, channelLabel(update.Channel(st.Channel)))
-				if err := notify.Send("NetPilot update available", body); err == nil {
-					s.markUpdateNotified(st.Latest)
-				}
+				_ = s.publishNotification("updates", "NetPilot update available", body)
+				s.markUpdateNotified(st.Latest)
 			}
 			delay = updateCheckInterval
 		} else if st.Error != "" {

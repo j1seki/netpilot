@@ -25,11 +25,18 @@ import (
 func (s *NetPilotService) applicationChecks() []testrunner.Check {
 	return []testrunner.Check{
 		{Name: "App Inspection API", Run: checkAppInspection},
+		{Name: "Application rule editing and persistence", Run: checkRuleEditor},
+		{Name: "Connected mode switch, restart status and saved profiles", Run: checkModeAndProfiles},
+		{Name: "Usage history, CSV and selective reset", Run: checkMetricsHistory},
+		{Name: "Adapter quota and manual speed cap", Run: checkAdapterQuota},
+		{Name: "Notification preferences and in-app delivery", Run: checkNotificationPreferences},
+		{Name: "Desktop notification facility", Run: checkNativeNotificationFacility},
 		{Name: "Mobile profile and routing settings", Run: checkHotspotProfile},
 		{Name: "Configuration backup, restore and persistence", Run: checkConfigRoundTrip},
 		{Name: "JSON report export", Run: checkReportExport},
 		{Name: "MCP start, authentication and stop", Run: s.checkMCP},
 		{Name: "Desktop process network sort", Run: s.desktopTests.checkSort},
+		{Name: "Desktop Metrics units", Run: s.desktopTests.checkMetricUnits},
 		{Name: "Desktop Developer Tools binding", Run: s.checkDevTools},
 	}
 }
@@ -46,6 +53,24 @@ func checkAppInspection() (testrunner.TestStatus, string) {
 	if pid.Name == "" {
 		return testrunner.StatusFail, "Active Processes did not include the running NetPilot executable"
 	}
+	database, err := db.Open(":memory:")
+	if err != nil {
+		return testrunner.StatusFail, err.Error()
+	}
+	defer database.Close()
+	for _, rule := range []db.RuleRecord{
+		{ID: "paused", AppName: pid.Name, PreferredInterface: "paused-link", Priority: 90},
+		{ID: "destination", DomainPattern: "*.fixture.test", PreferredInterface: "test-link", Priority: 80, Enabled: true, CustomDNS: "1.1.1.1"},
+		{ID: "app", AppName: pid.Name, PreferredInterface: "net-merge", Priority: 10, Enabled: true},
+	} {
+		if err := database.SaveRule(rule); err != nil {
+			return testrunner.StatusFail, err.Error()
+		}
+	}
+	svc.ruleEngine, err = rules.NewEngine(database)
+	if err != nil {
+		return testrunner.StatusFail, err.Error()
+	}
 	target, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return testrunner.StatusBlocked, err.Error()
@@ -57,7 +82,9 @@ func checkAppInspection() (testrunner.TestStatus, string) {
 	}
 	defer conn.Close()
 
-	body, _ := json.Marshal(pid)
+	body, _ := json.Marshal(map[string]any{
+		"pid": pid.PID, "name": pid.Name, "executable": pid.Executable, "destination": "host.fixture.test:443",
+	})
 	req := httptest.NewRequest(http.MethodPost, "/api/applications/inspect", bytes.NewReader(body))
 	response := httptest.NewRecorder()
 	svc.ServeHTTP(response, req)
@@ -71,9 +98,17 @@ func checkAppInspection() (testrunner.TestStatus, string) {
 	if report.Process.PID != pid.PID || report.Process.CommandLine != "" || report.DNSEndpoints == nil || report.SystemResolvers == nil || report.Activity == nil {
 		return testrunner.StatusFail, "Inspector returned an unexpected process, private arguments or missing fields"
 	}
+	matches := report.RuleMatches
+	if report.RuleDestination != "host.fixture.test" || report.RuleScope != "standby" || report.SavedRuleDNS != "1.1.1.1" ||
+		len(matches) != 3 || matches[0].Rule.ID != "paused" || matches[0].Result != "disabled" ||
+		matches[1].Rule.ID != "destination" || matches[1].Result != "selected" || matches[1].MatchedBy != "destination" ||
+		matches[2].Rule.ID != "app" || matches[2].Result != "shadowed" ||
+		svc.Resolve(pid.Name, pid.Executable, report.RuleDestination).RuleID != matches[1].Rule.ID {
+		return testrunner.StatusFail, "Inspector rule preview did not agree with the engine's match order"
+	}
 	for _, socket := range report.Sockets {
 		if socket.Protocol == "TCP" && socket.Local == conn.LocalAddr().String() && socket.Remote == target.Addr().String() {
-			return testrunner.StatusPass, fmt.Sprintf("Inspector API found the test TCP connection and reported %d configured IPv4/IPv6 DNS resolver address(es)", len(report.SystemResolvers))
+			return testrunner.StatusPass, fmt.Sprintf("Inspector found the test TCP connection, reported %d system DNS resolver address(es), and verified selected, disabled, and lower-priority rules", len(report.SystemResolvers))
 		}
 	}
 	if report.SocketError != "" {
@@ -114,7 +149,35 @@ func checkHotspotProfile() (testrunner.TestStatus, string) {
 	if err != nil || reverted.Enabled || cfg.MTU != initial.MTU || cfg.IPv6Mode != initial.IPv6Mode || cfg.RoutingMode != initial.RoutingMode {
 		return testrunner.StatusFail, fmt.Sprintf("Mobile profile did not restore the prior tunnel settings: %v", err)
 	}
-	return testrunner.StatusPass, "Preview, apply and revert preserved the Backup adapter choices and restored MTU and IPv6 in a temporary NetPilot configuration"
+	if _, err := svc.SetHotspotAutoApply(true); err != nil {
+		return testrunner.StatusFail, err.Error()
+	}
+	defaults, err := svc.resetHotspot(true)
+	cfg = controller.GetConfig()
+	if err != nil || defaults.AutoApply || defaults.Enabled || cfg.MTU != 9000 || cfg.IPv6Mode != "auto" ||
+		cfg.PrimaryAdapter != initial.PrimaryAdapter || cfg.RoutingMode != "backup" {
+		return testrunner.StatusFail, "Mobile defaults changed other settings or left auto-apply enabled"
+	}
+	settings := cfg.MobileSettings()
+	settings.MTU, settings.IPv6Mode, settings.Scheduling = 1375, "on", "low-latency"
+	settings.ProbeTargetsV4 = []string{"192.0.2.10:443"}
+	if _, err := svc.saveMobileSettings(mobileSettingsRequest{MobileSettings: settings}); err != nil {
+		return testrunner.StatusFail, "Apply customized Mobile settings: " + err.Error()
+	}
+	custom := controller.GetConfig()
+	if custom.MTU != settings.MTU || custom.IPv6Mode != settings.IPv6Mode || custom.Scheduling != settings.Scheduling ||
+		!slices.Equal(custom.ProbeTargetsV4, settings.ProbeTargetsV4) || custom.RoutingMode != initial.RoutingMode {
+		return testrunner.StatusFail, "Combined Mobile settings did not save together or changed Backup mode"
+	}
+	if _, err := svc.RevertHotspot(ctx); err != nil {
+		return testrunner.StatusFail, "Restore customized Mobile settings: " + err.Error()
+	}
+	restored := controller.GetConfig()
+	if restored.MTU != cfg.MTU || restored.IPv6Mode != cfg.IPv6Mode || restored.Scheduling != cfg.Scheduling ||
+		!slices.Equal(restored.ProbeTargetsV4, cfg.ProbeTargetsV4) {
+		return testrunner.StatusFail, "Restore did not restore all Mobile fields"
+	}
+	return testrunner.StatusPass, "Verified preset preview, customized MTU, IPv6, scheduling and probes, and restoration without changing the Backup adapters"
 }
 
 func checkConfigRoundTrip() (testrunner.TestStatus, string) {

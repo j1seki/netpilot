@@ -14,6 +14,7 @@ type FlowPolicy struct {
 	AppName            string  `json:"appName,omitempty"`
 	AppPath            string  `json:"appPath,omitempty"`
 	PreferredNIC       string  `json:"preferredNic,omitempty"`
+	CustomDNS          string  `json:"customDns,omitempty"`
 	FallbackNIC        string  `json:"fallbackNic,omitempty"`
 	BandwidthLimitMbps float64 `json:"bandwidthLimitMbps,omitempty"`
 	QuotaExceeded      bool    `json:"quotaExceeded,omitempty"`
@@ -24,7 +25,7 @@ type FlowPolicy struct {
 // final byte counts so per-application quotas can be maintained.
 type PolicyResolver interface {
 	Resolve(appName, appPath, destination string) FlowPolicy
-	ReportUsage(appName string, bytesIn, bytesOut int64)
+	ReportUsage(policy FlowPolicy, bytesIn, bytesOut int64)
 }
 
 // SetPolicyResolver installs (or clears, with nil) the per-application policy source.
@@ -32,6 +33,12 @@ func (b *Balancer) SetPolicyResolver(r PolicyResolver) {
 	b.policyMu.Lock()
 	b.policy = r
 	b.policyMu.Unlock()
+}
+
+func (b *Balancer) HasPolicyResolver() bool {
+	b.policyMu.RLock()
+	defer b.policyMu.RUnlock()
+	return b.policy != nil
 }
 
 func (b *Balancer) resolvePolicy(appName, appPath, destination string) FlowPolicy {
@@ -46,12 +53,12 @@ func (b *Balancer) resolvePolicy(appName, appPath, destination string) FlowPolic
 	return p
 }
 
-func (b *Balancer) reportUsage(appName string, in, out int64) {
+func (b *Balancer) reportUsage(policy FlowPolicy, in, out int64) {
 	b.policyMu.RLock()
 	r := b.policy
 	b.policyMu.RUnlock()
-	if r != nil && appName != "" {
-		r.ReportUsage(appName, in, out)
+	if r != nil && policy.RuleID != "" {
+		r.ReportUsage(policy, in, out)
 	}
 }
 
@@ -127,7 +134,7 @@ func appFromContext(ctx context.Context) (string, string) {
 }
 
 // DialPinnedFor is DialPinned with a per-application policy: the preferred adapter is tried
-// first, then the fallback, then the normal pool.
+// first, then an explicitly configured fallback.
 func (b *Balancer) DialPinnedFor(ctx context.Context, host string, port int, policy FlowPolicy) (net.Conn, error) {
 	c, sl, f, err := b.DialTCPFor(ctx, host, port, policy)
 	if err != nil {
@@ -140,7 +147,7 @@ func (b *Balancer) DialPinnedFor(ctx context.Context, host string, port int, pol
 		return nil, &dialError{rep: repFailure, err: errNotTCP}
 	}
 	traffic, endTraffic := b.trackProcess(policy.PID)
-	b.recordProcessTCP(policy.PID, host, port, sl.Name)
+	b.recordProcessTCP(policy.PID, host, port, sl.Name, policy.RuleID)
 	return &slotConn{
 		TCPConn:    tcp,
 		sl:         sl,
@@ -148,11 +155,36 @@ func (b *Balancer) DialPinnedFor(ctx context.Context, host string, port int, pol
 		s:          b.S,
 		activity:   b.S.track(sl, f),
 		limiter:    newFlowLimiter(policy.BandwidthLimitMbps),
-		appName:    policy.AppName,
+		policy:     policy,
 		onClose:    b.reportUsage,
 		traffic:    traffic,
 		endTraffic: endTraffic,
 	}, nil
+}
+
+// acquirePolicySlot offers the preferred target first and the explicit fallback next.
+// The default pool keeps its usual recovery behavior. Explicit targets require a usable link.
+func (b *Balancer) acquirePolicySlot(f Family, policy FlowPolicy, tried map[string]struct{}) *Slot {
+	for _, target := range []string{policy.PreferredNIC, policy.FallbackNIC} {
+		switch target {
+		case "", "ALL", "net-merge":
+			if target == "" && policy.PreferredNIC != "" {
+				continue
+			}
+			if sl := b.S.AcquireFor(f, tried); sl != nil {
+				return sl
+			}
+		case "FASTEST":
+			if sl := b.S.acquireFor(f, nil, tried, true, true); sl != nil {
+				return sl
+			}
+		default:
+			if sl := b.S.acquireFor(f, map[string]struct{}{target: {}}, tried, true, false); sl != nil {
+				return sl
+			}
+		}
+	}
+	return nil
 }
 
 const relayFailCooldown = 15 * time.Second

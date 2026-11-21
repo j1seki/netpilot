@@ -297,6 +297,7 @@ func main() {
 
 	mainWin := app.Window.NewWithOptions(desktopWindowOptions(*startHidden && isLinuxTrayHostAvailable()))
 	service.desktopTests.send = mainWin.ExecJS
+	service.copyText = app.Clipboard.SetText
 	service.promptReportPath = func(filename string) (string, error) {
 		return app.Dialog.SaveFile().AttachToWindow(mainWin).AddFilter("JSON report", "*.json").
 			SetFilename(filename).CanCreateDirectories(true).PromptForSingleSelection()
@@ -429,7 +430,7 @@ func main() {
 
 	trayMenu.AddSeparator()
 
-	// 6. Original net-merge checkboxes: Use all adapters (IPv6 auto), Pause on single connection, Start at sign-in
+	// 6. Adapter preferences and desktop startup.
 	useAllItem := trayMenu.AddCheckbox("Use all adapters (IPv6 only if every adapter has it)", initCfg.IPv6Mode != "on")
 	useAllItem.OnClick(func(_ *application.Context) {
 		cur := netmergeCtrl.GetConfig()
@@ -439,15 +440,6 @@ func main() {
 		}
 		_ = netmergeCtrl.SetIPv6Mode(nextMode)
 		useAllItem.SetChecked(nextMode != "on")
-		trayMenu.Update()
-	})
-
-	pauseSingleItem := trayMenu.AddCheckbox("Pause when there is only one connection", initCfg.AutoPause)
-	pauseSingleItem.OnClick(func(_ *application.Context) {
-		cur := netmergeCtrl.GetConfig()
-		next := !cur.AutoPause
-		_ = netmergeCtrl.SetAutoPause(next)
-		pauseSingleItem.SetChecked(next)
 		trayMenu.Update()
 	})
 
@@ -518,7 +510,6 @@ func main() {
 			backupModeItem.SetChecked(cfg.RoutingMode == "backup")
 			backupModeItem.SetEnabled(cfg.EngineSource == "builtin")
 			useAllItem.SetChecked(cfg.IPv6Mode != "on")
-			pauseSingleItem.SetChecked(cfg.AutoPause)
 			autostartItem.SetChecked(st.Autostart)
 			autostartItem.SetEnabled(liveMode)
 

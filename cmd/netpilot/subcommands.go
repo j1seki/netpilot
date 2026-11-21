@@ -213,7 +213,7 @@ func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer
 		return nil, nil, err
 	}
 	if len(ns) == 0 {
-		return nil, nil, fmt.Errorf("no usable IPv4 adapters found (try: netpilot list)")
+		return nil, nil, fmt.Errorf("no eligible uplinks found (try: netpilot list)")
 	}
 	sched := engine.NewScheduler(ns)
 	sched.SetAuto(c.auto && len(c.weights) == 0)
@@ -239,6 +239,19 @@ func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer
 		return nil, nil, fmt.Errorf(`-ipv6 must be auto, on or off, got %q`, c.ipv6)
 	}
 	bal.SetV6Mode(v6)
+	if !bal.V6Allowed() {
+		hasIPv4 := false
+		for _, adapter := range ns {
+			if adapter.IP != nil {
+				hasIPv4 = true
+				break
+			}
+		}
+		if !hasIPv4 {
+			return nil, nil, fmt.Errorf("no eligible IPv4 adapter and IPv6 forwarding is unavailable")
+		}
+	}
+	sched.SetQuotaLimits(state.ReadQuotaLease(c.stateDir, time.Now()))
 
 	c.since = time.Now()
 	go sched.RunProbes(nil)
@@ -252,6 +265,7 @@ func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer
 	go func() {
 		last := time.Now()
 		for now := range time.Tick(time.Second) {
+			sched.SetQuotaLimits(state.ReadQuotaLease(c.stateDir, now))
 			sched.Tick(now.Sub(last))
 			last = now
 			if mode != nil {
@@ -269,7 +283,7 @@ func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer
 					}
 					state.Write(c.stateDir, state.Status{
 						Version: "net-merge " + netmerge.EmbeddedVersion() + " (NetPilot engine)", EngineSource: "builtin",
-						RoutingMode: c.mode, PrimaryAdapter: pri, SecondaryAdapter: sec,
+						RoutingMode: c.mode, MTU: c.mtu, PrimaryAdapter: pri, SecondaryAdapter: sec,
 						PID:         os.Getpid(),
 						Mode:        m,
 						V6:          bal.V6State(),
@@ -417,7 +431,7 @@ func nmCmdRun(args []string) {
 	// Write status immediately so callers waiting for activation see it right away
 	state.Write(c.stateDir, state.Status{
 		Version: "net-merge " + netmerge.EmbeddedVersion() + " (NetPilot engine)", EngineSource: "builtin",
-		RoutingMode: c.mode, PrimaryAdapter: c.primary, SecondaryAdapter: c.secondary,
+		RoutingMode: c.mode, MTU: c.mtu, PrimaryAdapter: c.primary, SecondaryAdapter: c.secondary,
 		PID:     os.Getpid(),
 		Mode:    "system-wide",
 		V6:      bal.V6State(),

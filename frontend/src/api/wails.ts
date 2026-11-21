@@ -93,6 +93,21 @@ export interface ProcessInfo {
   quotaExceeded?: boolean;
 }
 
+export interface ProcessRuleMatch {
+  rule: RuleRecord;
+  matchedBy: string;
+  result: 'selected' | 'shadowed' | 'disabled';
+}
+
+export interface RuleRouteProbe {
+  ruleId: string;
+  preferred: string;
+  fallback?: string;
+  adapter: string;
+  sourceIp: string;
+  peer: string;
+}
+
 export interface ProcessInspection {
   at: string;
   process: ProcessInfo;
@@ -100,9 +115,12 @@ export interface ProcessInspection {
   socketError?: string;
   dnsEndpoints: string[];
   systemResolvers: string[];
+  ruleMatches: ProcessRuleMatch[];
+  ruleDestination: string;
+  ruleScope: 'system' | 'socks' | 'separate' | 'standby';
   savedRuleDns?: string;
   activityEnabled: boolean;
-  activity: { at: string; protocol: string; destination: string; adapter: string; dnsQuestion?: string }[];
+  activity: { at: string; protocol: string; destination: string; adapter: string; dnsQuestion?: string; ruleId?: string }[];
 }
 
 export interface DiagnosticMCPStatus {
@@ -236,6 +254,19 @@ export interface NetMergeBinaryInfo {
   releaseTag?: string;
 }
 
+export interface NotificationPreferences {
+  desktop: boolean;
+  links: boolean;
+  quotas: boolean;
+  updates: boolean;
+}
+
+export interface NotificationStatus {
+  preferences: NotificationPreferences;
+  platform: string;
+  latest?: { title: string; body: string; at: string };
+}
+
 export interface NetMergeConfig {
   autoPause: boolean;
   autoWeight: boolean;
@@ -276,6 +307,8 @@ export interface NetMergeStatus {
   binary?: NetMergeBinaryInfo;
   runningVersion?: string;
   runningSource?: NetMergeEngineSource;
+  runningMtu?: number;
+  modeChangePending?: boolean;
   restartForMode?: boolean;
   systemAppRules?: boolean;
 }
@@ -572,8 +605,23 @@ export interface HotspotProfile {
   ipv6Mode: string;
 }
 
+export interface MobileTunnelSettings {
+  mtu: number;
+  ipv6Mode: string;
+  scheduling: 'balanced' | 'low-latency';
+  probeTargetsV4?: string[];
+  probeTargetsV6?: string[];
+}
+
+export interface MobileSettingsRequest extends MobileTunnelSettings {
+  adapter: string;
+  autoApply: boolean;
+  profile: string;
+}
+
 export interface HotspotStatus {
   status: HotspotState;
+  defaults: MobileTunnelSettings;
   adapters: string[];
   profiles: HotspotProfile[];
   available: boolean;
@@ -698,15 +746,25 @@ export const api = {
     return requireApi(res, 'diagnostics/mcp');
   },
 
-  async inspectApplication(process: Pick<ProcessInfo, 'pid' | 'name' | 'executable'>, signal: AbortSignal): Promise<ProcessInspection> {
+  async inspectApplication(process: Pick<ProcessInfo, 'pid' | 'name' | 'executable'>, signal: AbortSignal, destination = ''): Promise<ProcessInspection> {
     const { pid, name, executable } = process;
     const res = await fetchApi<ProcessInspection>('applications/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pid, name, executable }),
+      body: JSON.stringify({ pid, name, executable, destination }),
       signal,
     });
     return requireApi(res, 'applications/inspect');
+  },
+
+  async testApplicationRule(process: Pick<ProcessInfo, 'pid' | 'name' | 'executable'>, destination: string): Promise<RuleRouteProbe> {
+    const { pid, name, executable } = process;
+    const res = await fetchApi<RuleRouteProbe>('applications/test-route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pid, name, executable, destination }),
+    });
+    return requireApi(res, 'applications/test-route');
   },
 
   async getRules(): Promise<RuleRecord[]> {
@@ -738,11 +796,11 @@ export const api = {
     return requireApi(res, `suite?suite=${suite}`);
   },
 
-  async runAllUnified(adapter = ''): Promise<UnifiedTestReport> {
+  async runAllUnified(adapter = '', skipDisruptive = false): Promise<UnifiedTestReport> {
     const res = await fetchApi<UnifiedTestReport>('testrunner/run-all', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ adapter }),
+      body: JSON.stringify({ adapter, skipDisruptive }),
     });
     return requireApi(res, 'testrunner/run-all');
   },
@@ -791,6 +849,14 @@ export const api = {
   async getAdapterCaps(): Promise<AdapterCapRecord[]> {
     const res = await fetchApi<AdapterCapRecord[]>('adapter-caps');
     return requireApi(res, 'adapter-caps');
+  },
+
+  async updateAdapterQuota(adapter: string, change: { quotaMb: number } | { reset: true }): Promise<void> {
+    await fetchApi('adapter-caps/quota', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adapter, ...change }),
+    });
   },
 
   async saveAdapterCap(cap: AdapterCapRecord): Promise<void> {
@@ -1074,6 +1140,14 @@ export const api = {
     return requireApi(res, 'hotspot');
   },
 
+  async saveMobileSettings(settings: MobileSettingsRequest): Promise<HotspotState> {
+    return requireApi(await fetchApi<HotspotState>('mobile/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    }), 'mobile/settings');
+  },
+
   async applyHotspot(profile: string, dryRun: boolean = false, adapters: string[] = []): Promise<HotspotState> {
     const res = await fetchApi<HotspotState>('hotspot/apply', {
       method: 'POST',
@@ -1081,6 +1155,18 @@ export const api = {
       body: JSON.stringify({ profile, dryRun, adapters }),
     });
     return requireApi(res, 'hotspot/apply');
+  },
+
+  async resetHotspotDefaults(): Promise<HotspotState> {
+    return requireApi(await fetchApi<HotspotState>('hotspot/defaults', { method: 'POST' }), 'hotspot/defaults');
+  },
+
+  async saveSchedulerSettings(scheduling: string, probeTargetsV4: string[], probeTargetsV6: string[]): Promise<NetMergeConfig> {
+    return requireApi(await fetchApi<NetMergeConfig>('netmerge/scheduler', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scheduling, probeTargetsV4, probeTargetsV6 }),
+    }), 'netmerge/scheduler');
   },
 
   async revertHotspot(): Promise<HotspotState> {
@@ -1168,8 +1254,25 @@ export const api = {
     return requireApi(res, 'update/install');
   },
 
-  async sendTestNotification(): Promise<void> {
-    await fetchApi<void>('notifications/test', { method: 'POST' });
+  async getNotifications(): Promise<NotificationStatus> {
+    return requireApi(await fetchApi<NotificationStatus>('notifications'), 'notifications');
+  },
+
+  async saveNotifications(preferences: NotificationPreferences): Promise<NotificationStatus> {
+    return requireApi(await fetchApi<NotificationStatus>('notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(preferences),
+    }), 'notifications');
+  },
+
+  async openNotificationSettings(): Promise<void> {
+    await fetchApi('notifications/system-settings', { method: 'POST' });
+  },
+
+  async sendTestNotification(): Promise<{ desktop: 'submitted' | 'off' | 'unavailable'; desktopError?: string }> {
+    return requireApi(await fetchApi<{ desktop: 'submitted' | 'off' | 'unavailable'; desktopError?: string }>(
+      'notifications/test', { method: 'POST' }), 'notifications/test');
   },
 };
 

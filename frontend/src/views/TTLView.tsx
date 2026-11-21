@@ -126,7 +126,7 @@ export const TTLView: React.FC = () => {
               style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px' }}
             >
               <RotateCcw size={12} />
-              <span>{restoring ? 'Restoring...' : 'Restore Originals'}</span>
+              <span>{restoring ? 'Restoring...' : 'Restore captured originals'}</span>
             </button>
             <button
               className="btn btn-secondary btn-sm"
@@ -191,7 +191,7 @@ export const TTLView: React.FC = () => {
                 cursor: 'pointer',
               }}
             >
-              Set both to 64
+              Load 64 into both fields
             </button>
 
             <button
@@ -206,46 +206,22 @@ export const TTLView: React.FC = () => {
                 cursor: 'pointer',
               }}
             >
-              Set both to 128
+              Load 128 into both fields
             </button>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            <div>
-              <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '3px' }}>
-                IPv4 Packet TTL
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="255"
-                value={ipv4Val}
-                onChange={e => setIpv4Val(parseInt(e.target.value) || 64)}
-                className="input"
-                style={{ width: '100%', fontSize: '13px', fontWeight: 700, color: '#38bdf8' }}
-              />
-              <span style={{ fontSize: '10px', color: '#64748b' }}>
-                 System default: {cur4?.value ?? 'Unavailable'}
-              </span>
-            </div>
-
-            <div>
-              <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '3px' }}>
-                IPv6 Packet Hop Limit
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="255"
-                value={ipv6Val}
-                onChange={e => setIpv6Val(parseInt(e.target.value) || 64)}
-                className="input"
-                style={{ width: '100%', fontSize: '13px', fontWeight: 700, color: '#facc15' }}
-              />
-              <span style={{ fontSize: '10px', color: '#64748b' }}>
-                 System default: {cur6?.value ?? 'Unavailable'}
-              </span>
-            </div>
+          <div className="mobile-settings-labels"><h3>Current settings</h3><h3>Desired values</h3></div>
+          <div className="mobile-setting-row">
+            <div><strong>IPv4 packet TTL</strong><span className="mobile-setting-current">{cur4?.value ?? 'Unavailable'}</span>
+              <p>Starting hop count for outbound IPv4 packets. Routers decrement it as packets travel.</p></div>
+            <div className="mobile-setting-input"><input aria-label="Desired IPv4 packet TTL" type="number" min="1" max="255"
+              value={ipv4Val || ''} onChange={e => setIpv4Val(Number(e.target.value))} /></div>
+          </div>
+          <div className="mobile-setting-row">
+            <div><strong>IPv6 packet hop limit</strong><span className="mobile-setting-current">{cur6?.value ?? 'Unavailable'}</span>
+              <p>Starting hop count for outbound IPv6 packets. Available scopes depend on your OS.</p></div>
+            <div className="mobile-setting-input"><input aria-label="Desired IPv6 packet hop limit" type="number" min="1" max="255"
+              value={ipv6Val || ''} onChange={e => setIpv6Val(Number(e.target.value))} /></div>
           </div>
 
           {/* Scope Selector */}

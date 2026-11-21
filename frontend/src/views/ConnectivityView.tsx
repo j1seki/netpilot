@@ -1,469 +1,294 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  api,
-  ConnectionProfile,
-  HotspotProfile,
-  HotspotStatus,
-  NetMergeConfig,
-  NetMergeStatus,
-  SpeedtestResult,
+  api, type ConnectionProfile, type HotspotStatus, type InterfaceInfo,
+  type MobileTunnelSettings, type NetMergeStatus, type SpeedtestResult,
 } from '../api/wails';
 import { TTLView } from './TTLView';
-import {
-  Bell,
-  Gauge,
-  Layers,
-  Radio,
-  RefreshCw,
-  Save,
-  ShieldCheck,
-  Sliders,
-  Smartphone,
-  Trash2,
-  Zap,
-} from 'lucide-react';
+import { RefreshCw, RotateCcw, Save, Smartphone, Trash2, Zap } from 'lucide-react';
 
-const gradeColor = (grade: string) => {
-  switch (grade) {
-    case 'A': return '#10b981';
-    case 'B': return '#38bdf8';
-    case 'C': return '#facc15';
-    case 'D': return '#fb923c';
-    case 'F': return '#fb7185';
-    default: return '#a1a1aa';
-  }
+const gradeColors: Record<string, string> = {
+  A: '#10b981', B: '#38bdf8', C: '#facc15', D: '#fb923c', F: '#fb7185',
+};
+const fmtMbps = (value: number) => value >= 1 ? `${value.toFixed(1)} Mbps` : `${Math.round(value * 1000)} Kbps`;
+const ipv6Label = (value: string) => value === 'off' ? 'IPv4 only' : value === 'on' ? 'IPv6 enabled' : 'Automatic';
+const schedulingLabel = (value: string) => value === 'low-latency' ? 'Prefer lower latency' : 'Balanced';
+
+type MobileDraft = {
+  mtu: string;
+  ipv6Mode: string;
+  scheduling: MobileTunnelSettings['scheduling'];
+  probe4: string;
+  probe6: string;
+  adapter: string;
+  autoApply: boolean;
+  profile: string;
 };
 
-const fmtMbps = (v: number) => (v >= 1 ? `${v.toFixed(1)} Mbps` : `${Math.round(v * 1000)} Kbps`);
+function makeDraft(value: Pick<MobileTunnelSettings, 'mtu' | 'ipv6Mode'> & Partial<MobileTunnelSettings>, adapter = '', autoApply = false, profile = ''): MobileDraft {
+  return {
+    mtu: String(value.mtu),
+    ipv6Mode: value.ipv6Mode,
+    scheduling: value.scheduling || 'balanced',
+    probe4: (value.probeTargetsV4 ?? []).join(', '),
+    probe6: (value.probeTargetsV6 ?? []).join(', '),
+    adapter,
+    autoApply,
+    profile,
+  };
+}
 
-export const ConnectivityView: React.FC<{ initialTTL?: boolean }> = ({ initialTTL = false }) => {
-  const [showTTL, setShowTTL] = useState(initialTTL);
+function tunnelSettings(draft: MobileDraft): MobileTunnelSettings {
+  const targets = (value: string) => value.split(/[\s,]+/).filter(Boolean);
+  return {
+    mtu: Number(draft.mtu),
+    ipv6Mode: draft.ipv6Mode,
+    scheduling: draft.scheduling,
+    probeTargetsV4: targets(draft.probe4),
+    probeTargetsV6: targets(draft.probe6),
+  };
+}
+
+function SettingRow({ label, current, description, children }: { label: string; current: string; description: string; children: ReactNode }) {
+  return <div className="mobile-setting-row">
+    <div><strong>{label}</strong><span className="mobile-setting-current">{current}</span><p>{description}</p></div>
+    <div className="mobile-setting-input">{children}</div>
+  </div>;
+}
+
+export function ConnectivityView({ initialTTL = false }: { initialTTL?: boolean }) {
+  const [ttlVisited, setTTLVisited] = useState(initialTTL);
   const [hotspot, setHotspot] = useState<HotspotStatus | null>(null);
   const [status, setStatus] = useState<NetMergeStatus | null>(null);
+  const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
   const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
-  const [selectedProfile, setSelectedProfile] = useState<string>('hotspot-bypass');
-  const [manualTargets, setManualTargets] = useState<string[]>([]);
-  const [busy, setBusy] = useState<string>('');
-  const [errorMsg, setErrorMsg] = useState<string>('');
-  const [notice, setNotice] = useState<string>('');
-
+  const [draft, setDraft] = useState<MobileDraft | null>(null);
+  const [draftName, setDraftName] = useState('');
+  const [profileName, setProfileName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [speedResults, setSpeedResults] = useState<SpeedtestResult[]>([]);
-  const [speedRunning, setSpeedRunning] = useState<boolean>(false);
-  const [duration, setDuration] = useState<number>(5);
-  const [includeMerged, setIncludeMerged] = useState<boolean>(true);
-
-  const [scheduling, setScheduling] = useState<'balanced' | 'low-latency'>('balanced');
-  const [probe4, setProbe4] = useState<string>('');
-  const [probe6, setProbe6] = useState<string>('');
-  const schedInit = useRef(false);
-  const profileInit = useRef(false);
-
-  const [profileName, setProfileName] = useState<string>('');
-  const [profileDesc, setProfileDesc] = useState<string>('');
+  const [speedRunning, setSpeedRunning] = useState(false);
+  const [duration, setDuration] = useState(5);
+  const [includeMerged, setIncludeMerged] = useState(true);
+  const request = useRef(0);
 
   const load = async () => {
-    try {
-      const [hs, st, ps] = await Promise.all([
-        api.getHotspotStatus(),
-        api.getNetMergeStatus(),
-        api.getProfiles(),
-      ]);
-      setHotspot(hs);
-      setStatus(st);
-      setProfiles(ps);
-      if (!profileInit.current && hs.status?.profile) {
-        setSelectedProfile(hs.status.profile);
-        profileInit.current = true;
-      }
-      if (!schedInit.current && st.config) {
-        setScheduling(st.config.scheduling === 'low-latency' ? 'low-latency' : 'balanced');
-        setProbe4((st.config.probeTargetsV4 || []).join(', '));
-        setProbe6((st.config.probeTargetsV6 || []).join(', '));
-        schedInit.current = true;
-      }
-    } catch (err: any) {
-      setErrorMsg(`Could not read connectivity state: ${err?.message || String(err)}`);
-    }
+    const version = ++request.current;
+    const [hs, st, ps, links] = await Promise.allSettled([
+      api.getHotspotStatus(), api.getNetMergeStatus(), api.getProfiles(), api.getInterfaces(),
+    ] as const);
+    if (version !== request.current) return;
+    if (hs.status === 'fulfilled') setHotspot(hs.value);
+    if (st.status === 'fulfilled') setStatus(st.value);
+    if (ps.status === 'fulfilled') setProfiles(ps.value);
+    if (links.status === 'fulfilled') setInterfaces(links.value);
+    if (hs.status === 'rejected' || st.status === 'rejected') setError('Could not refresh Mobile settings.');
   };
 
   useEffect(() => {
-    load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
+    void load();
+    const timer = setInterval(load, 5000);
+    return () => { request.current++; clearInterval(timer); };
   }, []);
 
-  const applyHotspot = async () => {
-    setBusy('hotspot');
-    setErrorMsg('');
+  const config = status?.config;
+  const saved = config && hotspot ? makeDraft(config, hotspot.status.adapters?.[0], hotspot.status.autoApply, hotspot.status.profile) : null;
+  const desired = draft ?? saved;
+  const connected = interfaces.filter(link => link.isUp && !link.isVirtual && link.ip);
+  const candidates = connected.filter(link => hotspot?.adapters.includes(link.name));
+  const selectedConnected = !desired?.adapter || connected.some(link => link.name === desired.adapter);
+  const defaultLink = connected.find(link => link.isDefault);
+  const linkLabel = (name: string) => connected.find(link => link.name === name)?.displayName || name;
+  const mtu = Number(desired?.mtu);
+  const valid = Number.isInteger(mtu) && mtu >= 1280 && mtu <= 65535 && selectedConnected;
+
+  const edit = <K extends keyof MobileDraft,>(key: K, value: MobileDraft[K]) => {
+    if (desired) setDraft({ ...desired, [key]: value });
+  };
+  const clearDraft = () => { setDraft(null); setDraftName(''); };
+  const change = async (operation: () => Promise<string>) => {
+    setBusy(true);
+    setError('');
     setNotice('');
     try {
-      const st = await api.applyHotspot(selectedProfile, false, manualTargets);
-      setNotice(st.note || 'Hotspot profile applied.');
+      setNotice(await operation());
       await load();
-    } catch (err: any) {
-      setErrorMsg(err?.message || String(err));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy('');
-    }
-  };
-
-  const revertHotspot = async () => {
-    setBusy('hotspot');
-    setErrorMsg('');
-    setNotice('');
-    try {
-      const st = await api.revertHotspot();
-      setNotice(st.note || 'Hotspot mode reverted.');
-      await load();
-    } catch (err: any) {
-      setErrorMsg(err?.message || String(err));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const toggleAuto = async () => {
-    if (!hotspot) return;
-    setBusy('auto');
-    try {
-      await api.setHotspotAuto(!hotspot.status.autoApply);
-      await load();
-    } catch (err: any) {
-      setErrorMsg(err?.message || String(err));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const saveScheduler = async () => {
-    if (!status) return;
-    setBusy('scheduler');
-    setErrorMsg('');
-    setNotice('');
-    try {
-      const split = (v: string) => v.split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
-      const cfg: NetMergeConfig = {
-        ...status.config,
-        scheduling,
-        probeTargetsV4: split(probe4),
-        probeTargetsV6: split(probe6),
-      };
-      await api.saveNetMergeConfig(cfg);
-      setNotice('Scheduler settings saved.');
-      await load();
-    } catch (err: any) {
-      setErrorMsg(err?.message || String(err));
-    } finally {
-      setBusy('');
+      setBusy(false);
     }
   };
 
   const runSpeedtest = async () => {
     setSpeedRunning(true);
-    setErrorMsg('');
-    setNotice('');
+    setError('');
     try {
-      const res = await api.runSpeedtest({
-        durationSec: duration,
-        streams: 4,
-        includeMerged,
-        maxMB: 10,
-      });
-      setSpeedResults(res);
-    } catch (err: any) {
-      setErrorMsg(`Speedtest failed: ${err?.message || String(err)}`);
+      setSpeedResults(await api.runSpeedtest({ durationSec: duration, streams: 4, includeMerged, maxMB: 10 }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSpeedRunning(false);
     }
   };
 
-  const applySavedProfile = async (id: string) => {
-    setBusy(`apply-${id}`);
-    setErrorMsg('');
-    setNotice('');
-    try {
-      await api.applyProfile(id);
-      setNotice('Profile applied.');
-      await load();
-    } catch (err: any) {
-      setErrorMsg(err?.message || String(err));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const saveCurrentProfile = async () => {
-    if (!status) return;
-    setBusy('save-profile');
-    setErrorMsg('');
-    try {
-      await api.saveProfile({
-        id: '',
-        name: profileName,
-        description: profileDesc,
-        netMerge: status.config,
-      });
-      setProfileName('');
-      setProfileDesc('');
-      setNotice('Profile saved.');
-      await load();
-    } catch (err: any) {
-      setErrorMsg(err?.message || String(err));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const deleteProfile = async (id: string) => {
-    setBusy(`delete-${id}`);
-    try {
-      await api.deleteProfile(id);
-      await load();
-    } catch (err: any) {
-      setErrorMsg(err?.message || String(err));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const testNotification = async () => {
-    setBusy('notify');
-    try {
-      await api.sendTestNotification();
-      setNotice('Test notification sent.');
-    } catch (err: any) {
-      setErrorMsg(`Notifications are not available: ${err?.message || String(err)}`);
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const profilesById = (id: string): HotspotProfile | undefined =>
-    hotspot?.profiles.find(p => p.id === id);
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
-          <h1 style={{ fontSize: '16px', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Smartphone size={16} color="#10b981" />
-            Mobile &amp; Connectivity
-          </h1>
-          <p style={{ margin: '4px 0 0', fontSize: '11.5px', color: '#8b8b93' }}>
-            Tethering, packet TTL and hop limit, link benchmarks, and saved setups.
-          </p>
-        </div>
-        <button className="btn btn-secondary btn-sm" onClick={load}>
-          <RefreshCw size={12} />
-          <span>Refresh</span>
-        </button>
+  return <div className="mobile-page">
+    <header className="mobile-page-header">
+      <div>
+        <h1><Smartphone size={16} color="#10b981" /> Mobile &amp; Connectivity</h1>
+        <p>Identify the PC link connected to your phone and tune how the NetPilot tunnel handles that connection.</p>
       </div>
+      <button className="btn btn-secondary btn-sm" type="button" disabled={busy} onClick={() => { setError(''); void load(); }}>
+        <RefreshCw size={12} /> Refresh
+      </button>
+    </header>
 
-      <nav aria-label="Mobile sections" style={{ display: 'flex', gap: '8px' }}>
-        <button className={`btn btn-sm ${showTTL ? 'btn-secondary' : 'btn-emerald'}`} aria-pressed={!showTTL} onClick={() => setShowTTL(false)}>
-          <Radio size={13} aria-hidden="true" /> Tethering &amp; Links
-        </button>
-        <button className={`btn btn-sm ${showTTL ? 'btn-emerald' : 'btn-secondary'}`} aria-pressed={showTTL} onClick={() => setShowTTL(true)}>
-          <ShieldCheck size={13} aria-hidden="true" /> TTL &amp; Hop Limit
-        </button>
-      </nav>
+    {error && <p className="mobile-message mobile-error" role="alert">{error}</p>}
+    {notice && <p className="mobile-message" role="status">{notice}</p>}
 
-      {showTTL ? <TTLView /> : <>
-
-      {errorMsg && (
-        <div className="card" style={{ marginBottom: 0, borderColor: 'rgba(251, 113, 133, 0.35)', color: '#fb7185', fontSize: '11.5px' }}>
-          {errorMsg}
-        </div>
-      )}
-      {notice && (
-        <div className="card" style={{ marginBottom: 0, borderColor: 'rgba(16, 185, 129, 0.35)', color: '#10b981', fontSize: '11.5px' }}>
-          {notice}
-        </div>
-      )}
-
-      {/* Hotspot */}
-      <div className="card" style={{ marginBottom: 0 }}>
-        <div className="card-title">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Radio size={14} color="#38bdf8" />
-            <span>Hotspot / Cellular Tethering</span>
+    <section className="card mobile-settings" aria-labelledby="mobile-settings-heading">
+      <div className="card-title">
+        <span id="mobile-settings-heading">Hotspot &amp; tunnel settings</span>
+        <span className="rule-editor-note">{status?.isRunning ? `Connected · ${status.routingMode === 'backup' ? 'Backup' : 'Speed'}` : 'Tunnel in standby'}
+          {defaultLink && ` · OS link ${linkLabel(defaultLink.name)}`}</span>
+      </div>
+      {config && hotspot && saved && desired ? <>
+        <div className="mobile-profile-picker">
+          <strong>Suggested profiles</strong>
+          <p>Load a starting point into Desired values, then customize and apply when ready.</p>
+          <div className="mobile-actions">
+            {hotspot.profiles.map(profile => <button key={profile.id} type="button" className="btn btn-secondary btn-sm"
+              disabled={busy} title={profile.description} onClick={() => {
+                setDraft({ ...desired, profile: profile.id, mtu: String(profile.mtu), ipv6Mode: profile.ipv6Mode });
+                setDraftName(profile.name);
+              }}>{profile.name}</button>)}
           </div>
-          <span className={`status-pill ${hotspot?.status.enabled ? 'pass' : hotspot?.available ? 'warn' : 'skipped'}`}>
-            {!hotspot ? 'Checking…' : hotspot.status.enabled ? 'Profile saved' : hotspot.available ? 'Candidate found' : 'No match'}
-          </span>
+          {draftName && <p role="status">Loaded into draft · {draftName}</p>}
         </div>
 
-        {!hotspot?.available && !hotspot?.status.enabled ? (
-          <div style={{ fontSize: '11.5px', color: '#a1a1aa', lineHeight: 1.6 }}>
-            {!hotspot ? 'Waiting for adapter status.' : 'No tether or cellular adapter was identified by name. Connect your phone by Wi-Fi or USB tethering.'}
-            <div style={{ marginTop: '10px', color: '#d4d4d8' }}>
-              Select the active Wi-Fi or USB adapter below. iPhone USB tethering on macOS may appear as <span className="font-mono">enN</span>.
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '8px' }}>
-              {(status?.nics || []).map(n => (
-                <label key={n.Name} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                  <input
-                    type="checkbox"
-                    checked={manualTargets.includes(n.Name)}
-                    onChange={e => setManualTargets(prev =>
-                      e.target.checked ? [...prev, n.Name] : prev.filter(x => x !== n.Name))}
-                  />
-                  <span className="font-mono">{n.Name}</span>
-                </label>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: '8px', marginTop: '10px', alignItems: 'center' }}>
-              <select
-                className="form-input"
-                value={selectedProfile}
-                onChange={e => setSelectedProfile(e.target.value)}
-                style={{ padding: '5px 8px', fontSize: '11.5px' }}
-              >
-                {(hotspot?.profiles || []).map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
+        <form onSubmit={event => { event.preventDefault(); if (!draft || !valid || busy) return; void change(async () => {
+          const result = await api.saveMobileSettings({
+            ...tunnelSettings(desired), adapter: desired.adapter, autoApply: desired.autoApply, profile: desired.profile,
+          });
+          clearDraft();
+          return result.note || 'Mobile settings saved.';
+        }); }}>
+          <fieldset disabled={busy} className="mobile-settings-fields">
+            <div className="mobile-settings-labels"><h3>Current settings</h3><h3>Desired values</h3></div>
+            <SettingRow label="Phone hotspot adapter" current={saved.adapter ? linkLabel(saved.adapter) : 'No adapter saved'}
+              description="Pick the PC’s Wi-Fi adapter for a wireless hotspot, or the USB adapter for tethering. The selected adapter is recorded with the Mobile settings.">
+              <select aria-label="Phone hotspot adapter" value={desired.adapter} onChange={event => edit('adapter', event.target.value)}>
+                <option value="">No hotspot adapter selected</option>
+                {!selectedConnected && <option value={desired.adapter} disabled>{desired.adapter} · disconnected</option>}
+                {connected.map(link => <option key={link.name} value={link.name}>
+                  {link.displayName || link.name}{candidates.includes(link) ? ' · likely phone or cellular' : link.isDefault ? ' · current internet link' : ''}
+                </option>)}
               </select>
-              <button
-                className="btn btn-emerald btn-sm"
-                onClick={applyHotspot}
-                disabled={!hotspot || manualTargets.length === 0 || busy === 'hotspot'}
-              >
-                <Zap size={12} />
-                 <span>Save tunnel profile</span>
+              {candidates.length === 1 && <button type="button" className="btn btn-secondary btn-sm" onClick={() => edit('adapter', candidates[0].name)}>
+                Use detected adapter · {linkLabel(candidates[0].name)}
+              </button>}
+              {candidates.length !== 1 && defaultLink && <button type="button" className="btn btn-secondary btn-sm" onClick={() => edit('adapter', defaultLink.name)}>
+                Use current connection · {linkLabel(defaultLink.name)}
+              </button>}
+            </SettingRow>
+            <SettingRow label="Tunnel MTU" current={`${config.mtu} bytes saved${status?.runningMtu ? ` · ${status.runningMtu} running` : ''}`}
+              description="Maximum packet size inside the virtual tunnel. Start with defaults on a stable link. Try 1420 if sites stall over a hotspot.">
+              <input aria-label="Tunnel MTU" type="number" min={1280} max={65535} step={1} value={desired.mtu}
+                onChange={event => edit('mtu', event.target.value)} />
+            </SettingRow>
+            <SettingRow label="Tunnel IPv6" current={ipv6Label(saved.ipv6Mode)}
+              description="Automatic lets the engine use IPv6 when all eligible links support it. Enable it for capable links, or choose IPv4 only to troubleshoot IPv6 connectivity.">
+              <select aria-label="Tunnel IPv6" value={desired.ipv6Mode} onChange={event => edit('ipv6Mode', event.target.value)}>
+                <option value="auto">Automatic</option><option value="on">Enable IPv6</option><option value="off">IPv4 only</option>
+              </select>
+            </SettingRow>
+            <SettingRow label="Speed-mode scheduling" current={schedulingLabel(saved.scheduling)}
+              description="Balanced spreads new flows across links. Lower latency gives faster-responding links more preference. Backup mode follows its adapter order.">
+              <select aria-label="Speed-mode scheduling" value={desired.scheduling} onChange={event => edit('scheduling', event.target.value === 'low-latency' ? 'low-latency' : 'balanced')}>
+                <option value="balanced">Balanced</option><option value="low-latency">Prefer lower latency</option>
+              </select>
+            </SettingRow>
+            <SettingRow label="IPv4 reachability probes" current={saved.probe4 || 'Engine defaults'}
+              description="Hosts the engine uses to decide whether each link can reach IPv4. Enter hosts or host:port values, separated by commas or spaces. Blank restores defaults.">
+              <input aria-label="IPv4 reachability probes" value={desired.probe4} placeholder="Engine defaults"
+                onChange={event => edit('probe4', event.target.value)} />
+            </SettingRow>
+            <SettingRow label="IPv6 reachability probes" current={saved.probe6 || 'Engine defaults'}
+              description="Checks IPv6 link health. Bracket an IPv6 address when adding a port, for example [2606:4700:4700::1111]:443.">
+              <input aria-label="IPv6 reachability probes" value={desired.probe6} placeholder="Engine defaults"
+                onChange={event => edit('probe6', event.target.value)} />
+            </SettingRow>
+            <SettingRow label="Auto-apply saved hotspot preset" current={saved.autoApply ? 'On' : 'Off'}
+              description="With no active Mobile configuration, detection of USB tethering or cellular can apply the last built-in preset in Live Mode.">
+              <label className="mobile-check"><input type="checkbox" checked={desired.autoApply}
+                onChange={event => edit('autoApply', event.target.checked)} /> Enable auto-apply</label>
+            </SettingRow>
+            <div className="mobile-actions mobile-settings-actions">
+              <button className="btn btn-emerald btn-sm" type="submit" disabled={!draft || !valid}><Save size={13} /> Apply changes</button>
+              <button className="btn btn-secondary btn-sm" type="button" disabled={!draft} onClick={clearDraft}>Discard edits</button>
+              <button className="btn btn-secondary btn-sm" type="button" onClick={() => {
+                setDraft(makeDraft(hotspot.defaults, desired.adapter, false, 'hotspot-bypass'));
+                setDraftName('Tunnel defaults');
+              }}>Load defaults</button>
+              <button className="btn btn-secondary btn-sm" type="button" disabled={!hotspot.status.enabled}
+                onClick={() => void change(async () => { const result = await api.revertHotspot(); clearDraft(); return result.note || 'Previous settings restored.'; })}>
+                <RotateCcw size={12} /> Restore previous
               </button>
             </div>
-          </div>
-        ) : (
-          <>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
-              {hotspot.adapters.map(a => (
-                <span key={a} className="status-pill pass">{a}</span>
-              ))}
-            </div>
+          </fieldset>
+        </form>
+        {status?.runningMtu && status.runningMtu !== config.mtu && <p className="mobile-warning">Restart Net-Merge to use the saved MTU.</p>}
+        {status?.restartForMode && <p className="mobile-warning">A separate engine is running. Restart it from NetPilot to pick up saved tunnel settings. Probe and scheduling controls require the NetPilot engine.</p>}
+        <details className="mobile-help">
+          <summary>Limitations and suggestions</summary>
+          <ul>
+            <li>USB sharing drivers and cellular interfaces can be suggested automatically. A PC Wi-Fi adapter can join any access point, so select it manually when your phone shares over Wi-Fi.</li>
+            <li>MTU and IPv6 apply to the whole NetPilot tunnel. Choosing a hotspot adapter records the link and does not pin all traffic to it.</li>
+            <li>Try one setting at a time. If a smaller MTU or IPv4-only mode helps, compare connectivity before changing the other values. Link benchmarks use data on the selected connection.</li>
+          </ul>
+        </details>
+      </> : <p className="rule-editor-note" role="status">Reading saved Mobile settings…</p>}
+    </section>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px', marginBottom: '12px' }}>
-              {hotspot.profiles.map(p => (
-                <label
-                  key={p.id}
-                  style={{
-                    display: 'block',
-                    padding: '10px',
-                    borderRadius: '7px',
-                    border: `1px solid ${selectedProfile === p.id ? 'rgba(16, 185, 129, 0.55)' : '#27272a'}`,
-                    backgroundColor: selectedProfile === p.id ? 'rgba(16, 185, 129, 0.08)' : '#0f0f12',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '12px', fontWeight: 600 }}>
-                    <input
-                      type="radio"
-                      name="hotspot-profile"
-                      checked={selectedProfile === p.id}
-                      onChange={() => setSelectedProfile(p.id)}
-                    />
-                    <span>{p.name}</span>
-                  </div>
-                  <p style={{ margin: '6px 0 0 22px', fontSize: '10.5px', color: '#8b8b93', lineHeight: 1.45 }}>
-                    {p.description}
-                  </p>
-                  <div className="font-mono" style={{ marginLeft: '22px', marginTop: '5px', fontSize: '10px', color: '#71717a' }}>
-                     Tunnel MTU {p.mtu} · IPv6 {p.ipv6Mode}
-                  </div>
-                </label>
-              ))}
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <button className="btn btn-emerald btn-sm" onClick={applyHotspot} disabled={busy === 'hotspot'}>
-                <Zap size={12} />
-                 <span>{hotspot.status.enabled ? 'Update tunnel profile' : 'Save tunnel profile'}</span>
-              </button>
-              {hotspot.status.enabled && (
-                <button className="btn btn-secondary btn-sm" onClick={revertHotspot} disabled={busy === 'hotspot'}>
-                  <RefreshCw size={12} />
-                  <span>Revert</span>
-                </button>
-              )}
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#a1a1aa', marginLeft: 'auto' }}>
-                <input type="checkbox" checked={hotspot.status.autoApply} onChange={toggleAuto} disabled={busy === 'auto'} />
-                Auto-apply when a tether appears
-              </label>
-            </div>
-
-            {hotspot.status.enabled && (
-              <div style={{ marginTop: '10px', fontSize: '10.5px', color: '#71717a' }}>
-                Profile <span className="font-mono">{profilesById(hotspot.status.profile)?.name || hotspot.status.profile}</span>
-                 {' '}saved with {hotspot.status.adapters?.join(', ')} selected at{' '}
-                {hotspot.status.appliedAt ? new Date(hotspot.status.appliedAt).toLocaleString() : '—'}.
-              </div>
-            )}
-            {hotspot.status.note && (
-              <div style={{ marginTop: '8px', fontSize: '10.5px', color: '#facc15', lineHeight: 1.5 }}>{hotspot.status.note}</div>
-            )}
-          </>
-        )}
+    {config && desired && <details className="card mobile-details">
+      <summary>Saved connection profiles</summary>
+      <p className="rule-editor-note">Load the Mobile values from a saved configuration into the draft.</p>
+      <div className="mobile-saved-profiles">
+        {profiles.filter(profile => !profile.builtin).map(profile => <div key={profile.id}>
+          <div><strong>{profile.name}</strong>{profile.description && <p>{profile.description}</p>}</div>
+          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => {
+            setDraft(makeDraft(profile.netMerge, desired.adapter, desired.autoApply, desired.profile)); setDraftName(profile.name);
+          }}>Load values</button>
+          <button type="button" className="btn btn-danger btn-sm" disabled={busy} aria-label={`Delete ${profile.name}`}
+            onClick={() => void change(async () => { await api.deleteProfile(profile.id); return 'Profile deleted.'; })}><Trash2 size={12} /></button>
+        </div>)}
       </div>
+      <form className="mobile-save-profile" onSubmit={event => {
+        event.preventDefault();
+        if (!valid || !profileName.trim() || busy) return;
+        void change(async () => {
+          await api.saveProfile({ id: '', name: profileName.trim(), netMerge: { ...config, ...tunnelSettings(desired) } });
+          setProfileName('');
+          return 'Profile saved. The current tunnel configuration did not change.';
+        });
+      }}>
+        <label>Save desired values as a profile<input value={profileName} onChange={event => setProfileName(event.target.value)} placeholder="Profile name" /></label>
+        <button type="submit" className="btn btn-secondary btn-sm" disabled={busy || !valid || !profileName.trim()}><Save size={12} /> Save profile</button>
+      </form>
+    </details>}
 
-      {/* Scheduler */}
-      <div className="card" style={{ marginBottom: 0 }}>
-        <div className="card-title">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Sliders size={14} color="#a78bfa" />
-            <span>Scheduling &amp; Reachability Probes</span>
-          </div>
-          <button className="btn btn-emerald btn-sm" onClick={saveScheduler} disabled={busy === 'scheduler' || !status}>
-            <Save size={12} />
-            <span>Save</span>
-          </button>
-        </div>
-        <div className="grid-2" style={{ gap: '12px' }}>
-          <div>
-            <div className="form-label" style={{ marginBottom: '5px' }}>Flow scheduling</div>
-            <select
-              className="form-input"
-              value={scheduling}
-              onChange={e => setScheduling(e.target.value as 'balanced' | 'low-latency')}
-              style={{ width: '100%', padding: '6px 8px', fontSize: '11.5px' }}
-            >
-              <option value="balanced">Balanced — spread flows by adapter weight</option>
-              <option value="low-latency">Low latency — prefer the lowest RTT/jitter link</option>
-            </select>
-            <div style={{ marginTop: '6px', fontSize: '10px', color: '#71717a', lineHeight: 1.5 }}>
-              Low-latency mode still uses every healthy adapter, but new flows strongly prefer the
-              best-probed link.
-            </div>
-          </div>
-          <div>
-            <div className="form-label" style={{ marginBottom: '5px' }}>IPv4 probe targets</div>
-            <input
-              className="form-input"
-              placeholder="1.1.1.1:443, 8.8.8.8:53"
-              value={probe4}
-              onChange={e => setProbe4(e.target.value)}
-              style={{ width: '100%', padding: '6px 8px', fontSize: '11.5px' }}
-            />
-            <div className="form-label" style={{ margin: '8px 0 5px' }}>IPv6 probe targets</div>
-            <input
-              className="form-input"
-              placeholder="[2606:4700:4700::1111]:443"
-              value={probe6}
-              onChange={e => setProbe6(e.target.value)}
-              style={{ width: '100%', padding: '6px 8px', fontSize: '11.5px' }}
-            />
-            <div style={{ marginTop: '6px', fontSize: '10px', color: '#71717a', lineHeight: 1.5 }}>
-              Accepts host:port or bare hosts, comma or space separated. Empty restores the defaults.
-            </div>
-          </div>
-        </div>
-      </div>
+    <details className="card mobile-details mobile-ttl" open={initialTTL} onToggle={event => {
+      if (event.currentTarget.open) setTTLVisited(true);
+    }}>
+      <summary>Advanced · Packet TTL &amp; Hop Limit</summary>
+      <p className="rule-editor-note">These OS packet settings have separate preview, apply, and restore controls.</p>
+      {ttlVisited && <TTLView />}
+    </details>
 
-      {/* Speedtest */}
-      <div className="card" style={{ marginBottom: 0 }}>
+      <details className="card mobile-details">
+        <summary>Link speed &amp; bufferbloat</summary>
         <div className="card-title">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Gauge size={14} color="#facc15" />
-            <span>Link Speed &amp; Bufferbloat</span>
-          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <select
               className="form-input"
@@ -516,7 +341,7 @@ export const ConnectivityView: React.FC<{ initialTTL?: boolean }> = ({ initialTT
                     {r.error ? (
                       <span style={{ color: '#fb7185', fontSize: '10.5px' }}>{r.error}</span>
                     ) : (
-                      <span className="status-pill" style={{ color: gradeColor(r.grade), borderColor: gradeColor(r.grade) }}>
+                      <span className="status-pill" style={{ color: (gradeColors[r.grade] || '#a1a1aa'), borderColor: (gradeColors[r.grade] || '#a1a1aa') }}>
                         {r.grade} · +{Math.round(r.bufferbloatMs)} ms
                       </span>
                     )}
@@ -527,103 +352,10 @@ export const ConnectivityView: React.FC<{ initialTTL?: boolean }> = ({ initialTT
           </table>
         )}
         <p style={{ margin: '8px 0 0', color: '#a1a1aa', fontSize: '11px' }}>
-          These measurements describe link performance, not how the phone or carrier classifies traffic.
+          Benchmarks measure link performance and may use mobile data.
         </p>
-      </div>
+      </details>
 
-      <div className="grid-2" style={{ gap: '14px' }}>
-        {/* Saved profiles */}
-        <div className="card" style={{ marginBottom: 0 }}>
-          <div className="card-title">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Layers size={14} color="#10b981" />
-              <span>Connection Profiles</span>
-            </div>
-          </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '7px', marginBottom: '12px' }}>
-            {profiles.map(p => (
-              <div
-                key={p.id}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 9px',
-                  border: '1px solid #27272a', borderRadius: '7px', backgroundColor: '#0f0f12',
-                }}
-              >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    {p.name}
-                    {p.builtin && <span className="status-pill pass" style={{ fontSize: '9px' }}>built-in</span>}
-                  </div>
-                  <div style={{ fontSize: '10.5px', color: '#8b8b93', marginTop: '2px' }}>{p.description}</div>
-                  <div className="font-mono" style={{ fontSize: '9.5px', color: '#71717a', marginTop: '3px' }}>
-                    {(p.netMerge.routingMode || 'speed')} · {p.netMerge.scheduling || 'balanced'} · MTU {p.netMerge.mtu} · IPv6 {p.netMerge.ipv6Mode}
-                  </div>
-                </div>
-                <button className="btn btn-secondary btn-sm" onClick={() => applySavedProfile(p.id)} disabled={busy === `apply-${p.id}`}>
-                  Apply
-                </button>
-                {!p.builtin && (
-                  <button className="btn btn-danger btn-sm" onClick={() => deleteProfile(p.id)} disabled={busy === `delete-${p.id}`}>
-                    <Trash2 size={11} />
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-
-          <div style={{ borderTop: '1px solid #232329', paddingTop: '10px' }}>
-            <div className="form-label" style={{ marginBottom: '5px' }}>Save current configuration</div>
-            <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
-              <input
-                className="form-input"
-                placeholder="Profile name"
-                value={profileName}
-                onChange={e => setProfileName(e.target.value)}
-                style={{ flex: 1, padding: '5px 8px', fontSize: '11.5px' }}
-              />
-            </div>
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <input
-                className="form-input"
-                placeholder="Description (optional)"
-                value={profileDesc}
-                onChange={e => setProfileDesc(e.target.value)}
-                style={{ flex: 1, padding: '5px 8px', fontSize: '11.5px' }}
-              />
-              <button className="btn btn-emerald btn-sm" onClick={saveCurrentProfile} disabled={!profileName.trim() || busy === 'save-profile'}>
-                <Save size={12} />
-                <span>Save</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Notifications */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <div className="card" style={{ marginBottom: 0 }}>
-            <div className="card-title">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Bell size={14} color="#fb923c" />
-                <span>Notifications</span>
-              </div>
-            </div>
-
-            <button className="btn btn-secondary btn-sm" onClick={testNotification} disabled={busy === 'notify'}>
-              <Bell size={12} />
-              <span>Test notification</span>
-            </button>
-
-            <div style={{ marginTop: '12px', fontSize: '10.5px', color: '#8b8b93', lineHeight: 1.55 }}>
-              NetPilot notifies you when the merged connection starts or stops, when the active adapter
-              changes, when a link flaps, when an adapter reaches its data quota, and when a newer release
-              is available on your update channel. Notifications use the native desktop facility and are
-              best-effort.
-            </div>
-          </div>
-        </div>
-      </div>
-      </>}
-    </div>
-  );
-};
+  </div>;
+}

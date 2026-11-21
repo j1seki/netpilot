@@ -27,11 +27,13 @@ type diagnosticPolicies struct{ rules *rules.Engine }
 
 func (p diagnosticPolicies) Resolve(appName, appPath, destination string) engine.FlowPolicy {
 	decision := p.rules.Evaluate(appName, appPath, destination, "default")
-	return engine.FlowPolicy{PreferredNIC: decision.SelectedInterface, FallbackNIC: decision.FallbackInterface,
-		BandwidthLimitMbps: decision.BandwidthLimitMbps, QuotaExceeded: decision.QuotaExceeded, RuleID: decision.MatchedRuleID}
+	return engine.FlowPolicy{PreferredNIC: decision.PreferredInterface, FallbackNIC: decision.FallbackInterface,
+		CustomDNS: decision.CustomDNS, BandwidthLimitMbps: decision.BandwidthLimitMbps, QuotaExceeded: decision.QuotaExceeded, RuleID: decision.MatchedRuleID}
 }
 
-func (p diagnosticPolicies) ReportUsage(app string, in, out int64) { p.rules.RecordUsage(app, in, out) }
+func (p diagnosticPolicies) ReportUsage(policy engine.FlowPolicy, in, out int64) {
+	p.rules.RecordRuleUsage(policy.RuleID, in, out)
+}
 
 func checkProxyRulesAndCap() (TestStatus, string) {
 	database, err := db.Open(":memory:")

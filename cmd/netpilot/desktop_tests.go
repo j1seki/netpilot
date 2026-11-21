@@ -23,8 +23,16 @@ type desktopTestBridge struct {
 }
 
 func (b *desktopTestBridge) checkSort() (testrunner.TestStatus, string) {
+	return b.check("process-sort", "process sorting", "The desktop WebView verified process grouping, both network sort directions, and zero/unavailable rates")
+}
+
+func (b *desktopTestBridge) checkMetricUnits() (testrunner.TestStatus, string) {
+	return b.check("metric-units", "metric unit conversion", "The desktop WebView verified decimal and binary volume conversions and bit/byte transfer rates")
+}
+
+func (b *desktopTestBridge) check(key, name, evidence string) (testrunner.TestStatus, string) {
 	if b.send == nil {
-		return testrunner.StatusBlocked, "Open the desktop app to run the process table check in its WebView"
+		return testrunner.StatusBlocked, "Open the desktop app to check " + name
 	}
 	id := logger.RandomID()
 	encodedID, _ := json.Marshal(id)
@@ -37,15 +45,15 @@ func (b *desktopTestBridge) checkSort() (testrunner.TestStatus, string) {
 		b.pending, b.result = "", nil
 		b.mu.Unlock()
 	}()
-	b.send("window.dispatchEvent(new CustomEvent('netpilot:test-process-sort', {detail:" + string(encodedID) + "}));")
+	b.send("window.dispatchEvent(new CustomEvent('netpilot:test-" + key + "', {detail:" + string(encodedID) + "}));")
 	select {
 	case passed := <-result:
 		if !passed {
-			return testrunner.StatusFail, "The desktop process sorter failed a grouping, direction, or zero-value assertion"
+			return testrunner.StatusFail, "The desktop WebView failed an assertion for " + name
 		}
-		return testrunner.StatusPass, "The desktop WebView verified process grouping, both network sort directions, and display of zero and unavailable rates"
+		return testrunner.StatusPass, evidence
 	case <-time.After(4 * time.Second):
-		return testrunner.StatusBlocked, "The desktop WebView did not respond to the process sort check"
+		return testrunner.StatusBlocked, "The desktop WebView did not respond to the check for " + name
 	}
 }
 

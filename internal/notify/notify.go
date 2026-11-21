@@ -1,7 +1,7 @@
 // Package notify sends best-effort native desktop notifications.
 //
 // Notifications are advisory: they must never block the data path or fail an operation, so
-// every platform implementation degrades to a no-op when the OS facility is unavailable.
+// callers can continue when the OS facility is unavailable.
 package notify
 
 import "strings"
@@ -17,5 +17,8 @@ func Send(title, body string) error {
 	return send(title, body)
 }
 
-// Available reports whether this platform has a notification mechanism installed.
+// Available checks for a native notification backend.
 func Available() bool { return available() }
+
+// OpenSettings opens the desktop notification preferences where supported.
+func OpenSettings() error { return openSettings() }

@@ -8,6 +8,7 @@ import {
   UsageHistoryResponse,
   UsagePeriod,
 } from '../api/wails';
+import { formatMetric, rateUnits, rateValue, volumeUnits, volumeValue, type RateUnit, type VolumeUnit } from '../metricUnits';
 import { DonutChart, MonthlyBarChart } from '../components/Charts';
 import { ArrowDown, ArrowUp, Calendar, Download, FileSpreadsheet, RotateCcw, Trash2 } from 'lucide-react';
 
@@ -36,6 +37,15 @@ function csvEscape(value: unknown): string {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+function readUnit<T extends string>(key: string, units: readonly T[], fallback: T): T {
+  try {
+    const saved = localStorage.getItem(key);
+    return units.find(unit => unit === saved) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export const Analytics: React.FC = () => {
   const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
   const [apps, setApps] = useState<ProcessInfo[]>([]);
@@ -46,6 +56,19 @@ export const Analytics: React.FC = () => {
   const [isExporting, setIsExporting] = useState(false);
   const [resetBusy, setResetBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [volumeUnit, setVolumeUnit] = useState<VolumeUnit>(() => readUnit('netpilot.metrics.volume', volumeUnits, 'MB'));
+  const [rateUnit, setRateUnit] = useState<RateUnit>(() => readUnit('netpilot.metrics.rate', rateUnits, 'Mbps'));
+  const volume = (mib: number) => formatMetric(volumeValue(mib, volumeUnit));
+  const rate = (mbps: number) => formatMetric(rateValue(mbps, rateUnit));
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('netpilot.metrics.volume', volumeUnit);
+      localStorage.setItem('netpilot.metrics.rate', rateUnit);
+    } catch {
+      // The current selection continues to work in restricted webviews.
+    }
+  }, [volumeUnit, rateUnit]);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,7 +116,9 @@ export const Analytics: React.FC = () => {
   const busiestAdapter = [...interfaces].sort(
     (a, b) => (b.rxMbps + b.txMbps) - (a.rxMbps + a.txMbps)
   )[0];
-  const mergedLoad = interfaces.reduce((acc, i) => acc + (i.rxMbps || 0) + (i.txMbps || 0), 0);
+  const slots = nmStatus?.nics ?? [];
+  const presentSlots = slots.filter(slot => slot.Present).length;
+  const mergedLoad = slots.reduce((total, slot) => total + ((slot.RateIn || 0) + (slot.RateOut || 0)) * 8 / 1e6, 0);
   const primaryLoad = isMergeRunning
     ? mergedLoad
     : (defaultAdapter ? (defaultAdapter.rxMbps || 0) + (defaultAdapter.txMbps || 0) : 0);
@@ -116,11 +141,11 @@ export const Analytics: React.FC = () => {
     setIsExporting(true);
     try {
       const header = [
-        'Period', 'Interface', 'Application', 'BytesIn', 'BytesOut', 'RxMB', 'TxMB', 'TotalMB', 'LastUpdated',
+        'Period', 'Interface', 'Application', 'BytesIn', 'BytesOut', `Rx (${volumeUnit})`, `Tx (${volumeUnit})`, `Total (${volumeUnit})`, 'LastUpdated',
       ];
       const rows = usage.records.map(r => [
         r.period, r.interfaceName, r.appName || 'All Process Traffic',
-        r.bytesIn, r.bytesOut, r.rxMb.toFixed(2), r.txMb.toFixed(2), r.totalMb.toFixed(2), r.updatedAt,
+        r.bytesIn, r.bytesOut, volumeValue(r.rxMb, volumeUnit).toFixed(6), volumeValue(r.txMb, volumeUnit).toFixed(6), volumeValue(r.totalMb, volumeUnit).toFixed(6), r.updatedAt,
       ]);
       const csvText = [header, ...rows].map(row => row.map(csvEscape).join(',')).join('\n');
       const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
@@ -180,6 +205,15 @@ export const Analytics: React.FC = () => {
         </div>
       )}
 
+      <div className="card metrics-units" style={{ marginBottom: 0 }}>
+        <label>Traffic volume<select value={volumeUnit} onChange={e => setVolumeUnit(e.target.value as VolumeUnit)}>
+          {volumeUnits.map(unit => <option value={unit} key={unit}>{unit}</option>)}
+        </select></label>
+        <label>Transfer rate<select value={rateUnit} onChange={e => setRateUnit(e.target.value as RateUnit)}>
+          {rateUnits.map(unit => <option value={unit} key={unit}>{unit}</option>)}
+        </select></label>
+      </div>
+
       {/* Top 3 Compact KPIs */}
       <div className="metric-grid" style={{ marginBottom: 0 }}>
         <div className="metric-box">
@@ -187,11 +221,11 @@ export const Analytics: React.FC = () => {
             {isMergeRunning ? 'Merged Throughput (net-merge)' : 'OS Default Link Load'}
           </span>
           <div className="metric-value" style={{ color: isMergeRunning ? '#10b981' : '#60a5fa' }}>
-            {primaryLoad.toFixed(2)} <span style={{ fontSize: '11px' }}>Mbps</span>
+            {rate(primaryLoad)} <span style={{ fontSize: '11px' }}>{rateUnit}</span>
           </div>
           <span className="metric-sub">
             {isMergeRunning
-              ? `${interfaces.length} adapter${interfaces.length === 1 ? '' : 's'} in the merged pool`
+              ? `${presentSlots} adapter${presentSlots === 1 ? '' : 's'} in the forwarding pool`
               : defaultAdapter
                 ? `${defaultAdapter.name} · OS default route${defaultAdapter.isVirtual ? ' · VPN/virtual' : ''}`
                 : 'No OS default route detected'}
@@ -201,7 +235,7 @@ export const Analytics: React.FC = () => {
         <div className="metric-box">
           <span className="metric-label">Busiest Adapter</span>
           <div className="metric-value" style={{ color: '#38bdf8' }}>
-            {busiestLoad.toFixed(2)} <span style={{ fontSize: '11px' }}>Mbps</span>
+            {rate(busiestLoad)} <span style={{ fontSize: '11px' }}>{rateUnit}</span>
           </div>
           <span className="metric-sub">
             {busiestAdapter
@@ -213,7 +247,7 @@ export const Analytics: React.FC = () => {
         <div className="metric-box">
           <span className="metric-label">Recorded Volume ({periodMeta.label})</span>
           <div className="metric-value" style={{ color: '#facc15' }}>
-            {usage.totalMb.toFixed(2)} <span style={{ fontSize: '11px' }}>MB</span>
+            {volume(usage.totalMb)} <span style={{ fontSize: '11px' }}>{volumeUnit}</span>
           </div>
           <span className="metric-sub">
             {usage.from && usage.to ? `${usage.from} → ${usage.to}` : 'Real interface byte counters'}
@@ -223,7 +257,7 @@ export const Analytics: React.FC = () => {
 
       {/* Visual Graphs Row: Monthly Bar Chart + Process Share Donut */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 1.2fr', gap: '10px' }}>
-        <MonthlyBarChart data={barChartData} height={85} />
+        <MonthlyBarChart data={barChartData} height={85} formatVolume={mib => `${volume(mib)} ${volumeUnit}`} />
 
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
@@ -313,19 +347,19 @@ export const Analytics: React.FC = () => {
           <div style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '4px' }}>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Download (Rx)</div>
             <div className="font-mono" style={{ fontSize: '15px', fontWeight: 700, color: '#38bdf8' }}>
-              {usage.totalRxMb.toFixed(1)} <span style={{ fontSize: '10px' }}>MB</span>
+              {volume(usage.totalRxMb)} <span style={{ fontSize: '10px' }}>{volumeUnit}</span>
             </div>
           </div>
           <div style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '4px' }}>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Upload (Tx)</div>
             <div className="font-mono" style={{ fontSize: '15px', fontWeight: 700, color: '#4ade80' }}>
-              {usage.totalTxMb.toFixed(1)} <span style={{ fontSize: '10px' }}>MB</span>
+              {volume(usage.totalTxMb)} <span style={{ fontSize: '10px' }}>{volumeUnit}</span>
             </div>
           </div>
           <div style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '4px' }}>
-            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Total Bandwidth</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Total volume</div>
             <div className="font-mono" style={{ fontSize: '15px', fontWeight: 700, color: '#facc15' }}>
-              {usage.totalMb.toFixed(1)} <span style={{ fontSize: '10px' }}>MB</span>
+              {volume(usage.totalMb)} <span style={{ fontSize: '10px' }}>{volumeUnit}</span>
             </div>
           </div>
           <div style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '4px' }}>
@@ -345,7 +379,7 @@ export const Analytics: React.FC = () => {
               <th>Application</th>
               <th>Download (Rx)</th>
               <th>Upload (Tx)</th>
-              <th>Total MB</th>
+              <th>Total ({volumeUnit})</th>
               <th>Updated</th>
             </tr>
           </thead>
@@ -367,13 +401,13 @@ export const Analytics: React.FC = () => {
                   </td>
                   <td style={{ fontWeight: 600 }}>{rec.appName || 'All Process Traffic'}</td>
                   <td className="font-mono" style={{ color: '#38bdf8' }}>
-                    <ArrowDown size={10} /> {rec.rxMb.toFixed(1)} MB
+                    <ArrowDown size={10} /> {volume(rec.rxMb)} {volumeUnit}
                   </td>
                   <td className="font-mono" style={{ color: '#4ade80' }}>
-                    <ArrowUp size={10} /> {rec.txMb.toFixed(1)} MB
+                    <ArrowUp size={10} /> {volume(rec.txMb)} {volumeUnit}
                   </td>
                   <td className="font-mono" style={{ fontWeight: 700 }}>
-                    {rec.totalMb.toFixed(1)} MB
+                    {volume(rec.totalMb)} {volumeUnit}
                   </td>
                   <td className="font-mono" style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
                     {rec.updatedAt ? new Date(rec.updatedAt).toLocaleString() : 'Recent'}

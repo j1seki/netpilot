@@ -26,6 +26,7 @@ const macLimitsDir = "/Library/Application Support/net-merge"
 type Status struct {
 	Version          string `json:",omitempty"`
 	EngineSource     string `json:",omitempty"`
+	MTU              int    `json:",omitempty"`
 	RoutingMode      string `json:",omitempty"`
 	PrimaryAdapter   string `json:",omitempty"`
 	SecondaryAdapter string `json:",omitempty"`

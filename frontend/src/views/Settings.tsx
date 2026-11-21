@@ -7,6 +7,7 @@ import {
   NetMergeBinaryInfo,
   NetMergeEngineSource,
 } from '../api/wails';
+import { Notifications } from '../components/Notifications';
 import { UpdatePanel } from '../components/UpdatePanel';
 import {
   Shield,
@@ -231,6 +232,7 @@ export const Settings: React.FC = () => {
 
       {/* Automatic Updates: stable vs beta channel, checksum-verified install */}
       <UpdatePanel />
+      <Notifications />
 
       {/* Window & System Tray Behavior Settings */}
       <div className="card" style={{ marginBottom: 0 }}>

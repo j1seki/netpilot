@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 
@@ -20,10 +21,10 @@ type slotConn struct {
 	once        sync.Once
 	activity    *flowActivity
 	limiter     *flowLimiter
-	appName     string
+	policy      FlowPolicy
 	usageIn     atomic.Int64
 	usageOut    atomic.Int64
-	onClose     func(appName string, in, out int64)
+	onClose     func(policy FlowPolicy, in, out int64)
 	traffic     *trafficCounter
 	endTraffic  func()
 	trafficOnce sync.Once
@@ -66,9 +67,6 @@ func (c *slotConn) release() {
 	c.once.Do(func() {
 		c.s.untrack(c.sl, c.fam, c.activity)
 		c.s.ReleaseFor(c.sl, c.fam)
-		if c.onClose != nil {
-			c.onClose(c.appName, c.usageIn.Load(), c.usageOut.Load())
-		}
 	})
 }
 
@@ -78,6 +76,9 @@ func (c *slotConn) Close() error {
 	c.release()
 	err := c.TCPConn.Close()
 	c.trafficOnce.Do(func() {
+		if c.onClose != nil {
+			c.onClose(c.policy, c.usageIn.Load(), c.usageOut.Load())
+		}
 		if c.endTraffic != nil {
 			c.endTraffic()
 		}
@@ -99,7 +100,12 @@ type slotPacketConn struct {
 	sl          *Slot
 	fam         Family
 	balancer    *Balancer
-	pid         int
+	policy      FlowPolicy
+	limiter     *flowLimiter
+	usageIn     atomic.Int64
+	usageOut    atomic.Int64
+	dnsOriginal netip.AddrPort
+	dnsUpstream netip.AddrPort
 	traffic     *trafficCounter
 	endTraffic  func()
 	trafficOnce sync.Once
@@ -107,21 +113,36 @@ type slotPacketConn struct {
 
 func (c *slotPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	n, a, err := c.PacketConn.ReadFrom(p)
+	for err == nil && c.dnsUpstream.IsValid() {
+		if source, ok := a.(*net.UDPAddr); ok && netip.AddrPortFrom(source.AddrPort().Addr().Unmap(), uint16(source.Port)) == c.dnsUpstream {
+			a = net.UDPAddrFromAddrPort(c.dnsOriginal)
+			break
+		}
+		n, a, err = c.PacketConn.ReadFrom(p)
+	}
 	if n > 0 {
 		c.sl.bytesIn[c.fam].Add(int64(n))
+		c.usageIn.Add(int64(n))
 		c.traffic.add(n)
 		c.sl.throttlePacket(true, n)
+		c.limiter.read(n)
 	}
 	return n, a, err
 }
 
 func (c *slotPacketConn) WriteTo(p []byte, a net.Addr) (int, error) {
+	c.limiter.write(len(p))
 	c.sl.throttlePacket(false, len(p))
-	n, err := c.PacketConn.WriteTo(p, a)
+	target := a
+	if c.dnsUpstream.IsValid() {
+		target = net.UDPAddrFromAddrPort(c.dnsUpstream)
+	}
+	n, err := c.PacketConn.WriteTo(p, target)
 	c.sl.bytesOut[c.fam].Add(int64(n))
+	c.usageOut.Add(int64(n))
 	c.traffic.add(n)
 	if n > 0 {
-		c.balancer.recordProcessUDP(c.pid, a, c.sl.Name, p[:n])
+		c.balancer.recordProcessUDP(c.policy.PID, target, c.sl.Name, c.policy.RuleID, p[:n])
 	}
 	return n, err
 }
@@ -129,6 +150,7 @@ func (c *slotPacketConn) WriteTo(p []byte, a net.Addr) (int, error) {
 func (c *slotPacketConn) Close() error {
 	err := c.PacketConn.Close()
 	c.trafficOnce.Do(func() {
+		c.balancer.reportUsage(c.policy, c.usageIn.Load(), c.usageOut.Load())
 		if c.endTraffic != nil {
 			c.endTraffic()
 		}
@@ -144,6 +166,26 @@ func (b *Balancer) ListenUDP(ctx context.Context, f Family) (net.PacketConn, err
 }
 
 func (b *Balancer) ListenUDPFor(ctx context.Context, f Family, pid int) (net.PacketConn, error) {
+	return b.ListenUDPWithPolicy(ctx, f, netip.AddrPort{}, FlowPolicy{PID: pid})
+}
+
+// ListenUDPWithPolicy pins a TUN UDP flow and can redirect an ordinary DNS query.
+func (b *Balancer) ListenUDPWithPolicy(ctx context.Context, f Family, dst netip.AddrPort, policy FlowPolicy) (net.PacketConn, error) {
+	if policy.QuotaExceeded {
+		return nil, quotaError()
+	}
+	var upstream netip.AddrPort
+	if dst.Port() == 53 && policy.CustomDNS != "" {
+		server, err := b.dnsAddress(policy.CustomDNS)
+		if err != nil {
+			return nil, err
+		}
+		upstream = server
+		f = Fam4
+		if server.Addr().Is6() {
+			f = Fam6
+		}
+	}
 	network := "udp4"
 	if f == Fam6 {
 		network = "udp6"
@@ -151,7 +193,7 @@ func (b *Balancer) ListenUDPFor(ctx context.Context, f Family, pid int) (net.Pac
 	tried := map[string]struct{}{}
 	lastErr := errors.New("no usable network adapter")
 	for {
-		sl := b.S.AcquireFor(f, tried)
+		sl := b.acquirePolicySlot(f, policy, tried)
 		if sl == nil {
 			return nil, lastErr
 		}
@@ -166,7 +208,11 @@ func (b *Balancer) ListenUDPFor(ctx context.Context, f Family, pid int) (net.Pac
 			lastErr = err
 			continue
 		}
-		traffic, end := b.trackProcess(pid)
-		return &slotPacketConn{PacketConn: pc, sl: sl, fam: f, balancer: b, pid: pid, traffic: traffic, endTraffic: end}, nil
+		traffic, end := b.trackProcess(policy.PID)
+		return &slotPacketConn{
+			PacketConn: pc, sl: sl, fam: f, balancer: b, policy: policy,
+			limiter: newFlowLimiter(policy.BandwidthLimitMbps), traffic: traffic, endTraffic: end,
+			dnsUpstream: upstream, dnsOriginal: dst,
+		}, nil
 	}
 }

@@ -9,6 +9,8 @@ import {
 import { Sparkline } from '../components/Charts';
 import { ProcessIcon } from '../components/ProcessIcon';
 import { formatProcessRate, groupProcesses, type ProcessMetrics, type ProcessSort, type ProcessSortKey } from '../processes';
+import { ExecutablePath } from '../components/ExecutablePath';
+import { RuleEditor, type RuleDraft } from '../components/RuleEditor';
 import { AppInspection } from '../components/AppInspection';
 import { AdapterGroupButton, AdapterHideButton, useAdapterVisibility } from '../components/AdapterVisibility';
 import {
@@ -19,6 +21,7 @@ import {
   Globe,
   Trash2,
   Edit3,
+  Pencil,
   Search,
   Activity,
   ChevronRight,
@@ -78,16 +81,8 @@ export const DashboardView: React.FC = () => {
   // the user's public addresses by accident.
   const [showWan, setShowWan] = useState<boolean>(false);
 
-  // Modal for Add / Edit App Rule
-  const [showModal, setShowModal] = useState<boolean>(false);
-  const [editingRuleId, setEditingRuleId] = useState<string>('');
-  const [modalApp, setModalApp] = useState<string>('');
-  const [modalPath, setModalPath] = useState<string>('');
-  const [modalPreferred, setModalPreferred] = useState<string>('net-merge');
-  const [modalFallback, setModalFallback] = useState<string>('');
-  const [modalDns, setModalDns] = useState<string>('');
-  const [modalLimit, setModalLimit] = useState<string>('');
-  const [modalQuota, setModalQuota] = useState<string>('');
+  const [ruleDraft, setRuleDraft] = useState<RuleDraft | null>(null);
+  const [ruleError, setRuleError] = useState('');
 
   const loadData = async () => {
     const request = ++refreshSequence.current.started;
@@ -182,66 +177,18 @@ export const DashboardView: React.FC = () => {
     interfaces.find(i => i.name !== primaryAdapter)?.name ||
     '';
 
-  const openModalForRule = (rule?: RuleRecord, defaultAppName?: string, defaultPath?: string) => {
-    if (rule) {
-      setEditingRuleId(rule.id);
-      setModalApp(rule.appName);
-      setModalPath(rule.appPath || '');
-      setModalPreferred(rule.preferredInterface || 'net-merge');
-      setModalFallback(rule.fallbackInterface || '');
-      setModalDns(rule.customDns || '');
-      setModalLimit(rule.bandwidthLimitMbps > 0 ? String(rule.bandwidthLimitMbps) : '');
-      setModalQuota(rule.dataQuotaMb > 0 ? String(rule.dataQuotaMb) : '');
-    } else {
-      setEditingRuleId('');
-      setModalApp(defaultAppName || '');
-      setModalPath(defaultPath || '');
-      setModalPreferred('net-merge');
-      setModalFallback(interfaces[0]?.name || '');
-      setModalDns('');
-      setModalLimit('');
-      setModalQuota('');
+  const openModalForRule = (rule?: RuleRecord, appName?: string, appPath?: string) => {
+    setRuleDraft({ rule, appName, appPath });
+  };
+
+  const updateRule = async (action: () => Promise<unknown>) => {
+    setRuleError('');
+    try {
+      await action();
+      await loadData();
+    } catch (err) {
+      setRuleError(errorText(err));
     }
-    setShowModal(true);
-  };
-
-  const handleSaveRule = async () => {
-    const trimmed = modalApp.trim();
-    if (!trimmed) return;
-
-    const existing = rules.find(
-      r => r.id === editingRuleId || r.appName.toLowerCase() === trimmed.toLowerCase()
-    );
-
-    const rule: RuleRecord = {
-      id: existing ? existing.id : `rule-${Date.now()}`,
-      appName: trimmed,
-      appPath: modalPath.trim(),
-      domainPattern: existing?.domainPattern || '',
-      preferredInterface: modalPreferred,
-      fallbackInterface: modalFallback,
-      priority: existing?.priority || 100,
-      customDns: modalDns.trim() || undefined,
-      bandwidthLimitMbps: modalLimit ? parseFloat(modalLimit) : 0,
-      dataQuotaMb: modalQuota ? parseFloat(modalQuota) : 0,
-      dataUsedMb: existing?.dataUsedMb || 0,
-      enabled: true,
-    };
-    await api.saveRule(rule);
-    setShowModal(false);
-    await loadData().catch((e) => console.error(e));
-  };
-
-  const handleDeleteRule = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    await api.deleteRule(id);
-    await loadData().catch((e) => console.error(e));
-  };
-
-  const handleToggleRule = async (rule: RuleRecord, e: React.MouseEvent) => {
-    e.stopPropagation();
-    await api.saveRule({ ...rule, enabled: !rule.enabled });
-    await loadData().catch((e) => console.error(e));
   };
 
   const getAppRule = (appName: string): RuleRecord | undefined => {
@@ -257,11 +204,15 @@ export const DashboardView: React.FC = () => {
     if (!systemAppRules || !rule || !rule.enabled) {
       return 'net-merge (Default Adapter)';
     }
+    return formatConfiguredRoute(rule);
+  };
+
+  const formatConfiguredRoute = (rule: RuleRecord): string => {
     if (rule.preferredInterface === 'FASTEST') {
       return 'Fastest Adapter (Lowest RTT)';
     }
     if (rule.preferredInterface === 'ALL' || rule.preferredInterface === 'net-merge') {
-      return 'net-merge (Multi-Link)';
+      return 'Engine default';
     }
     if (rule.fallbackInterface && rule.fallbackInterface !== rule.preferredInterface) {
       return `${rule.preferredInterface} → ${rule.fallbackInterface}`;
@@ -586,6 +537,7 @@ export const DashboardView: React.FC = () => {
                 : 'All applications use System Default in Standby. Start Net-Merge or the local SOCKS5 proxy to route traffic through NetPilot.'}
           </p>
 
+          {ruleError && <p role="alert" style={{ color: '#fb7185' }}>{ruleError}</p>}
           {rules.length === 0 ? (
             <div style={{
               padding: '26px 16px',
@@ -606,7 +558,7 @@ export const DashboardView: React.FC = () => {
               <thead>
                 <tr>
                   <th>Application</th>
-                  <th>Effective Adapter</th>
+                  <th>Configured route</th>
                   <th>Caps / DNS</th>
                   <th>State</th>
                   <th style={{ textAlign: 'right' }}>Actions</th>
@@ -618,11 +570,7 @@ export const DashboardView: React.FC = () => {
                     a => a.name.toLowerCase() === rule.appName.toLowerCase()
                   );
                   return (
-                    <tr
-                      key={rule.id}
-                      onClick={() => openModalForRule(rule)}
-                      style={{ cursor: 'pointer' }}
-                    >
+                    <tr key={rule.id}>
                       <td>
                         <div style={{ fontWeight: 600, color: '#fafafa', display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <span>{rule.appName}</span>
@@ -630,11 +578,7 @@ export const DashboardView: React.FC = () => {
                             <span className="beszel-dot online" style={{ width: '6px', height: '6px' }} title="Running" />
                           )}
                         </div>
-                        {rule.appPath && (
-                          <div className="font-mono" style={{ fontSize: '10px', color: '#71717a' }}>
-                            {rule.appPath}
-                          </div>
-                        )}
+                        <ExecutablePath path={rule.appPath} />
                       </td>
 
                       <td>
@@ -647,7 +591,7 @@ export const DashboardView: React.FC = () => {
                           color: isMergeActive ? '#34d399' : '#a1a1aa',
                           border: `1px solid ${isMergeActive ? 'rgba(16, 185, 129, 0.25)' : '#27272a'}`,
                         }}>
-                          {formatRouteSummary(rule)}
+                          {formatConfiguredRoute(rule)}
                         </span>
                       </td>
 
@@ -658,7 +602,7 @@ export const DashboardView: React.FC = () => {
 
                       <td>
                         <button
-                          onClick={e => handleToggleRule(rule, e)}
+                          onClick={() => updateRule(() => api.saveRule({ ...rule, enabled: !rule.enabled }))}
                           className={`status-pill ${rule.enabled ? 'pass' : 'blocked'}`}
                           style={{ cursor: 'pointer' }}
                         >
@@ -667,8 +611,11 @@ export const DashboardView: React.FC = () => {
                       </td>
 
                       <td style={{ textAlign: 'right' }}>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => openModalForRule(rule)}>
+                          <Pencil size={12} /> Edit
+                        </button>
                         <button
-                          onClick={e => handleDeleteRule(rule.id, e)}
+                          onClick={() => updateRule(() => api.deleteRule(rule.id))}
                           style={{
                             background: 'transparent',
                             border: 'none',
@@ -676,7 +623,7 @@ export const DashboardView: React.FC = () => {
                             cursor: 'pointer',
                             padding: '4px',
                           }}
-                          title="Delete Policy"
+                          title="Delete policy" aria-label="Delete policy"
                         >
                           <Trash2 size={13} />
                         </button>
@@ -745,7 +692,9 @@ export const DashboardView: React.FC = () => {
                         <td>
                           <div className="process-name">
                             <ProcessIcon pid={first.pid} executable={first.executable} />
-                            <span className="process-name-text" title={first.executable || group.name}>{group.name}</span>
+                            <div className="process-identity">
+                              <div className="process-name-text" title={group.name}>{group.name}</div>
+                            </div>
                             {inspectButton(first)}
                             <button type="button" className="process-group-button" aria-expanded={expanded}
                               aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.name} (${group.processes.length} processes)`}
@@ -814,166 +763,10 @@ export const DashboardView: React.FC = () => {
         </section>
       </div>
 
-      {/* Add / Modify App Policy Modal */}
-      {showModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.75)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-        }}>
-          <div style={{
-            background: '#121215',
-            border: '1px solid #27272a',
-            borderRadius: '10px',
-            width: '450px',
-            padding: '18px 20px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '12px',
-            boxShadow: '0 20px 40px rgba(0, 0, 0, 0.6)',
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '14px', fontWeight: 700, color: '#fafafa' }}>
-                {editingRuleId ? `Edit Policy: ${modalApp}` : 'New Application Policy'}
-              </h3>
-              <button
-                onClick={() => setShowModal(false)}
-                style={{ background: 'transparent', border: 'none', color: '#a1a1aa', cursor: 'pointer' }}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div>
-              <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
-                Executable / Process Name *
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. chrome.exe, steam.exe, qbittorrent.exe"
-                value={modalApp}
-                onChange={e => setModalApp(e.target.value)}
-                style={{ width: '100%' }}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
-                Executable Path (Optional)
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. C:\Program Files\App\app.exe"
-                value={modalPath}
-                onChange={e => setModalPath(e.target.value)}
-                style={{ width: '100%' }}
-              />
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <div>
-                <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
-                  Preferred Adapter
-                </label>
-                <select
-                  value={modalPreferred}
-                  onChange={e => setModalPreferred(e.target.value)}
-                  style={{ width: '100%' }}
-                >
-                  <option value="net-merge">net-merge (Default Merged Adapter)</option>
-                  <option value="FASTEST">Fastest Adapter (Lowest Latency)</option>
-                  {interfaces.map(i => (
-                    <option key={i.name} value={i.name}>
-                      {i.name} ({i.ip || 'No IP'}){i.isDefault ? ' · OS default' : ''}{i.isVirtual ? ' · VPN/virtual' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
-                  Failover Backup Adapter
-                </label>
-                <select
-                  value={modalFallback}
-                  onChange={e => setModalFallback(e.target.value)}
-                  style={{ width: '100%' }}
-                >
-                  <option value="">net-merge / System Default</option>
-                  {interfaces.map(i => (
-                    <option key={i.name} value={i.name}>
-                      {i.name}{i.isDefault ? ' · OS default' : ''}{i.isVirtual ? ' · VPN/virtual' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <div>
-                <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
-                  Bandwidth Limit (Mbps)
-                </label>
-                <input
-                  type="number"
-                  placeholder="Unlimited"
-                  value={modalLimit}
-                  onChange={e => setModalLimit(e.target.value)}
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              <div>
-                <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
-                  Monthly Data Quota (MB)
-                </label>
-                <input
-                  type="number"
-                  placeholder="Unlimited"
-                  value={modalQuota}
-                  onChange={e => setModalQuota(e.target.value)}
-                  style={{ width: '100%' }}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '4px' }}>
-                Custom DNS Server (Optional)
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. 1.1.1.1 or 8.8.8.8"
-                value={modalDns}
-                onChange={e => setModalDns(e.target.value)}
-                style={{ width: '100%' }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => setShowModal(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={handleSaveRule}
-              >
-                Save Policy
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {ruleDraft && <RuleEditor draft={ruleDraft} interfaces={interfaces} close={() => setRuleDraft(null)} saved={() => {
+        setRuleDraft(null);
+        void loadData();
+      }} />}
     </div>
   );
 };

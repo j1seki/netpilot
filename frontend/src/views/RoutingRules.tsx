@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { api, RuleRecord, InterfaceInfo } from '../api/wails';
+import { api, RuleRecord, InterfaceInfo, NetMergeStatus } from '../api/wails';
+import { ExecutablePath } from '../components/ExecutablePath';
+import { RuleEditor, type RuleDraft } from '../components/RuleEditor';
 import {
   Plus,
   Trash2,
@@ -19,8 +21,6 @@ interface ExampleRule {
   key: string;
   appName: string;
   domainPattern: string;
-  preferredInterface: string;
-  fallbackInterface: string;
   priority: number;
   bandwidthLimitMbps: number;
   dataQuotaMb: number;
@@ -28,77 +28,64 @@ interface ExampleRule {
   description: string;
 }
 
-// Examples are deliberately not written to the database until the user clicks
-// "Add as disabled". They teach what a policy does without silently changing
-// routing on first launch.
+// Examples fill an editor draft. The user supplies the actual adapter before saving.
 const EXAMPLE_RULES: ExampleRule[] = [
   {
     key: 'video-calls',
     appName: 'Zoom / Teams',
     domainPattern: '*.zoom.us, *.teams.microsoft.com',
-    preferredInterface: 'FASTEST',
-    fallbackInterface: 'net-merge',
     priority: 90,
     bandwidthLimitMbps: 0,
     dataQuotaMb: 0,
     customDns: '',
-    description: 'Keep video calls on the lowest-latency link; if that link fails, fall back to the merged adapter.',
+    description: 'Choose a low-latency link for video calls. Add a second adapter for failover.',
   },
   {
     key: 'streaming',
     appName: 'Streaming apps',
     domainPattern: '*.netflix.com, *.googlevideo.com, *.primevideo.com',
-    preferredInterface: 'net-merge',
-    fallbackInterface: '',
     priority: 50,
     bandwidthLimitMbps: 0,
     dataQuotaMb: 0,
     customDns: '',
-    description: 'Spread streaming traffic across every healthy adapter for maximum combined throughput.',
+    description: 'Keep streaming traffic on your chosen link.',
   },
   {
     key: 'large-downloads',
     appName: 'Steam / qBittorrent',
     domainPattern: '',
-    preferredInterface: 'net-merge',
-    fallbackInterface: '',
     priority: 30,
     bandwidthLimitMbps: 50,
     dataQuotaMb: 0,
     customDns: '',
-    description: 'Use the merged link but cap it at 50 Mbps so large downloads do not starve browsing or calls.',
+    description: 'Cap large downloads at 50 Mbps to leave bandwidth for browsing and calls.',
   },
 ];
 
-export const RoutingRules: React.FC = () => {
+export const RoutingRules: React.FC<{ active: boolean; goToProcesses: () => void }> = ({ active, goToProcesses }) => {
   const [rules, setRules] = useState<RuleRecord[]>([]);
   const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [draft, setDraft] = useState<RuleDraft | null>(null);
   const [notice, setNotice] = useState('');
-  const [formError, setFormError] = useState('');
-
-  const [formId, setFormId] = useState('');
-  const [formApp, setFormApp] = useState('');
-  const [formDomain, setFormDomain] = useState('');
-  const [formPrefNic, setFormPrefNic] = useState('net-merge');
-  const [formFbNic, setFormFbNic] = useState('');
-  const [formPriority, setFormPriority] = useState(50);
-  const [formLimitMbps, setFormLimitMbps] = useState(0);
-  const [formDataQuotaMb, setFormDataQuotaMb] = useState(0);
-  const [formCustomDns, setFormCustomDns] = useState('');
+  const [status, setStatus] = useState<NetMergeStatus | null>(null);
 
   const loadData = async () => {
-    const [rList, ifaces] = await Promise.allSettled([
+    const [rList, ifaces, merge] = await Promise.allSettled([
       api.getRules(),
       api.getInterfaces(),
+      api.getNetMergeStatus(),
     ]);
     if (rList.status === 'fulfilled') setRules(rList.value);
     if (ifaces.status === 'fulfilled') setInterfaces(ifaces.value);
+    if (merge.status === 'fulfilled') setStatus(merge.value);
   };
 
   useEffect(() => {
-    loadData().catch((e) => console.error(e));
-  }, []);
+    if (!active) return;
+    void loadData();
+    const interval = setInterval(loadData, 5000);
+    return () => clearInterval(interval);
+  }, [active]);
 
   const flashNotice = (msg: string) => {
     setNotice(msg);
@@ -123,97 +110,6 @@ export const RoutingRules: React.FC = () => {
     }
   };
 
-  const resetForm = () => {
-    setFormId('');
-    setFormApp('');
-    setFormDomain('');
-    setFormPrefNic('net-merge');
-    setFormFbNic('');
-    setFormPriority(50);
-    setFormLimitMbps(0);
-    setFormDataQuotaMb(0);
-    setFormCustomDns('');
-    setFormError('');
-  };
-
-  const openEdit = (r: RuleRecord) => {
-    setFormId(r.id);
-    setFormApp(r.appName);
-    setFormDomain(r.domainPattern || '');
-    setFormPrefNic(r.preferredInterface || 'net-merge');
-    setFormFbNic(r.fallbackInterface || '');
-    setFormPriority(r.priority || 50);
-    setFormLimitMbps(r.bandwidthLimitMbps || 0);
-    setFormDataQuotaMb(r.dataQuotaMb || 0);
-    setFormCustomDns(r.customDns || '');
-    setFormError('');
-    setIsModalOpen(true);
-  };
-
-  const handleSave = async () => {
-    const appName = formApp.trim();
-    if (!appName) {
-      setFormError('An application or process name is required.');
-      return;
-    }
-    const existing = rules.find(r => r.id === formId);
-    const newRule: RuleRecord = {
-      id: formId || `rule_${Date.now()}`,
-      appName,
-      appPath: existing?.appPath || '',
-      domainPattern: formDomain.trim(),
-      preferredInterface: formPrefNic,
-      fallbackInterface: formFbNic,
-      priority: formPriority,
-      bandwidthLimitMbps: formLimitMbps,
-      dataQuotaMb: formDataQuotaMb,
-      dataUsedMb: existing?.dataUsedMb || 0,
-      customDns: formCustomDns.trim(),
-      // Editing preserves the current state; new policies start enabled.
-      enabled: existing ? existing.enabled : true,
-    };
-    try {
-      await api.saveRule(newRule);
-      setIsModalOpen(false);
-      resetForm();
-      flashNotice(existing ? `Updated policy for ${appName}.` : `Created policy for ${appName}.`);
-      await loadData();
-    } catch (err: any) {
-      setFormError(err?.message || String(err));
-    }
-  };
-
-  const addExample = async (ex: ExampleRule) => {
-    const rule: RuleRecord = {
-      id: `example_${ex.key}_${Date.now()}`,
-      appName: ex.appName,
-      appPath: '',
-      domainPattern: ex.domainPattern,
-      preferredInterface: ex.preferredInterface,
-      fallbackInterface: ex.fallbackInterface,
-      priority: ex.priority,
-      bandwidthLimitMbps: ex.bandwidthLimitMbps,
-      dataQuotaMb: ex.dataQuotaMb,
-      dataUsedMb: 0,
-      customDns: ex.customDns,
-      // Added disabled on purpose: the user reviews it before turning it on.
-      enabled: false,
-    };
-    try {
-      await api.saveRule(rule);
-      flashNotice(`Added "${ex.appName}" as a disabled policy. Review it, then toggle it on.`);
-      await loadData();
-    } catch (err: any) {
-      flashNotice(`Could not add example: ${err?.message || String(err)}`);
-    }
-  };
-
-  const adapterLabel = (name: string) => {
-    if (name === 'net-merge') return 'net-merge (Default Merged Adapter)';
-    if (name === 'FASTEST') return 'FASTEST (Lowest Latency Adapter)';
-    const info = interfaces.find(i => i.name === name);
-    return `${name}${info?.isDefault ? ' · OS default' : ''}${info?.isVirtual ? ' · VPN/virtual' : ''}`;
-  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -238,15 +134,12 @@ export const RoutingRules: React.FC = () => {
         <div>
           <h2 style={{ fontSize: '14.5px', fontWeight: 700 }}>Traffic Routing Rules & Policies</h2>
           <p style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-            Interface steering, fastest-adapter dynamic routing, speed limits, data quotas, and custom per-app DNS.
+            Pin app or destination traffic to a detected adapter and configure limits or DNS.
           </p>
         </div>
         <button
           className="btn btn-primary btn-sm"
-          onClick={() => {
-            resetForm();
-            setIsModalOpen(true);
-          }}
+          onClick={() => setDraft({})}
           style={{ padding: '6px 12px', fontSize: '11.5px' }}
         >
           <Plus size={13} /> New Routing Policy
@@ -254,6 +147,27 @@ export const RoutingRules: React.FC = () => {
       </div>
 
       <div className="card" style={{ marginBottom: 0 }}>
+        <p className="rule-editor-note">To verify a live route, open a process in Inspect, select Routing rules, and run Test live route.</p>
+        <button className="btn btn-secondary btn-sm" type="button" onClick={goToProcesses}>Open Active Processes</button>
+      </div>
+      <details className="card" style={{ marginBottom: 0 }}>
+        <summary>Policy precedence and settings that interact</summary>
+        <p>{status?.systemAppRules ? 'System-wide NetPilot forwarding applies matching rules to new flows.'
+          : status?.socksRunning ? 'Rules apply to clients using the NetPilot SOCKS5 proxy.'
+          : status?.isRunning ? 'The separate tunnel engine uses its own routing. Start the NetPilot SOCKS5 proxy to use these rules with supported clients.'
+          : 'Rules are saved. They take effect when traffic uses in-process NetPilot forwarding or its SOCKS5 proxy.'}</p>
+        <ul>
+          <li>Higher-priority rules win. Application name, path and destination are independent matches.</li>
+          <li>A pinned adapter takes precedence over Speed or Backup for new matching flows.</li>
+          <li>Adapter inclusion, address family and link health can make a pin unusable. Add an explicit fallback to keep new flows working.</li>
+          <li>Adapter caps and per-flow caps both apply. A reached app quota blocks new matching flows. On the NetPilot engine, an adapter quota temporarily lowers the effective cap and preserves the manual limit.</li>
+          <li>Custom DNS uses the selected routing policy. IPv6 policy can block IPv6 resolvers. OS resolver services, caches, VPN routes and encrypted DNS can bypass per-app DNS.</li>
+          <li>Mobile and Net-Merge share MTU, IPv6, scheduling, and reachability probes. Restore previous reinstates the saved Mobile snapshot. Applying a full connection profile can also change routing mode.</li>
+          <li>Custom reachability probes affect adapter health, including Fastest selection and Backup failover. Backup adapter choices set the failover order.</li>
+        </ul>
+      </details>
+
+      <div className="card" style={{ marginBottom: 0, overflowX: 'auto' }}>
         <table className="data-table">
           <thead>
             <tr>
@@ -271,7 +185,7 @@ export const RoutingRules: React.FC = () => {
             {rules.length === 0 ? (
               <tr>
                 <td colSpan={8} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>
-                  No routing policies configured yet. Click "+ New Routing Policy" or add a ready-made example below.
+                  No routing policies configured yet. Click "+ New Routing Policy" or load an example below.
                 </td>
               </tr>
             ) : (
@@ -281,7 +195,8 @@ export const RoutingRules: React.FC = () => {
                     {r.priority}
                   </td>
                   <td>
-                    <div style={{ fontWeight: 600 }}>{r.appName || 'All Applications'}</div>
+                    <div style={{ fontWeight: 600 }}>{r.appName || (r.appPath ? 'Executable match' : 'Destination match')}</div>
+                    <ExecutablePath path={r.appPath} />
                     {r.domainPattern && (
                       <div className="font-mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                         Dest: {r.domainPattern}
@@ -305,7 +220,7 @@ export const RoutingRules: React.FC = () => {
                         <ArrowRight size={11} /> {r.fallbackInterface}
                       </span>
                     ) : (
-                      <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>None (Direct)</span>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>None</span>
                     )}
                   </td>
                   <td>
@@ -346,7 +261,7 @@ export const RoutingRules: React.FC = () => {
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <button
-                        onClick={() => openEdit(r)}
+                        onClick={() => setDraft({ rule: r })}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#93c5fd', padding: '3px' }}
                         title="Edit policy"
                         aria-label="Edit policy"
@@ -376,11 +291,10 @@ export const RoutingRules: React.FC = () => {
           <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Copy size={14} color="#38bdf8" /> Example Policies (disabled by default)
           </span>
-          <span className="status-pill blocked">NOT ACTIVE</span>
+
         </div>
         <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
-          These are examples only. Click <strong>Add as disabled</strong> to copy one into your policy list,
-          review the details, then enable it when you are ready.
+          Load an example, select an adapter and save it as a disabled policy.
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {EXAMPLE_RULES.map(ex => (
@@ -400,11 +314,7 @@ export const RoutingRules: React.FC = () => {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
                   <span style={{ fontWeight: 700, fontSize: '12px', color: '#fafafa' }}>{ex.appName}</span>
-                  <span className="status-pill blocked" style={{ fontSize: '9.5px' }}>EXAMPLE</span>
-                  <span style={{ fontSize: '10.5px', color: '#93c5fd' }}>
-                    {ex.preferredInterface === 'FASTEST' ? 'FASTEST' : ex.preferredInterface}
-                    {ex.fallbackInterface ? ` → ${ex.fallbackInterface}` : ''}
-                  </span>
+
                   {ex.bandwidthLimitMbps > 0 && (
                     <span style={{ fontSize: '10.5px', color: '#f59e0b' }}>{ex.bandwidthLimitMbps} Mbps cap</span>
                   )}
@@ -416,223 +326,25 @@ export const RoutingRules: React.FC = () => {
               </div>
               <button
                 className="btn btn-secondary btn-sm"
-                onClick={() => addExample(ex)}
+                onClick={() => setDraft({ example: {
+                  appName: ex.appName, domainPattern: ex.domainPattern, priority: ex.priority,
+                  bandwidthLimitMbps: ex.bandwidthLimitMbps, dataQuotaMb: ex.dataQuotaMb, customDns: ex.customDns, enabled: false,
+                } })}
                 style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '5px' }}
-                title="Copy this example into your policies with the toggle OFF"
+                title="Load the example into the policy editor"
               >
-                <Plus size={12} /> Add as disabled
+                <Plus size={12} /> Load example
               </button>
             </div>
           ))}
         </div>
       </div>
 
-      {/* New / Edit Policy Modal */}
-      {isModalOpen && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.7)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 999,
-        }}>
-          <div style={{
-            backgroundColor: 'var(--bg-secondary)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-lg)',
-            padding: '24px',
-            width: '520px',
-            boxShadow: '0 20px 40px rgba(0,0,0,0.5)',
-            maxHeight: '90vh',
-            overflowY: 'auto',
-          }}>
-            <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '6px' }}>
-              {formId ? 'Edit Network Routing Policy' : 'Create Network Routing Policy'}
-            </h3>
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-              Route traffic from specified applications or domains to a designated network link with speed limits, data quotas, and custom DNS.
-            </p>
-
-            {formError && (
-              <div style={{
-                marginBottom: '12px',
-                padding: '7px 10px',
-                borderRadius: '5px',
-                background: 'rgba(244, 63, 94, 0.14)',
-                border: '1px solid rgba(244, 63, 94, 0.3)',
-                color: '#fb7185',
-                fontSize: '11.5px',
-              }}>
-                {formError}
-              </div>
-            )}
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '18px' }}>
-              <div>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Application Name *
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Zoom, Chrome, Slack, qBittorrent, tailscaled"
-                  value={formApp}
-                  onChange={e => setFormApp(e.target.value)}
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              <div>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Domain Pattern (Optional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. *.ts.net, *.github.com, 10.0.0.0/8"
-                  value={formDomain}
-                  onChange={e => setFormDomain(e.target.value)}
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <div>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                    Preferred Interface
-                  </label>
-                  <select
-                    value={formPrefNic}
-                    onChange={e => setFormPrefNic(e.target.value)}
-                    style={{ width: '100%' }}
-                  >
-                    <option value="net-merge">net-merge (Default Merged Adapter)</option>
-                    <option value="FASTEST">FASTEST (Lowest Latency Adapter)</option>
-                    {interfaces.map(i => (
-                      <option key={i.name} value={i.name}>{adapterLabel(i.name)}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                    Fallback Interface
-                  </label>
-                  <select
-                    value={formFbNic}
-                    onChange={e => setFormFbNic(e.target.value)}
-                    style={{ width: '100%' }}
-                  >
-                    <option value="">None (No Fallback)</option>
-                    {interfaces.map(i => (
-                      <option key={i.name} value={i.name}>{adapterLabel(i.name)}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <div>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                    Speed Limit (Mbps, 0=unlimited)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
-                    value={formLimitMbps}
-                    onChange={e => setFormLimitMbps(parseFloat(e.target.value) || 0)}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                    Data Cap (MB, 0=unlimited)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="100"
-                    value={formDataQuotaMb}
-                    onChange={e => setFormDataQuotaMb(parseFloat(e.target.value) || 0)}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <div>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                    Custom DNS Resolver per App
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. 1.1.1.1, 8.8.8.8, 9.9.9.9"
-                    value={formCustomDns}
-                    onChange={e => setFormCustomDns(e.target.value)}
-                    style={{ width: '100%' }}
-                  />
-                  <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
-                    <button
-                      type="button"
-                      onClick={() => setFormCustomDns('1.1.1.1')}
-                      style={{ fontSize: '10px', padding: '2px 6px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '3px', color: '#60a5fa', cursor: 'pointer' }}
-                    >
-                      Cloudflare (1.1.1.1)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormCustomDns('8.8.8.8')}
-                      style={{ fontSize: '10px', padding: '2px 6px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '3px', color: '#60a5fa', cursor: 'pointer' }}
-                    >
-                      Google (8.8.8.8)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormCustomDns('9.9.9.9')}
-                      style={{ fontSize: '10px', padding: '2px 6px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '3px', color: '#60a5fa', cursor: 'pointer' }}
-                    >
-                      Quad9
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                    Priority (1-100)
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="100"
-                    value={formPriority}
-                    onChange={e => setFormPriority(parseInt(e.target.value) || 10)}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button className="btn btn-secondary btn-sm" onClick={() => setIsModalOpen(false)}>
-                Cancel
-              </button>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={handleSave}
-                disabled={!formApp.trim()}
-                title={!formApp.trim() ? 'Enter an application name first' : 'Save policy'}
-              >
-                {formId ? 'Save Changes' : 'Save Policy'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {draft && <RuleEditor draft={draft} interfaces={interfaces} close={() => setDraft(null)} saved={() => {
+        setDraft(null);
+        flashNotice('Routing policy saved.');
+        void loadData();
+      }} />}
     </div>
   );
 };

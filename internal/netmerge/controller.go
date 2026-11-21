@@ -50,25 +50,27 @@ type Config struct {
 
 // StatusInfo represents the runtime state of net-merge.
 type StatusInfo struct {
-	IsRunning      bool               `json:"isRunning"`
-	PID            int                `json:"pid"`
-	Mode           string             `json:"mode"`
-	RoutingMode    string             `json:"routingMode"`    // "speed" or "backup"
-	DefaultAdapter string             `json:"defaultAdapter"` // "net-merge" when active, "System Default" when inactive
-	ActiveAdapter  string             `json:"activeAdapter"`  // currently active primary/failover adapter or "net-merge"
-	V6State        string             `json:"v6State"`
-	UptimeSec      int64              `json:"uptimeSec"`
-	Autostart      bool               `json:"autostart"`
-	SocksRunning   bool               `json:"socksRunning"`
-	SocksAddress   string             `json:"socksAddress"`
-	Config         Config             `json:"config"`
-	NICs           []engine.SlotStats `json:"nics"`
-	Limits         map[string]float64 `json:"limits"`
-	Binary         BinaryInfo         `json:"binary"`
-	RunningVersion string             `json:"runningVersion,omitempty"`
-	RunningSource  string             `json:"runningSource,omitempty"`
-	RestartForMode bool               `json:"restartForMode"`
-	SystemAppRules bool               `json:"systemAppRules"`
+	IsRunning         bool               `json:"isRunning"`
+	PID               int                `json:"pid"`
+	Mode              string             `json:"mode"`
+	RoutingMode       string             `json:"routingMode"`    // "speed" or "backup"
+	DefaultAdapter    string             `json:"defaultAdapter"` // "net-merge" when active, "System Default" when inactive
+	ActiveAdapter     string             `json:"activeAdapter"`  // currently active primary/failover adapter or "net-merge"
+	V6State           string             `json:"v6State"`
+	UptimeSec         int64              `json:"uptimeSec"`
+	Autostart         bool               `json:"autostart"`
+	SocksRunning      bool               `json:"socksRunning"`
+	SocksAddress      string             `json:"socksAddress"`
+	Config            Config             `json:"config"`
+	NICs              []engine.SlotStats `json:"nics"`
+	Limits            map[string]float64 `json:"limits"`
+	Binary            BinaryInfo         `json:"binary"`
+	RunningVersion    string             `json:"runningVersion,omitempty"`
+	RunningSource     string             `json:"runningSource,omitempty"`
+	RunningMTU        int                `json:"runningMtu,omitempty"`
+	ModeChangePending bool               `json:"modeChangePending"`
+	RestartForMode    bool               `json:"restartForMode"`
+	SystemAppRules    bool               `json:"systemAppRules"`
 }
 
 // Controller coordinates all net-merge operations directly inside NetPilot.
@@ -84,19 +86,19 @@ type Controller struct {
 	socksAddr    string
 
 	// In-process scheduler and balancer
-	sched         *engine.Scheduler
-	balancer      *engine.Balancer
-	tunDev        *tun.Tun
-	tunOn         bool
-	tunSince      time.Time
-	stopCh        chan struct{}
-	stopMonitor   sync.Once
-	cachedAuto    bool
-	lastAutoAt    time.Time
-	launchedPID   int
-	launched      BinaryInfo
-	launchedMode  string
-	launchedSince time.Time
+	sched          *engine.Scheduler
+	balancer       *engine.Balancer
+	tunDev         *tun.Tun
+	tunOn          bool
+	tunSince       time.Time
+	stopCh         chan struct{}
+	stopMonitor    sync.Once
+	cachedAuto     bool
+	lastAutoAt     time.Time
+	launchedPID    int
+	launched       BinaryInfo
+	launchedConfig Config
+	launchedSince  time.Time
 }
 
 // NewController creates and initializes the Net-Merge controller with a live scheduler.
@@ -163,7 +165,7 @@ func normalizeConfig(cfg Config) Config {
 	if cfg.MTU < 1280 || cfg.MTU > 65535 {
 		cfg.MTU = tun.DefaultMTU
 	}
-	if cfg.RescanSec <= 0 {
+	if cfg.RescanSec <= 0 || time.Duration(cfg.RescanSec) > (1<<63-1)/time.Second {
 		cfg.RescanSec = 3
 	}
 	if cfg.SocksAddress == "" {
@@ -243,12 +245,6 @@ func (c *Controller) initScheduler() {
 		initial = nil
 	}
 	c.sched = engine.NewScheduler(initial)
-	if c.config.PrimaryAdapter == "" && len(initial) > 0 {
-		c.config.PrimaryAdapter = initial[0].Name
-	}
-	if c.config.SecondaryAdapter == "" && len(initial) > 1 {
-		c.config.SecondaryAdapter = initial[1].Name
-	}
 	c.applySchedulerModeLocked()
 
 	if limits, err := state.LoadLimits(c.stateDir); err == nil {
@@ -261,7 +257,8 @@ func (c *Controller) initScheduler() {
 
 	go c.sched.RunProbes(c.stopCh)
 	go func() {
-		rescanTicker := time.NewTicker(3 * time.Second)
+		rescanEvery := time.Duration(c.GetConfig().RescanSec) * time.Second
+		rescanTicker := time.NewTicker(rescanEvery)
 		tickTicker := time.NewTicker(1 * time.Second)
 		defer rescanTicker.Stop()
 		defer tickTicker.Stop()
@@ -281,6 +278,10 @@ func (c *Controller) initScheduler() {
 				c.sched.Tick(now.Sub(last))
 				last = now
 				c.mu.RLock()
+				if interval := time.Duration(c.config.RescanSec) * time.Second; interval != rescanEvery {
+					rescanEvery = interval
+					rescanTicker.Reset(rescanEvery)
+				}
 				isOn := c.tunOn
 				since := c.tunSince
 				rm := c.config.RoutingMode
@@ -290,7 +291,8 @@ func (c *Controller) initScheduler() {
 						modeDesc = "system-wide (Backup Failover)"
 					}
 					state.Write(c.stateDir, state.Status{
-						Version: nativeVersionLabel(), EngineSource: "builtin", RoutingMode: rm,
+						Version: nativeVersionLabel(), EngineSource: "builtin", RoutingMode: rm, MTU: c.tunDev.MTU,
+						PrimaryAdapter: c.config.PrimaryAdapter, SecondaryAdapter: c.config.SecondaryAdapter,
 						PID:     os.Getpid(),
 						Mode:    modeDesc,
 						V6:      c.balancer.V6State(),
@@ -374,6 +376,42 @@ func (c *Controller) InspectProcess(pid int) ([]engine.ProcessActivity, bool) {
 	return c.balancer.InspectProcess(pid), true
 }
 
+// RuleRouteProbe reports an outbound socket opened using the live application policy.
+type RuleRouteProbe struct {
+	RuleID    string `json:"ruleId"`
+	Preferred string `json:"preferred"`
+	Fallback  string `json:"fallback,omitempty"`
+	Adapter   string `json:"adapter"`
+	SourceIP  string `json:"sourceIp"`
+	Peer      string `json:"peer"`
+}
+
+func (c *Controller) TestRuleRoute(ctx context.Context, app, path, host string, port int) (RuleRouteProbe, error) {
+	c.mu.RLock()
+	b, active := c.balancer, c.tunOn || c.socksRunning
+	c.mu.RUnlock()
+	if !active || b == nil || !b.HasPolicyResolver() {
+		return RuleRouteProbe{}, fmt.Errorf("start NetPilot’s SOCKS5 proxy or its in-app system tunnel to test a live rule")
+	}
+	policy := b.ResolvePolicy(app, path, host)
+	if policy.RuleID == "" {
+		return RuleRouteProbe{}, fmt.Errorf("no enabled policy matches this process and destination")
+	}
+	if policy.QuotaExceeded {
+		return RuleRouteProbe{}, fmt.Errorf("rule %q blocks new traffic because its quota has been reached", policy.RuleID)
+	}
+	conn, slot, family, err := b.DialTCPFor(ctx, host, port, policy)
+	if err != nil {
+		return RuleRouteProbe{}, fmt.Errorf("rule %q selected %s but could not connect to %s on TCP %d: %w", policy.RuleID, policy.PreferredNIC, host, port, err)
+	}
+	defer conn.Close()
+	defer b.S.ReleaseFor(slot, family)
+	return RuleRouteProbe{
+		RuleID: policy.RuleID, Preferred: policy.PreferredNIC, Fallback: policy.FallbackNIC,
+		Adapter: slot.Name, SourceIP: conn.LocalAddr().(*net.TCPAddr).IP.String(), Peer: conn.RemoteAddr().String(),
+	}, nil
+}
+
 // DefaultAdapterName returns "net-merge" when net-merge is active, or "System Default" when inactive.
 func (c *Controller) DefaultAdapterName() string {
 	if c.IsActive() {
@@ -408,21 +446,21 @@ func (c *Controller) SetCloseAction(action string) error {
 func (c *Controller) SetRoutingMode(mode, primary, secondary string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	previous := c.config
-	if strings.EqualFold(strings.TrimSpace(mode), "backup") {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case "backup":
 		if c.config.EngineSource != "builtin" {
 			return fmt.Errorf("Backup Failover requires the NetPilot engine; switch engines in Settings first")
 		}
-		c.config.RoutingMode = "backup"
-	} else {
-		c.config.RoutingMode = "speed"
+		if primary != "" && primary == secondary {
+			return fmt.Errorf("choose different primary and backup adapters")
+		}
+	case "speed":
+	default:
+		return fmt.Errorf("routing mode must be speed or backup")
 	}
-	if primary != "" {
-		c.config.PrimaryAdapter = primary
-	}
-	if secondary != "" {
-		c.config.SecondaryAdapter = secondary
-	}
+	previous := c.config
+	c.config.RoutingMode, c.config.PrimaryAdapter, c.config.SecondaryAdapter = mode, primary, secondary
 	if err := c.saveConfigLocked(); err != nil {
 		c.config = previous
 		return err
@@ -471,7 +509,8 @@ func resolveActiveAdapter(isRunning bool, cfg Config, snap []engine.SlotStats) s
 	if cfg.RoutingMode == "backup" {
 		// Check if PrimaryAdapter is present and up
 		for _, s := range snap {
-			if s.Name == cfg.PrimaryAdapter && s.Present && s.State != "no internet" {
+			isPrimary := s.Name == cfg.PrimaryAdapter || cfg.PrimaryAdapter == "" && s.Name != cfg.SecondaryAdapter
+			if isPrimary && s.Present && s.State != "no internet" {
 				return s.Name + " (Primary)"
 			}
 		}
@@ -526,7 +565,10 @@ func (c *Controller) GetStatus() (StatusInfo, error) {
 	}
 
 	if inProcOn {
-		info.SystemAppRules = true
+		info.SystemAppRules = c.balancer != nil && c.balancer.HasPolicyResolver()
+		if c.tunDev != nil {
+			info.RunningMTU = c.tunDev.MTU
+		}
 		info.RunningVersion = nativeVersionLabel()
 		info.RunningSource = "builtin"
 		info.PID = os.Getpid()
@@ -558,9 +600,18 @@ func (c *Controller) GetStatus() (StatusInfo, error) {
 		if st.PID == c.launchedPID && (st.Since.Equal(c.launchedSince) || st.EngineSource == "builtin") {
 			info.RunningVersion = c.launched.Version
 			info.RunningSource = c.launched.EngineSource
-			info.RoutingMode = c.launchedMode
+			info.RoutingMode = c.launchedConfig.RoutingMode
+			if st.MTU == 0 {
+				st.MTU = c.launchedConfig.MTU
+			}
+			if st.EngineSource == "" {
+				st.PrimaryAdapter, st.SecondaryAdapter = c.launchedConfig.PrimaryAdapter, c.launchedConfig.SecondaryAdapter
+			}
 		}
 		info.RestartForMode = true
+		info.RunningMTU = st.MTU
+		info.ModeChangePending = info.RoutingMode != cfg.RoutingMode ||
+			(cfg.RoutingMode == "backup" && (st.PrimaryAdapter != cfg.PrimaryAdapter || st.SecondaryAdapter != cfg.SecondaryAdapter))
 		info.V6State = st.V6
 		info.UptimeSec = int64(time.Since(st.Since).Seconds())
 		if len(st.NICs) > 0 {
@@ -614,6 +665,13 @@ func (c *Controller) SetSystemWide(on bool) error {
 
 	// 1. If built-in mode (default) and we have admin/root/CAP_NET_ADMIN privileges, start TUN in-process directly!
 	if c.config.EngineSource == "builtin" && platform.IsAdmin() {
+		found, err := c.discover()
+		if err := updateSchedulerFromDiscovery(c.sched, found, err); err != nil {
+			return err
+		}
+		if !hasTunnelUplink(found, c.balancer.V6Allowed()) {
+			return fmt.Errorf("no eligible adapter with an enabled IP family; connect an uplink or review the adapter and IPv6 settings")
+		}
 		if err := platform.CheckDriver(); err != nil {
 			return fmt.Errorf("TUN driver check failed: %w", err)
 		}
@@ -634,7 +692,8 @@ func (c *Controller) SetSystemWide(on bool) error {
 			modeDesc = "system-wide (Backup Mode)"
 		}
 		state.Write(c.stateDir, state.Status{
-			Version: nativeVersionLabel(), EngineSource: "builtin", RoutingMode: c.config.RoutingMode,
+			Version: nativeVersionLabel(), EngineSource: "builtin", RoutingMode: c.config.RoutingMode, MTU: t.MTU,
+			PrimaryAdapter: c.config.PrimaryAdapter, SecondaryAdapter: c.config.SecondaryAdapter,
 			PID:     os.Getpid(),
 			Mode:    modeDesc,
 			V6:      c.balancer.V6State(),
@@ -710,7 +769,7 @@ func (c *Controller) SetSystemWide(on bool) error {
 	if c.waitForActiveStatus(12 * time.Second) {
 		if st, ok := state.Read(c.stateDir); ok {
 			c.launchedPID, c.launched = st.PID, bin
-			c.launchedMode = c.config.RoutingMode
+			c.launchedConfig = c.config
 			c.launchedSince = st.Since
 		}
 		return nil
@@ -724,6 +783,15 @@ func (c *Controller) SetSystemWide(on bool) error {
 		return fmt.Errorf("net-merge engine did not become active: %s", lines)
 	}
 	return fmt.Errorf("net-merge engine did not start within timeout (check admin/UAC permissions or adapter connectivity)")
+}
+
+func hasTunnelUplink(adapters []nics.Nic, allowIPv6 bool) bool {
+	for _, adapter := range adapters {
+		if adapter.IP != nil || (allowIPv6 && adapter.IP6 != nil) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Controller) stopLocalTunnelLocked() {
@@ -814,10 +882,23 @@ func (c *Controller) SetLimit(adapter string, mbps float64) error {
 	return nil
 }
 
+// SetQuotaLimits applies temporary caps and publishes them to a separately running NetPilot engine.
+func (c *Controller) SetQuotaLimits(limits map[string]float64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sched.SetQuotaLimits(limits)
+	return state.SaveQuotaLease(c.stateDir, limits)
+}
+
 // CleanupStale removes any leftover routes, gateway rules, or orphaned TUN devices.
 func (c *Controller) CleanupStale() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.tunOn {
+		if _, running := state.Read(c.stateDir); running {
+			return fmt.Errorf("stop the running Net-Merge engine before cleaning up routes")
+		}
+	}
 	c.stopLocalTunnelLocked()
 	state.Clear(c.stateDir)
 	tun.CleanupStale()
@@ -912,12 +993,86 @@ func (c *Controller) SetIPv6Mode(mode string) error {
 	return c.saveConfigLocked()
 }
 
-// SetAutoPause updates the auto-pause on single connection setting.
-func (c *Controller) SetAutoPause(autoPause bool) error {
+// MobileSettings contains the tunnel settings edited together in Mobile.
+type MobileSettings struct {
+	MTU            int      `json:"mtu"`
+	IPv6Mode       string   `json:"ipv6Mode"`
+	Scheduling     string   `json:"scheduling"`
+	ProbeTargetsV4 []string `json:"probeTargetsV4"`
+	ProbeTargetsV6 []string `json:"probeTargetsV6"`
+}
+
+func (cfg Config) MobileSettings() MobileSettings {
+	return MobileSettings{cfg.MTU, cfg.IPv6Mode, cfg.Scheduling, cfg.ProbeTargetsV4, cfg.ProbeTargetsV6}
+}
+
+func DefaultMobileSettings() MobileSettings {
+	return MobileSettings{MTU: tun.DefaultMTU, IPv6Mode: "auto", Scheduling: "balanced"}
+}
+
+// SaveMobileSettings updates the fields in the Mobile form as one config write.
+func (c *Controller) SaveMobileSettings(settings MobileSettings) (MobileSettings, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.config.AutoPause = autoPause
-	return c.saveConfigLocked()
+	previous := c.config
+	v6, ok := engine.ParseV6Mode(settings.IPv6Mode)
+	if settings.MTU < 1280 || settings.MTU > 65535 || !ok {
+		return previous.MobileSettings(), fmt.Errorf("set an MTU between 1280 and 65535 and a valid IPv6 policy")
+	}
+	if settings.Scheduling != "balanced" && settings.Scheduling != "low-latency" {
+		return previous.MobileSettings(), fmt.Errorf("unknown scheduling profile %q", settings.Scheduling)
+	}
+	c.config.MTU, c.config.IPv6Mode, c.config.Scheduling = settings.MTU, settings.IPv6Mode, settings.Scheduling
+	c.config.ProbeTargetsV4 = append([]string(nil), settings.ProbeTargetsV4...)
+	c.config.ProbeTargetsV6 = append([]string(nil), settings.ProbeTargetsV6...)
+	if err := c.saveConfigLocked(); err != nil {
+		c.config = previous
+		return previous.MobileSettings(), err
+	}
+	c.applySchedulerModeLocked()
+	if c.balancer != nil {
+		c.balancer.SetV6Mode(v6)
+	}
+	return previous.MobileSettings(), nil
+}
+
+// SetMobileTunnelSettings updates only the settings shared with Mobile profiles.
+func (c *Controller) SetMobileTunnelSettings(mtu int, ipv6 string) (Config, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	previous := c.config
+	v6, ok := engine.ParseV6Mode(ipv6)
+	if mtu < 1280 || mtu > 65535 || !ok {
+		return previous, fmt.Errorf("invalid tunnel MTU or IPv6 mode")
+	}
+	c.config.MTU, c.config.IPv6Mode = mtu, ipv6
+	if err := c.saveConfigLocked(); err != nil {
+		c.config = previous
+		return previous, err
+	}
+	if c.balancer != nil {
+		c.balancer.SetV6Mode(v6)
+	}
+	return previous, nil
+}
+
+// SetSchedulerSettings saves the Mobile scheduler form without overwriting other settings.
+func (c *Controller) SetSchedulerSettings(profile string, v4, v6 []string) error {
+	if profile != "balanced" && profile != "low-latency" {
+		return fmt.Errorf("unknown scheduling profile %q", profile)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	previous := c.config
+	c.config.Scheduling = profile
+	c.config.ProbeTargetsV4 = append([]string(nil), v4...)
+	c.config.ProbeTargetsV6 = append([]string(nil), v6...)
+	if err := c.saveConfigLocked(); err != nil {
+		c.config = previous
+		return err
+	}
+	c.applySchedulerModeLocked()
+	return nil
 }
 
 // SaveConfig updates and persists the net-merge configuration.

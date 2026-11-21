@@ -5,6 +5,7 @@ package rules
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"path"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"netpilot/internal/db"
+	"netpilot/internal/engine"
 )
 
 // MatchDecision represents the outcome of evaluating a request against the rule set.
@@ -19,6 +21,7 @@ type MatchDecision struct {
 	MatchedRuleID      string        `json:"matchedRuleId,omitempty"`
 	AppName            string        `json:"appName"`
 	Destination        string        `json:"destination"`
+	PreferredInterface string        `json:"preferredInterface,omitempty"`
 	SelectedInterface  string        `json:"selectedInterface"`
 	FallbackInterface  string        `json:"fallbackInterface,omitempty"`
 	IsFallback         bool          `json:"isFallback"`
@@ -120,23 +123,35 @@ func (e *Engine) RecordUsage(appName string, bytesIn, bytesOut int64) {
 	mb := float64(total) / (1024 * 1024)
 
 	e.mu.Lock()
-	var changed []db.RuleRecord
+	defer e.mu.Unlock()
 	for i := range e.rules {
 		r := &e.rules[i]
-		if !r.Enabled || r.DataQuotaMB <= 0 || r.AppName == "" {
-			continue
+		if r.Enabled && r.DataQuotaMB > 0 && appNameMatches(appName, r.AppName) {
+			e.addUsage(r, mb)
 		}
-		ruleName := strings.ToLower(r.AppName)
-		if !appNameMatches(appName, ruleName) {
-			continue
-		}
-		r.DataUsedMB += mb
-		changed = append(changed, *r)
 	}
-	e.mu.Unlock()
+}
 
-	for _, r := range changed {
-		_ = e.database.SaveRule(r)
+// RecordRuleUsage attributes a finished flow to the policy that selected it.
+func (e *Engine) RecordRuleUsage(ruleID string, bytesIn, bytesOut int64) {
+	total := bytesIn + bytesOut
+	if ruleID == "" || total <= 0 {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := range e.rules {
+		r := &e.rules[i]
+		if r.ID == ruleID && r.DataQuotaMB > 0 {
+			e.addUsage(r, float64(total)/(1024*1024))
+			return
+		}
+	}
+}
+
+func (e *Engine) addUsage(rule *db.RuleRecord, mb float64) {
+	if err := e.database.AddRuleUsage(rule.ID, mb); err == nil {
+		rule.DataUsedMB += mb
 	}
 }
 
@@ -160,7 +175,61 @@ func (e *Engine) ValidateRule(r db.RuleRecord) error {
 	if r.DataQuotaMB < 0 {
 		return errors.New("data quota cannot be negative")
 	}
+	if dns := strings.TrimSpace(r.CustomDNS); dns != "" {
+		if _, err := engine.ParseDNSAddress(dns); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// RuleMatch is an inspection result for a policy whose criteria match the proposed flow.
+type RuleMatch struct {
+	Rule      db.RuleRecord `json:"rule"`
+	MatchedBy string        `json:"matchedBy"`
+	Result    string        `json:"result"`
+}
+
+// MatchRules lists matching policies in precedence order, including disabled rules.
+func (e *Engine) MatchRules(appName, appPath, destination string) []RuleMatch {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	normPath := strings.ToLower(strings.TrimSpace(appPath))
+	normDest := strings.ToLower(strings.TrimSpace(destination))
+	matches := []RuleMatch{}
+	selected := false
+	for _, rule := range e.rules {
+		matchedBy := matchingCriterion(rule, appName, normPath, normDest)
+		if matchedBy == "" {
+			continue
+		}
+		result := "shadowed"
+		if !rule.Enabled {
+			result = "disabled"
+		} else if !selected {
+			result = "selected"
+			selected = true
+		}
+		matches = append(matches, RuleMatch{Rule: rule, MatchedBy: matchedBy, Result: result})
+	}
+	return matches
+}
+
+// matchingCriterion is shared by rule inspection and the forwarding policy resolver.
+func matchingCriterion(rule db.RuleRecord, appName, normPath, normDest string) string {
+	if appNameMatches(appName, rule.AppName) {
+		return "application name"
+	}
+	if rule.AppPath != "" && normPath != "" {
+		pattern := strings.ToLower(rule.AppPath)
+		if ok, _ := filepath.Match(pattern, normPath); ok || normPath == pattern {
+			return "executable path"
+		}
+	}
+	if rule.DomainPattern != "" && matchesDestination(rule.DomainPattern, normDest) {
+		return "destination"
+	}
+	return ""
 }
 
 // Evaluate matches an application name, path, and destination against active rules.
@@ -183,43 +252,13 @@ func (e *Engine) Evaluate(appName, appPath, destination string, defaultInterface
 			continue
 		}
 
-		// Check app name match
-		matched := appNameMatches(appName, r.AppName)
-
-		// Check app path match (supports glob)
-		if !matched && r.AppPath != "" {
-			rulePath := strings.ToLower(r.AppPath)
-			if ok, _ := filepath.Match(rulePath, normPath); ok || normPath == rulePath {
-				matched = true
-			}
-		}
-
-		// Check domain pattern match. A wildcard suffix must match on a label
-		// boundary, and a plain pattern is an exact match only: matching any
-		// destination that merely ends in the pattern made "example.com" match
-		// "evil-example.com" and routed/quota-attributed unrelated traffic.
-		if !matched && r.DomainPattern != "" {
-			pattern := strings.ToLower(strings.TrimSpace(r.DomainPattern))
-			if pattern == "*" {
-				matched = true
-			} else if pattern == normDest {
-				matched = true
-			} else if strings.HasPrefix(pattern, "*.") {
-				suffix := strings.TrimPrefix(pattern, "*")
-				matched = strings.HasSuffix(normDest, suffix) && len(normDest) > len(suffix)
-			} else if strings.HasPrefix(pattern, "*") {
-				// A bare "*foo" keeps the legacy suffix behaviour (e.g. "*@work" or
-				// "*internal"), but never matches the whole destination by accident.
-				matched = strings.HasSuffix(normDest, strings.TrimPrefix(pattern, "*"))
-			}
-		}
-
-		if matched {
+		if matchingCriterion(r, appName, normPath, normDest) != "" {
 			decision.MatchedRuleID = r.ID
 			decision.BandwidthLimitMbps = r.BandwidthLimitMbps
 			decision.DataQuotaMB = r.DataQuotaMB
 			decision.DataUsedMB = r.DataUsedMB
-			decision.CustomDNS = r.CustomDNS
+			decision.CustomDNS = strings.TrimSpace(r.CustomDNS)
+			decision.PreferredInterface = r.PreferredInterface
 			decision.FallbackInterface = r.FallbackInterface
 
 			// Check quota
@@ -282,4 +321,33 @@ func (e *Engine) Evaluate(appName, appPath, destination string, defaultInterface
 
 	decision.Reason = fmt.Sprintf("No specific rule matched: routed to default system interface %s", defaultInterface)
 	return decision
+}
+
+func matchesDestination(patterns, destination string) bool {
+	if destination == "" {
+		return false
+	}
+	host := strings.TrimSuffix(destination, ".")
+	ip, _ := netip.ParseAddr(host)
+	for item := range strings.SplitSeq(patterns, ",") {
+		pattern := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(item)), ".")
+		switch {
+		case pattern == "*" || pattern == host:
+			return true
+		case strings.HasPrefix(pattern, "*."):
+			suffix := pattern[1:]
+			if strings.HasSuffix(host, suffix) && len(host) > len(suffix) {
+				return true
+			}
+		case strings.HasPrefix(pattern, "*"):
+			if strings.HasSuffix(host, pattern[1:]) {
+				return true
+			}
+		case ip.IsValid():
+			if prefix, err := netip.ParsePrefix(pattern); err == nil && prefix.Contains(ip.Unmap()) {
+				return true
+			}
+		}
+	}
+	return false
 }

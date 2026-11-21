@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLimitRequestRoundTrip(t *testing.T) {
@@ -24,6 +25,28 @@ func TestLimitRequestRoundTrip(t *testing.T) {
 	}
 	if _, ok := TakeLimit(dir); ok {
 		t.Fatal("a request must be consumed exactly once")
+	}
+}
+
+func TestQuotaLeaseExpiresWithoutChangingManualCap(t *testing.T) {
+	dir := t.TempDir()
+	if err := Prepare(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveLimits(dir, map[string]float64{"Wi-Fi": 12}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveQuotaLease(dir, map[string]float64{"Wi-Fi": 0.01}); err != nil {
+		t.Fatal(err)
+	}
+	if limits := ReadQuotaLease(dir, time.Now()); limits["Wi-Fi"] != 0.01 {
+		t.Fatalf("fresh lease: %v", limits)
+	}
+	if limits := ReadQuotaLease(dir, time.Now().Add(time.Minute)); len(limits) != 0 {
+		t.Fatalf("expired lease: %v", limits)
+	}
+	if saved, err := LoadLimits(dir); err != nil || saved["Wi-Fi"] != 12 {
+		t.Fatalf("manual cap changed: %v, %v", saved, err)
 	}
 }
 

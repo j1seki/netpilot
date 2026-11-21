@@ -3,6 +3,31 @@
 What changed in each release. Each version's section becomes its GitHub release notes, so add the
 entry here before pushing a version tag.
 
+## [0.4.4] - 2026-11-20
+
+### Application routing and Metrics
+
+- Edit app policies from Application Routing or Rules. Active Processes shows process names, and rule editors wrap executable paths and offer a copy button.
+- Choose from adapters detected on the host. Inspect shows the matching saved rule, offers a live TCP routing probe, and displays observed traffic when the NetPilot engine attributes a new flow to the process.
+- The in-app NetPilot engine applies adapter preferences, custom DNS, and quotas to eligible flows. A strict adapter pin takes precedence over Speed or Backup mode. New flows pick up a live mode switch in the in-app engine. A separate engine shows when it needs a restart.
+- Choose traffic volume and transfer-rate units independently. Merged throughput uses the engine's forwarding counters. Adapter quota edits and resets preserve the manual speed cap.
+
+### Mobile, notifications, and diagnostics
+
+- Mobile shows current and desired settings side by side, selects a connected hotspot adapter, and suggests adapters with supported Windows tethering signatures. Profiles fill the editable draft. Apply, undo, and restore defaults are explicit actions.
+- Settings controls in-app and desktop notifications and links to system preferences. The Windows portable build can fall back to a notification-area balloon.
+- Test & Debug marks connectivity-changing tests, offers a separate skip toggle, and accepts an optional hotspot adapter for checks that need a specific link.
+- NetPilot refuses to install tunnel routes without an eligible uplink and protects a separate active engine from route cleanup.
+- During failover, the displayed active link reflects the scheduler cooldown before the primary comes back into use.
+- On Linux, NetPilot preserves competing capture routes and refreshes process attribution for newly opened sockets so app rules apply as soon as a process connects.
+- The desktop follows the configured adapter rescan interval. The legacy command-line tray retains its automatic pause option. The desktop tunnel continues to apply routing policies when one link remains.
+
+### Known limitations
+
+- System-wide app rules require the in-app NetPilot engine. SOCKS5 policy enforcement requires apps to use the in-app proxy. Custom DNS requires a hostname visible to NetPilot.
+- A phone connected over Wi-Fi may look like any other access point. Select the Wi-Fi adapter manually when the phone cannot be identified.
+- VPNs, app-managed DNS, and destination-specific routes can affect which traffic reaches NetPilot. Restart the affected app's connections after editing its rule to observe the new policy.
+
 ## [0.4.3] - 2026-11-20
 
 ### Active Processes and diagnostics

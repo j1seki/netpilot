@@ -206,12 +206,16 @@ func (r *Runner) runSuite(suite PlatformSuite, tetherAdapter string, skipDisrupt
 		cases = r.runMacOSCases(capRep)
 	case SuiteTether:
 		cases = runCaseList([]inProcTest{{
-			name: "Tether adapter IPv4 connectivity", classification: "System",
+			name: "Hotspot adapter IPv4 connectivity", classification: "System",
 			fn: func() (TestStatus, string) { return checkTetherLink(tetherAdapter) },
 		}})
 	case SuiteLive:
 		cases = runCaseListFiltered(append([]inProcTest{
 			{name: "SOCKS routing rule and bandwidth cap", classification: "Integration", fn: checkProxyRulesAndCap},
+			{name: "Strict adapter routing, per-app DNS and quota", classification: "Integration", fn: checkPolicyDNS},
+			{name: "Speed and bufferbloat measurement", classification: "Integration", fn: checkBenchmark},
+			{name: "Ping tool", classification: "System", fn: checkPing},
+			{name: "TCP port check and Wake-on-LAN packet", classification: "Integration", fn: checkPortAndWake},
 			{name: "Process identity", classification: "Integration", fn: checkHostProcessIdentity},
 			{name: "TTL preview, apply and restore", classification: "Integration", fn: checkTTLTransaction},
 			{name: "Read host TTL", classification: "System", fn: checkLiveTTLInspection},

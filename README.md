@@ -20,11 +20,29 @@ Use Wi-Fi, Ethernet, and phone tethering together, or keep a backup link ready w
 
 ![NetPilot desktop app: live dashboard, process icons, tethering, and TTL preview](docs/netpilot-demo.gif)
 
-- **Systems** shows adapter traffic, active processes, and app routing rules. **Metrics** shows usage history.
+- **Systems** shows adapter traffic, active processes, and app routing rules. **Metrics** lets you choose units for usage and transfer rates.
 - **Speed** distributes connections across healthy adapters. **Backup** switches to a secondary link when the primary fails.
-- **Mobile** puts tethering profiles and link tests alongside **TTL & Hop Limit**. Preview supported desktop packet-header changes before applying them, or restore the original settings.
+- **Mobile** groups Wi-Fi hotspot and USB tether settings with connection profiles, link tests, and **TTL & Hop Limit**. Load a profile to compare it with current settings, edit the draft, then apply or restore previous values.
 
 Download and upload speeds, idle and loaded latency, and bufferbloat measure link performance. Neither those numbers nor desktop OS read-back verify how iOS, Android, or a carrier classifies tethered traffic. See [tethering validation](docs/tethering-validation.md) for the measured baseline and test steps.
+
+### Application routing and process inspection
+
+Create and edit policies from **Systems → Application Routing Policies** or **Rules**. A policy can match an application name, executable path, or destination, then select a detected network adapter, optional fallback, bandwidth limit, traffic quota, and custom DNS. Inspect a running process to see matching policies. The live TCP route check reports the adapter and source address used by its probe.
+
+System-wide application policies require the built-in NetPilot engine and elevated permissions. On Windows, run NetPilot as administrator. With the SOCKS5 proxy, an application must be configured to use NetPilot's local proxy. The separate upstream engine can run a system-wide tunnel, but it does not apply NetPilot's application policies. A routing rule affects new connections, so reconnect an application after changing its policy. Custom DNS works when NetPilot can see the hostname before it is resolved. Operating-system resolvers, encrypted DNS, VPN routes, and application caches can affect DNS behavior.
+
+Speed mode distributes connections across available links. Backup mode keeps new connections on the selected primary link and uses a backup when the primary is unavailable. An application's explicit adapter choice takes precedence for that application's new connections. The chosen adapter must have an address for the connection's IP family and pass the configured reachability checks. Per-adapter and per-application bandwidth limits both apply. A reached application quota blocks new connections that match the policy.
+
+### Mobile and connection profiles
+
+The Mobile page shows saved settings next to a draft of desired values. Select the PC network adapter carrying the phone's hotspot connection, then edit its tunnel MTU, IPv6 behavior, scheduling, and reachability probes. USB tether adapters may be identified automatically. A phone connected over Wi-Fi is not always distinguishable from another access point, so select the PC's Wi-Fi adapter manually when needed. Choosing the hotspot adapter records and tests that link. It does not direct all NetPilot traffic through it.
+
+Suggested profiles load settings into the draft. Review or customize them before selecting **Apply changes**. **Discard edits**, **Load defaults**, and **Restore previous** have separate actions. MTU, IPv6, scheduling, and probes affect the whole NetPilot tunnel. Changing them while the separate upstream engine is running can require restarting that engine. Applying a saved full connection profile can also change routing mode.
+
+The **Diagnostics** page checks implemented app, routing, notification, mobile, and desktop features. Use **Skip disruptive tests** to omit tests that can change connectivity. A live hotspot check is optional and accepts the PC adapter to test. Without a selected adapter, NetPilot may still detect a USB tether or cellular link. Standard Wi-Fi hotspot connections generally require manual selection.
+
+Notifications are managed in **Settings**. NetPilot can show an in-app notification and submit desktop banners when the operating system permits them. Use **Test notification** to check the current delivery result, and open system notification settings if banners are disabled.
 
 ---
 
@@ -34,12 +52,10 @@ Grab the latest prebuilt package for your operating system from the **[Releases 
 
 | Operating System | Package | Notes |
 | :--- | :--- | :--- |
-| **🪟 Windows (10 / 11)** | **`netpilot-0.4.0-installer.exe`** / **`netpilot-0.4.0-windows-amd64-portable.zip`** | Single-binary NetPilot GUI + net-merge engine (auto-extracts `wintun.dll`). |
-| **🍎 macOS (Universal)** | **`netpilot-0.4.0-macos-universal.dmg`** | Native Universal binary for Apple Silicon (`M1/M2/M3/M4`) & Intel Macs. |
-| **🐧 Linux x86-64** | **`netpilot-0.4.0-linux-amd64.AppImage`** | Portable single-file AppImage for Ubuntu, Debian, Fedora, Arch, Mint, etc. |
-| **🐧 Linux ARM64** | **`netpilot-0.4.0-linux-arm64.AppImage`** | Native aarch64 AppImage for ARM servers, Apple Silicon VMs (OrbStack/UTM), and Raspberry Pi-class devices. |
-
-**Release:** [NetPilot v0.4.0](https://github.com/j1seki/netpilot/releases/tag/v0.4.0)
+| **🪟 Windows (10 / 11)** | **`netpilot-<version>-installer.exe`** / **`netpilot-<version>-windows-amd64-portable.zip`** | For the portable package, extract the ZIP and open `netpilot.exe`. |
+| **🍎 macOS (Universal)** | **`netpilot-<version>-macos-universal.dmg`** | Universal binary for Apple Silicon and Intel Macs. |
+| **🐧 Linux x86-64** | **`netpilot-<version>-linux-amd64.AppImage`** | Portable single-file AppImage for desktop Linux. |
+| **🐧 Linux ARM64** | **`netpilot-<version>-linux-arm64.AppImage`** | Native aarch64 AppImage for Linux ARM64 desktops and VMs. |
 
 ### Running the Linux AppImage
 
@@ -64,6 +80,10 @@ chmod +x netpilot-linux-arm64.AppImage
 
 **Settings → Net-Merge Engine** lets you select the bundled official release, download a newer or older official version, or switch back to NetPilot's integrated engine. Stop merging and the SOCKS proxy before switching. The integrated engine supports Backup Failover and per-app routing; official downloads use Speed mode. Release builds bundle the latest stable upstream net-merge separately from the integrated engine.
 
+### Verifying an application rule
+
+Save the rule in **Application Routing** or **Rules**, then open **Active Processes → Inspect → Routing rules**. The live test reports the outbound adapter and source IP after a TCP connection succeeds. Observed rule matches appear when the running application opens fresh connections through the in-app tunnel or proxy. System-wide rule enforcement requires the desktop's in-app NetPilot engine. On Windows, launch NetPilot as administrator for that mode.
+
 On macOS, install NetPilot in Applications. If macOS blocks a copy you downloaded from the official release page, use **Privacy & Security → Open Anyway**, or the DMG's **Open NetPilot.command** helper to verify the bundle and remove quarantine from that copy after confirming.
 
 ### Automatic updates
@@ -73,11 +93,11 @@ install it without leaving the app. Open **Settings → Automatic Updates** and 
 
 | Channel | Receives | GitHub meaning |
 | :--- | :--- | :--- |
-| **Stable** | Finished releases only (`v0.3.11`, `v0.4.0`) | Normal releases and the Latest badge |
-| **Beta** | Prereleases and finished releases (`v0.4.0-beta.1`, `v0.4.0`) | GitHub prereleases plus normal releases |
+| **Stable** | Finished releases without a prerelease suffix | Normal releases and the Latest badge |
+| **Beta** | Prereleases and finished stable releases | GitHub prereleases plus normal releases |
 
-Versions are compared as full semver, so `v0.4.0-beta.10` is newer than `v0.4.0-beta.9` and a stable
-`v0.4.0` supersedes its own betas. New installations follow the channel of the build they came from,
+Versions are compared as full semver, so `vX.Y.Z-beta.10` is newer than `vX.Y.Z-beta.9` and a stable
+`vX.Y.Z` supersedes its own betas. New installations follow the channel of the build they came from,
 and the choice is remembered in the per-user configuration directory (`%AppData%\netpilot` on
 Windows, `~/Library/Application Support/netpilot` on macOS, `~/.config/netpilot` on Linux).
 

@@ -311,16 +311,17 @@ interface MonthlyDataPoint {
 interface MonthlyBarChartProps {
   data: MonthlyDataPoint[];
   height?: number;
+  formatVolume: (mib: number) => string;
 }
 
-export const MonthlyBarChart: React.FC<MonthlyBarChartProps> = ({ data, height = 90 }) => {
+export const MonthlyBarChart: React.FC<MonthlyBarChartProps> = ({ data, height = 90, formatVolume }) => {
   if (!data || data.length === 0) return null;
   const maxMb = Math.max(...data.map(d => Math.max(d.rxMb, d.txMb)), 50);
 
   return (
     <div style={{ width: '100%', backgroundColor: 'rgba(0,0,0,0.2)', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-        <span style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)' }}>Monthly Bandwidth Comparison</span>
+        <span style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)' }}>Monthly traffic volume</span>
         <div style={{ display: 'flex', gap: '12px', fontSize: '10.5px' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#38bdf8' }}>
             <span style={{ width: '7px', height: '7px', backgroundColor: '#38bdf8', borderRadius: '1px' }} /> Download (Rx)
@@ -339,7 +340,7 @@ export const MonthlyBarChart: React.FC<MonthlyBarChartProps> = ({ data, height =
             <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', height: `${height - 18}px` }}>
                 <div
-                  title={`Rx: ${item.rxMb.toFixed(1)} MB`}
+                  title={`Rx: ${formatVolume(item.rxMb)}`}
                   style={{
                     width: '18px',
                     height: `${rxH}px`,
@@ -349,7 +350,7 @@ export const MonthlyBarChart: React.FC<MonthlyBarChartProps> = ({ data, height =
                   }}
                 />
                 <div
-                  title={`Tx: ${item.txMb.toFixed(1)} MB`}
+                  title={`Tx: ${formatVolume(item.txMb)}`}
                   style={{
                     width: '18px',
                     height: `${txH}px`,

@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +45,7 @@ import (
 	"netpilot/internal/state"
 	"netpilot/internal/testrunner"
 	"netpilot/internal/ttlmgr"
+	"netpilot/internal/tun"
 	"netpilot/internal/update"
 )
 
@@ -80,6 +83,7 @@ type NetPilotService struct {
 	testRunner       *testrunner.Runner
 	testRunMu        sync.Mutex
 	desktopTests     desktopTestBridge
+	copyText         func(string) bool
 	promptReportPath func(string) (string, error)
 	netmergeCtrl     *netmerge.Controller
 	ttlManager       *ttlmgr.Manager
@@ -104,6 +108,11 @@ type NetPilotService struct {
 	updateWake      chan struct{}
 	updateQuit      func()
 
+	notificationMu     sync.Mutex
+	notificationFile   string
+	notificationPrefs  notificationPreferences
+	latestNotification *notificationEvent
+
 	monitorOnce sync.Once
 	quotaMu     sync.Mutex
 	quotaSeen   map[string]uint64
@@ -117,15 +126,16 @@ type NetPilotService struct {
 
 // hotspotStatus is the persisted state of the one-click hotspot mode.
 type hotspotStatus struct {
-	Enabled   bool      `json:"enabled"`
-	AutoApply bool      `json:"autoApply"`
-	Profile   string    `json:"profile"`
-	Adapters  []string  `json:"adapters"`
-	MTU       int       `json:"mtu"`
-	AppliedAt time.Time `json:"appliedAt,omitempty"`
-	Note      string    `json:"note,omitempty"`
-	PrevMTU   int       `json:"prevMtu,omitempty"`
-	PrevIPv6  string    `json:"prevIpv6,omitempty"`
+	Enabled    bool                     `json:"enabled"`
+	AutoApply  bool                     `json:"autoApply"`
+	Profile    string                   `json:"profile"`
+	Adapters   []string                 `json:"adapters"`
+	MTU        int                      `json:"mtu"`
+	AppliedAt  time.Time                `json:"appliedAt,omitempty"`
+	Note       string                   `json:"note,omitempty"`
+	PrevMTU    int                      `json:"prevMtu,omitempty"`
+	PrevIPv6   string                   `json:"prevIpv6,omitempty"`
+	PrevMobile *netmerge.MobileSettings `json:"prevMobile,omitempty"`
 }
 
 // SpeedtestResult is one link's benchmark result.
@@ -177,15 +187,20 @@ func NewNetPilotService(
 		updateWake:   make(chan struct{}, 1),
 	}
 	s.initUpdates()
+	s.initNotifications(filepath.Join(s.updateDir, "notifications.json"))
 	dir := state.DefaultDir()
 	_ = os.MkdirAll(dir, 0o755)
 	if store, err := profiles.Open(dir); err == nil {
 		s.profileStore = store
 	}
-	s.hotspotFile = filepath.Join(dir, "netpilot-hotspot.json")
+	s.hotspotFile = filepath.Join(s.updateDir, "netpilot-hotspot.json")
 	s.hotspot.Profile = "hotspot-bypass"
-	if b, err := os.ReadFile(s.hotspotFile); err == nil {
-		_ = json.Unmarshal(b, &s.hotspot)
+	data, err := os.ReadFile(s.hotspotFile)
+	if os.IsNotExist(err) {
+		data, err = os.ReadFile(filepath.Join(dir, "netpilot-hotspot.json"))
+	}
+	if err == nil {
+		_ = json.Unmarshal(data, &s.hotspot)
 	}
 	if netmergeCtrl != nil && ruleEngine != nil {
 		netmergeCtrl.SetPolicyResolver(s)
@@ -201,8 +216,9 @@ func (s *NetPilotService) Resolve(appName, appPath, destination string) engine.F
 		return policy
 	}
 	d := s.ruleEngine.Evaluate(appName, appPath, destination, "")
-	policy.PreferredNIC = d.SelectedInterface
+	policy.PreferredNIC = d.PreferredInterface
 	policy.FallbackNIC = d.FallbackInterface
+	policy.CustomDNS = d.CustomDNS
 	policy.BandwidthLimitMbps = d.BandwidthLimitMbps
 	policy.QuotaExceeded = d.QuotaExceeded
 	policy.RuleID = d.MatchedRuleID
@@ -213,9 +229,9 @@ func (s *NetPilotService) Resolve(appName, appPath, destination string) engine.F
 }
 
 // ReportUsage implements engine.PolicyResolver, feeding per-application quota counters.
-func (s *NetPilotService) ReportUsage(appName string, bytesIn, bytesOut int64) {
+func (s *NetPilotService) ReportUsage(policy engine.FlowPolicy, bytesIn, bytesOut int64) {
 	if s.ruleEngine != nil {
-		s.ruleEngine.RecordUsage(appName, bytesIn, bytesOut)
+		s.ruleEngine.RecordRuleUsage(policy.RuleID, bytesIn, bytesOut)
 	}
 }
 
@@ -301,12 +317,14 @@ func (s *NetPilotService) SaveRule(r db.RuleRecord) error {
 		return err
 	}
 
-	if err := s.database.SaveRule(r); err != nil {
+	if err := s.database.EditRule(r); err != nil {
 		op.Fail(logger.PhaseBackendStarted, "DatabaseError", err, "Rollback", "NONE", nil)
 		return err
 	}
 
-	_ = s.ruleEngine.Reload()
+	if err := s.ruleEngine.Reload(); err != nil {
+		return fmt.Errorf("policy saved but could not be loaded into the engine: %w", err)
+	}
 	op.Complete("SUCCESS", map[string]interface{}{"ruleId": r.ID})
 	return nil
 }
@@ -318,7 +336,9 @@ func (s *NetPilotService) DeleteRule(id string) error {
 		op.Fail(logger.PhaseBackendStarted, "DatabaseError", err, "None", "NONE", nil)
 		return err
 	}
-	_ = s.ruleEngine.Reload()
+	if err := s.ruleEngine.Reload(); err != nil {
+		return fmt.Errorf("policy deleted but the engine could not reload its policies: %w", err)
+	}
 	op.Complete("SUCCESS", map[string]interface{}{"ruleId": id})
 	return nil
 }
@@ -1590,13 +1610,18 @@ func (s *NetPilotService) ExportMonthlyCSV(yearMonth string) (string, error) {
 // Hotspot mode
 // -----------------------------------------
 
-func (s *NetPilotService) saveHotspotLocked() {
-	if s.hotspotFile == "" {
-		return
+func (s *NetPilotService) saveHotspotLocked(next hotspotStatus) error {
+	if s.hotspotFile != "" {
+		b, err := json.Marshal(next)
+		if err != nil {
+			return err
+		}
+		if err := writePrivateFile(s.hotspotFile, b); err != nil {
+			return err
+		}
 	}
-	if b, err := json.MarshalIndent(s.hotspot, "", "  "); err == nil {
-		_ = os.WriteFile(s.hotspotFile, b, 0o644)
-	}
+	s.hotspot = next
+	return nil
 }
 
 // GetHotspotStatus reports the current hotspot mode and the adapters it targets.
@@ -1607,6 +1632,7 @@ func (s *NetPilotService) GetHotspotStatus() map[string]interface{} {
 	adapters := s.detectedTethers()
 	return map[string]interface{}{
 		"status":    st,
+		"defaults":  netmerge.DefaultMobileSettings(),
 		"adapters":  adapters,
 		"profiles":  hotspot.Profiles(),
 		"available": len(adapters) > 0,
@@ -1615,30 +1641,74 @@ func (s *NetPilotService) GetHotspotStatus() map[string]interface{} {
 
 // detectedTethers lists the adapters that look like phone tethering or cellular modems.
 func (s *NetPilotService) detectedTethers() []string {
-	var names []string
-	if s.netmergeCtrl != nil {
-		if st, err := s.netmergeCtrl.GetStatus(); err == nil {
-			for _, n := range st.NICs {
-				names = append(names, n.Name)
-			}
+	ifaces, _ := net.Interfaces()
+	hints := nics.MobileAdapterHints()
+	result := make([]string, 0)
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0 &&
+			(hints[iface.Index] || hotspot.IsTether(iface.Name)) && !nics.IsVirtualName(iface.Name) {
+			result = append(result, iface.Name)
 		}
 	}
-	if len(names) == 0 {
-		if ifaces, err := net.Interfaces(); err == nil {
-			for _, ifc := range ifaces {
-				names = append(names, ifc.Name)
-			}
-		}
+	sort.Strings(result)
+	return result
+}
+
+type mobileSettingsRequest struct {
+	netmerge.MobileSettings
+	Adapter   string `json:"adapter"`
+	AutoApply bool   `json:"autoApply"`
+	Profile   string `json:"profile"`
+}
+
+func (s *NetPilotService) saveMobileSettings(req mobileSettingsRequest) (hotspotStatus, error) {
+	if s.netmergeCtrl == nil {
+		return hotspotStatus{}, fmt.Errorf("tunnel controller not initialized")
 	}
-	seen := map[string]bool{}
-	out := make([]string, 0)
-	for _, a := range hotspot.Detect(names) {
-		if !seen[a.Name] {
-			seen[a.Name] = true
-			out = append(out, a.Name)
+	var adapters []string
+	if req.Adapter != "" {
+		iface, err := net.InterfaceByName(req.Adapter)
+		if err != nil || iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 ||
+			len(iface.HardwareAddr) == 0 || nics.IsVirtualName(req.Adapter) || nics.VirtualAdapterMap()[iface.Index] != "" {
+			return hotspotStatus{}, fmt.Errorf("select a connected physical hotspot adapter")
 		}
+		adapters = []string{iface.Name}
 	}
-	return out
+
+	s.hotspotMu.Lock()
+	defer s.hotspotMu.Unlock()
+	previous, err := s.netmergeCtrl.SaveMobileSettings(req.MobileSettings)
+	if err != nil {
+		return s.hotspot, err
+	}
+	settingsChanged := previous.MTU != req.MTU || previous.IPv6Mode != req.IPv6Mode ||
+		previous.Scheduling != req.Scheduling || !slices.Equal(previous.ProbeTargetsV4, req.ProbeTargetsV4) ||
+		!slices.Equal(previous.ProbeTargetsV6, req.ProbeTargetsV6)
+	next := s.hotspot
+	if !next.Enabled && (settingsChanged || len(adapters) > 0) {
+		next.Enabled = true
+		next.PrevMTU, next.PrevIPv6 = previous.MTU, previous.IPv6Mode
+		next.PrevMobile = &previous
+	} else if next.Enabled && next.PrevMobile == nil && settingsChanged {
+		previousBeforeProfile := previous
+		if next.PrevMTU != 0 && next.PrevIPv6 != "" {
+			previousBeforeProfile.MTU, previousBeforeProfile.IPv6Mode = next.PrevMTU, next.PrevIPv6
+		}
+		next.PrevMobile = &previousBeforeProfile
+	}
+	if _, ok := hotspot.Get(req.Profile); ok {
+		next.Profile = req.Profile
+	}
+	next.AutoApply = req.AutoApply
+	next.Adapters = adapters
+	next.MTU = req.MTU
+	next.AppliedAt = time.Now().UTC()
+	next.Note = "Mobile settings saved."
+	if err := s.saveHotspotLocked(next); err != nil {
+		_, restoreErr := s.netmergeCtrl.SaveMobileSettings(previous)
+		return s.hotspot, errors.Join(err, restoreErr)
+	}
+	return s.hotspot, nil
 }
 
 // ApplyHotspot saves the profile's TUN MTU and IPv6 policy. Packet header changes
@@ -1680,62 +1750,93 @@ func (s *NetPilotService) ApplyHotspotTo(_ context.Context, profileID string, dr
 	if s.netmergeCtrl == nil {
 		return hotspotStatus{}, fmt.Errorf("tunnel controller not initialized")
 	}
-	cfg := s.netmergeCtrl.GetConfig()
-	if !s.hotspot.Enabled {
-		s.hotspot.PrevMTU, s.hotspot.PrevIPv6 = cfg.MTU, cfg.IPv6Mode
-	}
-	cfg.MTU = p.MTU
-	cfg.IPv6Mode = p.IPv6Mode
-	if err := s.netmergeCtrl.SaveConfig(cfg); err != nil {
-		return hotspotStatus{}, err
-	}
+	return s.applyHotspotLocked(p, tethers)
+}
 
-	s.hotspot.Enabled = true
-	s.hotspot.Profile = p.ID
-	s.hotspot.Adapters = append([]string(nil), tethers...)
-	s.hotspot.MTU = p.MTU
-	s.hotspot.Note = "NetPilot tunnel settings saved. Restart the tunnel to pick up MTU changes. System TTL and Hop Limit were not changed."
-	s.hotspot.AppliedAt = time.Now().UTC()
-	s.saveHotspotLocked()
+func (s *NetPilotService) applyHotspotLocked(p hotspot.Profile, tethers []string) (hotspotStatus, error) {
+	before, err := s.netmergeCtrl.SetMobileTunnelSettings(p.MTU, p.IPv6Mode)
+	if err != nil {
+		return s.hotspot, err
+	}
+	next := s.hotspot
+	if !next.Enabled {
+		next.PrevMTU, next.PrevIPv6 = before.MTU, before.IPv6Mode
+	}
+	next.Enabled = true
+	next.Profile = p.ID
+	next.Adapters = append([]string(nil), tethers...)
+	next.MTU = p.MTU
+	next.Note = "Tunnel profile saved"
+	next.AppliedAt = time.Now().UTC()
+	return s.finishHotspotChangeLocked(next, before)
+}
+
+func (s *NetPilotService) finishHotspotChangeLocked(next hotspotStatus, previous netmerge.Config) (hotspotStatus, error) {
+	if err := s.saveHotspotLocked(next); err != nil {
+		_, restoreErr := s.netmergeCtrl.SetMobileTunnelSettings(previous.MTU, previous.IPv6Mode)
+		return s.hotspot, errors.Join(err, restoreErr)
+	}
 	return s.hotspot, nil
 }
 
-// RevertHotspot restores the previous tunnel policy without touching any
-// separately captured TTL/Hop Limit settings.
+// RevertHotspot restores the tunnel settings captured before the first active profile.
 func (s *NetPilotService) RevertHotspot(_ context.Context) (hotspotStatus, error) {
+	return s.resetHotspot(false)
+}
+
+func (s *NetPilotService) resetHotspot(defaults bool) (hotspotStatus, error) {
 	s.hotspotMu.Lock()
 	defer s.hotspotMu.Unlock()
-	if !s.hotspot.Enabled {
+	if !defaults && !s.hotspot.Enabled {
 		return s.hotspot, nil
 	}
-	prevMTU, prevV6 := s.hotspot.PrevMTU, s.hotspot.PrevIPv6
-
-	if s.netmergeCtrl != nil && prevMTU > 0 {
-		cfg := s.netmergeCtrl.GetConfig()
-		cfg.MTU = prevMTU
-		if prevV6 != "" {
-			cfg.IPv6Mode = prevV6
+	if s.netmergeCtrl == nil {
+		return s.hotspot, fmt.Errorf("tunnel controller not initialized")
+	}
+	if s.hotspot.PrevMobile != nil {
+		settings := *s.hotspot.PrevMobile
+		note := "Previous Mobile settings restored. Auto-apply is off."
+		if defaults {
+			settings = netmerge.DefaultMobileSettings()
+			note = "Default Mobile settings restored. Auto-apply is off."
 		}
-		if err := s.netmergeCtrl.SaveConfig(cfg); err != nil {
+		previous, err := s.netmergeCtrl.SaveMobileSettings(settings)
+		if err != nil {
 			return s.hotspot, err
 		}
+		if err := s.saveHotspotLocked(hotspotStatus{Profile: s.hotspot.Profile, Note: note}); err != nil {
+			_, restoreErr := s.netmergeCtrl.SaveMobileSettings(previous)
+			return s.hotspot, errors.Join(err, restoreErr)
+		}
+		return s.hotspot, nil
 	}
-	s.hotspot.Enabled = false
-	s.hotspot.Adapters = nil
-	s.hotspot.AppliedAt = time.Time{}
-	s.hotspot.Note = "Previous tunnel settings restored. To undo past packet header changes, use Restore Originals under TTL & Hop Limit."
-	s.saveHotspotLocked()
-	return s.hotspot, nil
+	mtu, ipv6 := s.hotspot.PrevMTU, s.hotspot.PrevIPv6
+	if defaults || mtu == 0 {
+		mtu = tun.DefaultMTU
+	}
+	if _, ok := engine.ParseV6Mode(ipv6); defaults || !ok {
+		ipv6 = "auto"
+	}
+	previous, err := s.netmergeCtrl.SetMobileTunnelSettings(mtu, ipv6)
+	if err != nil {
+		return s.hotspot, err
+	}
+	next := hotspotStatus{Profile: s.hotspot.Profile, Note: "Previous tunnel settings restored. Auto-apply is off."}
+	if defaults {
+		next.Profile = "hotspot-bypass"
+		next.Note = "Default tunnel MTU and IPv6 settings restored. Auto-apply is off."
+	}
+	return s.finishHotspotChangeLocked(next, previous)
 }
 
-// SetHotspotAutoApply persists whether a newly detected tether should be configured automatically.
-func (s *NetPilotService) SetHotspotAutoApply(enabled bool) hotspotStatus {
+// SetHotspotAutoApply persists whether an eligible tether should be configured automatically.
+func (s *NetPilotService) SetHotspotAutoApply(enabled bool) (hotspotStatus, error) {
 	s.hotspotMu.Lock()
-	s.hotspot.AutoApply = enabled
-	s.saveHotspotLocked()
-	st := s.hotspot
-	s.hotspotMu.Unlock()
-	return st
+	defer s.hotspotMu.Unlock()
+	next := s.hotspot
+	next.AutoApply = enabled
+	err := s.saveHotspotLocked(next)
+	return s.hotspot, err
 }
 
 // -----------------------------------------
@@ -1887,6 +1988,9 @@ func (s *NetPilotService) ApplyProfile(ctx context.Context, id string) error {
 		return fmt.Errorf("profile %q not found", id)
 	}
 	if s.netmergeCtrl != nil {
+		if p.NetMerge.RoutingMode == "backup" && s.netmergeCtrl.GetConfig().EngineSource != "builtin" {
+			return fmt.Errorf("this profile requires the NetPilot engine for Backup mode")
+		}
 		if err := s.netmergeCtrl.SaveConfig(p.NetMerge); err != nil {
 			return err
 		}
@@ -1902,9 +2006,9 @@ func (s *NetPilotService) ApplyProfile(ctx context.Context, id string) error {
 // Notifications
 // -----------------------------------------
 
-// SendTestNotification shows a native notification so the user can confirm permissions.
-func (s *NetPilotService) SendTestNotification() error {
-	return notify.Send("NetPilot", "Desktop notifications are working.")
+// SendTestNotification records an in-app test and reports the desktop delivery attempt.
+func (s *NetPilotService) SendTestNotification() notificationDelivery {
+	return s.publishNotification("test", "NetPilot test notification", "In-app notifications are working. Look for a desktop banner if desktop delivery is enabled.")
 }
 
 // -----------------------------------------
@@ -1942,7 +2046,7 @@ func (s *NetPilotService) monitorLoop(ctx context.Context) {
 		case <-ticker.C:
 			s.sampleAdapterUsage()
 			s.enforceAdapterQuotas()
-			s.checkHotspotAuto(ctx)
+			s.checkHotspotAuto()
 			s.notifyLinkEvents()
 		}
 	}
@@ -1959,14 +2063,6 @@ func (s *NetPilotService) sampleAdapterUsage() {
 	if err != nil {
 		return
 	}
-	caps, err := s.database.GetAdapterCaps()
-	if err != nil {
-		return
-	}
-	byName := make(map[string]db.AdapterCapRecord, len(caps))
-	for _, c := range caps {
-		byName[c.InterfaceName] = c
-	}
 	for _, n := range st.NICs {
 		used := n.LinkBytesIn + n.LinkBytesOut
 		s.quotaMu.Lock()
@@ -1980,14 +2076,7 @@ func (s *NetPilotService) sampleAdapterUsage() {
 		if delta == 0 {
 			continue
 		}
-		c, ok := byName[n.Name]
-		if !ok || !c.Enabled {
-			continue
-		}
-		c.DataUsedMB += float64(delta) / (1024 * 1024)
-		if err := s.database.SaveAdapterCap(c); err == nil {
-			byName[n.Name] = c
-		}
+		_ = s.database.AddAdapterUsage(n.Name, float64(delta)/(1024*1024))
 	}
 }
 
@@ -2004,50 +2093,56 @@ func (s *NetPilotService) enforceAdapterQuotas() {
 	if err != nil {
 		return
 	}
-	for _, c := range caps {
-		s.quotaMu.Lock()
-		throttled := s.quotaLimit[c.InterfaceName] > 0
-		s.quotaMu.Unlock()
-		if !throttled {
-			if !c.Enabled || c.DataQuotaMB <= 0 {
-				continue
-			}
-			if c.DataUsedMB/c.DataQuotaMB < 1 {
-				continue
-			}
-			s.quotaMu.Lock()
-			s.quotaLimit[c.InterfaceName] = 0.01
-			s.quotaMu.Unlock()
-			_ = s.netmergeCtrl.SetLimit(c.InterfaceName, 0.01)
-			_ = notify.Send("NetPilot quota reached", fmt.Sprintf("%s reached its %.0f MB quota and was throttled.", c.InterfaceName, c.DataQuotaMB))
+	limits := make(map[string]float64)
+	for _, cap := range caps {
+		if !cap.Enabled || cap.DataQuotaMB <= 0 {
 			continue
 		}
-		if !c.Enabled || c.DataQuotaMB <= 0 || c.DataUsedMB < 0.9*c.DataQuotaMB {
-			s.quotaMu.Lock()
-			delete(s.quotaLimit, c.InterfaceName)
-			s.quotaMu.Unlock()
-			_ = s.netmergeCtrl.SetLimit(c.InterfaceName, 0)
-			_ = notify.Send("NetPilot quota restored", fmt.Sprintf("%s is below 90%% of its quota and is no longer throttled.", c.InterfaceName))
+		threshold := cap.DataQuotaMB
+		if s.quotaLimit[cap.InterfaceName] > 0 {
+			threshold *= 0.9
+		}
+		if cap.DataUsedMB >= threshold {
+			limits[cap.InterfaceName] = 0.01
 		}
 	}
+	if len(limits) == 0 && len(s.quotaLimit) == 0 {
+		return
+	}
+	if err := s.netmergeCtrl.SetQuotaLimits(limits); err != nil {
+		s.ringLog.Log(logger.LogEntry{Level: logger.LevelWarn, Component: "AdapterQuota", Message: err.Error()})
+	}
+	for name := range limits {
+		if s.quotaLimit[name] == 0 {
+			_ = s.publishNotification("quotas", "NetPilot quota reached", fmt.Sprintf("%s reached its data quota and was throttled.", name))
+		}
+	}
+	for name := range s.quotaLimit {
+		if limits[name] == 0 {
+			_ = s.publishNotification("quotas", "NetPilot quota restored", fmt.Sprintf("%s is using its configured speed cap again.", name))
+		}
+	}
+	s.quotaLimit = limits
 }
 
-func (s *NetPilotService) checkHotspotAuto(ctx context.Context) {
+func (s *NetPilotService) checkHotspotAuto() {
 	done, err := s.beginLiveNetworkChange()
 	if err != nil {
 		return
 	}
 	defer done()
+	if s.netmergeCtrl == nil {
+		return
+	}
+	tethers := s.detectedTethers()
+	if len(tethers) == 0 {
+		return
+	}
 	s.hotspotMu.Lock()
-	auto, enabled, profile := s.hotspot.AutoApply, s.hotspot.Enabled, s.hotspot.Profile
-	s.hotspotMu.Unlock()
-	if !auto || enabled {
-		return
+	defer s.hotspotMu.Unlock()
+	if p, ok := hotspot.Get(s.hotspot.Profile); ok && s.hotspot.AutoApply && !s.hotspot.Enabled {
+		_, _ = s.applyHotspotLocked(p, tethers)
 	}
-	if len(s.detectedTethers()) == 0 {
-		return
-	}
-	_, _ = s.ApplyHotspot(ctx, profile, false)
 }
 
 func (s *NetPilotService) notifyLinkEvents() {
@@ -2076,16 +2171,16 @@ func (s *NetPilotService) notifyLinkEvents() {
 
 	if st.IsRunning != prevRunning {
 		if st.IsRunning {
-			_ = notify.Send("NetPilot active", "The merged connection is running.")
+			_ = s.publishNotification("links", "NetPilot active", "The merged connection is running.")
 		} else {
-			_ = notify.Send("NetPilot paused", "Traffic is using the system default adapter.")
+			_ = s.publishNotification("links", "NetPilot paused", "Traffic is using the system default adapter.")
 		}
 	}
 	if changed {
 		if flaps >= 3 {
-			_ = notify.Send("NetPilot link flapping", fmt.Sprintf("Active adapter changed %d times in 5 minutes (now %s).", flaps, active))
+			_ = s.publishNotification("links", "NetPilot link flapping", fmt.Sprintf("Active adapter changed %d times in 5 minutes (now %s).", flaps, active))
 		} else {
-			_ = notify.Send("NetPilot switched adapter", fmt.Sprintf("Active adapter is now %s.", active))
+			_ = s.publishNotification("links", "NetPilot switched adapter", fmt.Sprintf("Active adapter is now %s.", active))
 		}
 	}
 }
@@ -2150,12 +2245,12 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Action routes must never run just because a client navigated to their URL.
 	switch path {
-	case "hotspot/apply", "hotspot/revert", "hotspot/auto", "speedtest/run", "profiles/apply",
-		"applications/inspect", "testrunner/run-all", "testrunner/export", "testrunner/desktop-result",
-		"notifications/test", "netmerge/toggle", "netmerge/autostart", "netmerge/limit",
+	case "mobile/settings", "hotspot/apply", "hotspot/revert", "hotspot/defaults", "hotspot/auto", "netmerge/scheduler", "speedtest/run", "profiles/apply",
+		"applications/inspect", "applications/test-route", "testrunner/run-all", "testrunner/export", "testrunner/desktop-result",
+		"clipboard/copy", "notifications/test", "notifications/system-settings", "netmerge/toggle", "netmerge/autostart", "netmerge/limit",
 		"netmerge/cleanup", "netmerge/socks", "netmerge/routing-mode", "system/console",
 		"ttl/apply", "ttl/restore", "tools/ping", "tools/dns", "tools/port", "tools/wol",
-		"usage/reset", "config/import":
+		"usage/reset", "config/import", "adapter-caps/quota":
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -2174,6 +2269,19 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "hotspot":
 		_ = json.NewEncoder(w).Encode(s.GetHotspotStatus())
 
+	case path == "mobile/settings":
+		var req mobileSettingsRequest
+		if !decodeAPIObject(w, r, &req) {
+			return
+		}
+		st, err := s.saveMobileSettings(req)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(st)
+
 	case path == "hotspot/apply":
 		var body struct {
 			Profile  string   `json:"profile"`
@@ -2191,8 +2299,8 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(st)
 
-	case path == "hotspot/revert":
-		st, err := s.RevertHotspot(r.Context())
+	case path == "hotspot/revert" || path == "hotspot/defaults":
+		st, err := s.resetHotspot(path == "hotspot/defaults")
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2207,7 +2315,29 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !decodeAPIObject(w, r, &body) {
 			return
 		}
-		_ = json.NewEncoder(w).Encode(s.SetHotspotAutoApply(body.Enabled))
+		st, err := s.SetHotspotAutoApply(body.Enabled)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(st)
+
+	case path == "netmerge/scheduler" && s.netmergeCtrl != nil:
+		var body struct {
+			Scheduling string   `json:"scheduling"`
+			Probe4     []string `json:"probeTargetsV4"`
+			Probe6     []string `json:"probeTargetsV6"`
+		}
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
+		if err := s.netmergeCtrl.SetSchedulerSettings(body.Scheduling, body.Probe4, body.Probe6); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(s.netmergeCtrl.GetConfig())
 
 	case path == "speedtest/run":
 		var req SpeedtestRequest
@@ -2302,13 +2432,44 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(st)
 
-	case path == "notifications/test":
-		if err := s.SendTestNotification(); err != nil {
+	case path == "clipboard/copy":
+		var body struct {
+			Text string `json:"text"`
+		}
+		if !decodeAPIObject(w, r, &body) {
+			return
+		}
+		if s.copyText == nil || !s.copyText(body.Text) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "desktop clipboard is unavailable"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"copied": true})
+
+	case path == "notifications":
+		if r.Method == http.MethodPost {
+			var prefs notificationPreferences
+			if !decodeAPIObject(w, r, &prefs) {
+				return
+			}
+			if err := s.setNotifications(prefs); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+		}
+		_ = json.NewEncoder(w).Encode(s.getNotifications())
+
+	case path == "notifications/system-settings":
+		if err := notify.OpenSettings(); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "opened"})
+
+	case path == "notifications/test":
+		_ = json.NewEncoder(w).Encode(s.SendTestNotification())
 
 	case path == "mode":
 		if r.Method == http.MethodPost {
@@ -2339,8 +2500,8 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "applications/traffic":
 		_ = json.NewEncoder(w).Encode(s.hostTraffic.Snapshot())
 
-	case path == "applications/inspect":
-		s.serveProcessInspection(w, r)
+	case path == "applications/inspect" || path == "applications/test-route":
+		s.serveProcessInspection(w, r, path == "applications/test-route")
 
 	case path == "diagnostics/mcp":
 		s.serveDiagnosticMCP(w, r)
@@ -2428,18 +2589,47 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case path == "testrunner/run-all":
 		var body struct {
-			Adapter string `json:"adapter"`
+			Adapter        string `json:"adapter"`
+			SkipDisruptive bool   `json:"skipDisruptive"`
 		}
 		if !decodeAPIObject(w, r, &body) {
 			return
 		}
-		_ = json.NewEncoder(w).Encode(s.RunAllUnified(false, body.Adapter))
+		_ = json.NewEncoder(w).Encode(s.RunAllUnified(body.SkipDisruptive, body.Adapter))
 
 	case path == "testrunner/desktop-result":
 		s.desktopTests.serveResult(w, r)
 
 	case path == "testrunner/export":
 		s.serveTestReportExport(w, r)
+
+	case path == "adapter-caps/quota":
+		var req struct {
+			Adapter string   `json:"adapter"`
+			QuotaMB *float64 `json:"quotaMb"`
+			Reset   bool     `json:"reset"`
+		}
+		if !decodeAPIObject(w, r, &req) {
+			return
+		}
+		if strings.TrimSpace(req.Adapter) == "" || req.Reset == (req.QuotaMB != nil) ||
+			(req.QuotaMB != nil && *req.QuotaMB < 0) {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "choose an adapter and either enter a non-negative quota or reset its usage"})
+			return
+		}
+		var err error
+		if req.Reset {
+			err = s.database.ResetAdapterUsage(req.Adapter)
+		} else {
+			err = s.database.SetAdapterQuota(req.Adapter, *req.QuotaMB)
+		}
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 
 	case path == "adapter-caps":
 		if r.Method == http.MethodPost {
@@ -2456,7 +2646,9 @@ func (s *NetPilotService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			caps, err := s.GetAdapterCaps()
 			if err != nil {
-				caps = []db.AdapterCapRecord{}
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
 			}
 			_ = json.NewEncoder(w).Encode(caps)
 		}

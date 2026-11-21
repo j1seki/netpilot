@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -142,66 +143,79 @@ func (b *Balancer) DialTCP(ctx context.Context, host string, port int) (net.Conn
 	return b.DialTCPFor(ctx, host, port, FlowPolicy{AppName: appName, AppPath: appPath})
 }
 
-// DialTCPFor is DialTCP with a per-application policy. A preferred adapter is tried alone
-// first, then the fallback, and only then the normal pool, so an app that must stay on one
-// link never silently leaks onto another. Quota-exceeded flows are refused before dialing.
+// DialTCPFor connects through the matching rule's allowed links. Quota-exceeded
+// flows are refused before dialing.
 func (b *Balancer) DialTCPFor(ctx context.Context, host string, port int, policy FlowPolicy) (net.Conn, *Slot, Family, error) {
-	// The destination's family decides which NIC address is used; a host name stays IPv4.
-	f, network := Fam4, "tcp4"
-	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
-		f, network = Fam6, "tcp6"
-	}
 	if policy.QuotaExceeded {
-		return nil, nil, f, &dialError{rep: repFailure, err: errors.New("application data quota exceeded")}
+		return nil, nil, Fam4, quotaError()
 	}
-
-	var attempts []map[string]struct{}
-	if policy.PreferredNIC != "" {
-		attempts = append(attempts, map[string]struct{}{policy.PreferredNIC: {}})
+	if port == 53 && policy.CustomDNS != "" {
+		server, err := b.dnsAddress(policy.CustomDNS)
+		if err != nil {
+			return nil, nil, Fam4, &dialError{rep: repHostUnreachable, err: err}
+		}
+		return b.dialTCPAddress(ctx, server.Addr().String(), int(server.Port()), policy)
 	}
-	if policy.FallbackNIC != "" && policy.FallbackNIC != policy.PreferredNIC {
-		attempts = append(attempts, map[string]struct{}{policy.FallbackNIC: {}})
-	}
-	attempts = append(attempts, nil)
-
-	tried := map[string]struct{}{}
-	rep := byte(repFailure)
-	var lastErr error = errors.New("no usable network adapter")
-	if f == Fam6 {
-		rep, lastErr = repNetUnreachable, errors.New("no usable IPv6 adapter")
-	}
-	for _, allowed := range attempts {
-		for {
-			sl := b.S.AcquireForAllowed(f, allowed, tried)
-			if sl == nil {
-				break
-			}
-			tried[sl.key] = struct{}{}
-			d := net.Dialer{
-				LocalAddr: &net.TCPAddr{IP: sl.ip(f)},            // binding the source IP pins the flow to this NIC
-				Control:   nics.ForceEgress(sl.Index, f == Fam6), // and this forces egress even if the TUN's routes match
-				Timeout:   b.ConnectTimeout,
-				KeepAlive: 30 * time.Second,
-			}
-			conn, err := d.DialContext(ctx, network, net.JoinHostPort(host, strconv.Itoa(port)))
+	if ip, _ := netip.ParseAddr(host); !ip.IsValid() && policy.CustomDNS != "" {
+		resolved, err := b.resolveHost(ctx, host, policy)
+		if err != nil {
+			return nil, nil, Fam4, &dialError{rep: repHostUnreachable, err: err}
+		}
+		var lastErr error
+		for _, addr := range resolved {
+			conn, sl, f, err := b.dialTCPAddress(ctx, addr.String(), port, policy)
 			if err == nil {
-				// Keep the concrete *net.TCPConn here. DialPinnedFor wraps it in
-				// slotConn, which applies the per-app limiter and releases the
-				// scheduler slot. The SOCKS relay wraps its upstream separately.
 				return conn, sl, f, nil
 			}
-			b.S.ReleaseFor(sl, f)
-			c := classify(err)
-			if c.linkDown {
-				b.S.Fail(sl, f, b.FailCooldown)
-			}
-			rep, lastErr = c.rep, err
-			if !c.retry || ctx.Err() != nil {
-				return nil, nil, f, &dialError{rep: rep, err: err}
-			}
+			lastErr = err
+		}
+		if lastErr == nil {
+			lastErr = &dialError{rep: repHostUnreachable, err: errors.New("custom DNS returned no usable addresses")}
+		}
+		return nil, nil, Fam4, lastErr
+	}
+	return b.dialTCPAddress(ctx, host, port, policy)
+}
+
+func quotaError() error {
+	return &dialError{rep: repFailure, err: errors.New("application data quota exceeded")}
+}
+
+func (b *Balancer) dialTCPAddress(ctx context.Context, host string, port int, policy FlowPolicy) (net.Conn, *Slot, Family, error) {
+	f, network := Fam4, "tcp4"
+	if ip, _ := netip.ParseAddr(host); ip.Unmap().Is6() {
+		f, network = Fam6, "tcp6"
+	}
+
+	tried := map[string]struct{}{}
+	rep := byte(repNetUnreachable)
+	lastErr := errors.New("no usable network adapter for the route")
+	for {
+		sl := b.acquirePolicySlot(f, policy, tried)
+		if sl == nil {
+			return nil, nil, f, &dialError{rep: rep, err: lastErr}
+		}
+		tried[sl.key] = struct{}{}
+		d := net.Dialer{
+			LocalAddr: &net.TCPAddr{IP: sl.ip(f)},
+			Control:   nics.ForceEgress(sl.Index, f == Fam6),
+			Timeout:   b.ConnectTimeout,
+			KeepAlive: 30 * time.Second,
+		}
+		conn, err := d.DialContext(ctx, network, net.JoinHostPort(host, strconv.Itoa(port)))
+		if err == nil {
+			return conn, sl, f, nil
+		}
+		b.S.ReleaseFor(sl, f)
+		c := classify(err)
+		if c.linkDown {
+			b.S.Fail(sl, f, b.FailCooldown)
+		}
+		rep, lastErr = c.rep, err
+		if !c.retry || ctx.Err() != nil {
+			return nil, nil, f, &dialError{rep: rep, err: err}
 		}
 	}
-	return nil, nil, f, &dialError{rep: rep, err: lastErr}
 }
 
 type dialError struct {

@@ -121,7 +121,7 @@ func (b *Balancer) handleSocks5(ctx context.Context, c net.Conn) {
 	socksReply(c, repOK)
 	traffic, stopTracking := b.trackProcess(app.PID)
 	defer stopTracking()
-	b.recordProcessTCP(app.PID, host, port, sl.Name)
+	b.recordProcessTCP(app.PID, host, port, sl.Name, policy.RuleID)
 	in, out := relayWithTraffic(c, up, sl, fam, b.S, policy.BandwidthLimitMbps, traffic)
-	b.reportUsage(policy.AppName, in, out)
+	b.reportUsage(policy, in, out)
 }

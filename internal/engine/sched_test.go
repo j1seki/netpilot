@@ -328,6 +328,20 @@ func TestProbeStateTiers(t *testing.T) {
 	}
 }
 
+func TestSnapshotReflectsRoutingCooldown(t *testing.T) {
+	s := NewScheduler([]nics.Nic{nic("A", "10.0.0.1", 1)})
+	slot := s.slots[0]
+	s.SetState(slot, Fam4, true)
+	s.Fail(slot, Fam4, time.Second)
+	if state := s.Snapshot()[0].State; state != "no internet" {
+		t.Fatalf("cooldown state was %q", state)
+	}
+	s.RecordProbe(slot, Fam4, true, time.Millisecond)
+	if state := s.Snapshot()[0].State; state != "up" {
+		t.Fatalf("recovered state was %q", state)
+	}
+}
+
 func TestProbeAgainstLocalListener(t *testing.T) {
 	needLoopbackAliases(t)
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -615,4 +629,23 @@ func TestUpdateRefreshesInterfaceIndexAndResetsLinkSampling(t *testing.T) {
 			t.Fatalf("family %d retained stale interface health/measurement state", f)
 		}
 	}
+}
+
+func TestBackupAutomaticPrimaryBeforeExplicitSecondary(t *testing.T) {
+	sched := NewScheduler([]nics.Nic{
+		{Name: "backup", IP: net.IPv4(127, 0, 0, 1), Weight: 1},
+		{Name: "other", IP: net.IPv4(127, 0, 0, 2), Weight: 1},
+	})
+	sched.SetMode(ModeBackup, "", "backup")
+	primary := sched.Acquire(nil)
+	if primary == nil || primary.Name != "other" {
+		t.Fatalf("automatic primary = %v, want other", primary)
+	}
+	sched.Release(primary)
+	sched.Fail(primary, Fam4, time.Minute)
+	fallback := sched.Acquire(nil)
+	if fallback == nil || fallback.Name != "backup" {
+		t.Fatalf("fallback = %v, want backup", fallback)
+	}
+	sched.Release(fallback)
 }

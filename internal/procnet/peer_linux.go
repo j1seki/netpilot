@@ -93,7 +93,7 @@ func peerPID(conn net.Conn) (int, bool) {
 	if !localOK || !remoteOK || !local.IP.IsLoopback() || !remote.IP.IsLoopback() {
 		return 0, false
 	}
-	return lookupLinuxPID("tcp", remote.IP, uint16(remote.Port), local.IP, uint16(local.Port), true)
+	return lookupPID("tcp", remote.IP, uint16(remote.Port), local.IP, uint16(local.Port))
 }
 
 func processInfo(pid int) (string, string) {
@@ -170,12 +170,10 @@ func inodePIDMap(refresh bool) map[string]int {
 }
 
 func lookupPID(network string, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16) (int, bool) {
-	return lookupLinuxPID(network, localIP, localPort, remoteIP, remotePort, false)
-}
-
-func lookupLinuxPID(network string, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16, refreshMissingOwner bool) (int, bool) {
 	files := []string{"/proc/net/tcp", "/proc/net/tcp6"}
 	var best, owner int
+	var owners map[string]int
+	refreshed := false
 	if network == "udp" {
 		files = []string{"/proc/net/udp", "/proc/net/udp6"}
 	}
@@ -187,7 +185,7 @@ func lookupLinuxPID(network string, localIP net.IP, localPort uint16, remoteIP n
 		v6 := strings.HasSuffix(file, "6")
 		for _, line := range strings.Split(string(b), "\n") {
 			fields := strings.Fields(line)
-			if len(fields) < 10 || !strings.Contains(fields[0], ":") {
+			if len(fields) < 10 || fields[9] == "0" || !strings.Contains(fields[0], ":") {
 				continue
 			}
 			lip, lport, err := parseProcEndpoint(fields[1], v6)
@@ -211,10 +209,15 @@ func lookupLinuxPID(network string, localIP net.IP, localPort uint16, remoteIP n
 					continue
 				}
 			}
-			pid, ok := inodePIDMap(false)[fields[9]]
-			if !ok && refreshMissingOwner {
-				pid, ok = inodePIDMap(true)[fields[9]]
-				refreshMissingOwner = false
+			if owners == nil {
+				owners = inodePIDMap(false)
+			}
+			pid, ok := owners[fields[9]]
+			if !ok && !refreshed {
+				// A new connection has an inode that cannot be in a recent snapshot.
+				owners = inodePIDMap(true)
+				pid, ok = owners[fields[9]]
+				refreshed = true
 			}
 			if ok {
 				if network != "udp" {

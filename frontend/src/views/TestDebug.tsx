@@ -20,6 +20,7 @@ import {
   Monitor,
   Zap,
   ShieldCheck,
+  ShieldAlert,
 } from 'lucide-react';
 
 type SubTab =
@@ -57,6 +58,7 @@ export const TestDebug: React.FC = () => {
   // One-click unified runner state
   const [unifiedReport, setUnifiedReport] = useState<UnifiedTestReport | null>(null);
   const [isRunningAll, setIsRunningAll] = useState(false);
+  const [skipDisruptive, setSkipDisruptive] = useState(true);
   const [tetherAdapters, setTetherAdapters] = useState<InterfaceInfo[]>([]);
   const [tetherAdapter, setTetherAdapter] = useState('');
   const [runLabel, setRunLabel] = useState('');
@@ -121,7 +123,7 @@ export const TestDebug: React.FC = () => {
     setIsRunningAll(true);
     setErrorMsg('');
     try {
-      const report = await api.runAllUnified(tetherAdapter);
+      const report = await api.runAllUnified(tetherAdapter, skipDisruptive);
       setUnifiedReport(report);
       setScenarios(report.scenarios || []);
       setFinishedLabel(runLabel.trim());
@@ -226,29 +228,33 @@ export const TestDebug: React.FC = () => {
                 <span className="panel-icon"><Zap size={16} aria-hidden="true" /></span>
                 <div>
                   <h2 id="diagnostics-run-title">Run diagnostics</h2>
-                  <p>Run every automated check and export the results.</p>
+                  <p>Run network, app and system checks and export the results. Checks show when hardware or permissions are required.</p>
                 </div>
               </div>
               {isRunningAll && <span className="status-pill blocked" role="status">Running tests</span>}
             </div>
             <div className="diagnostic-controls">
               <div className="diagnostic-field">
-                <label htmlFor="diagnostics-tether">Tether adapter</label>
-                <div className="diagnostic-field-row">
-                  <select id="diagnostics-tether" value={tetherAdapter} onChange={e => setTetherAdapter(e.target.value)} disabled={isRunningAll}>
-                    <option value="">Auto-detect by adapter name</option>
-                    {tetherAdapters.map(iface => <option key={iface.name} value={iface.name}>{iface.displayName || iface.name}</option>)}
-                  </select>
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={refreshTetherAdapters} disabled={isRunningAll}>
-                    <RefreshCw size={13} aria-hidden="true" /> Refresh adapters
-                  </button>
-                </div>
-              </div>
-              <div className="diagnostic-field">
-                <label htmlFor="diagnostics-run-label">Run label</label>
+                <label htmlFor="diagnostics-run-label">Run label (optional)</label>
                 <input id="diagnostics-run-label" placeholder="Baseline or phone connected" value={runLabel} maxLength={100}
                   onChange={e => setRunLabel(e.target.value)} disabled={isRunningAll} />
               </div>
+              <details className="diagnostic-link-options">
+                <summary>Mobile link test (optional){tetherAdapter && ` · ${tetherAdapter}`}</summary>
+                <p id="diagnostics-link-help">Leave on Auto for a general run. Choose your PC’s Wi-Fi or USB adapter to test a specific hotspot connection. If live failover runs, that adapter is used as the backup link.</p>
+                <div className="diagnostic-field">
+                  <label htmlFor="diagnostics-tether">Hotspot adapter</label>
+                  <div className="diagnostic-field-row">
+                    <select id="diagnostics-tether" aria-describedby="diagnostics-link-help" value={tetherAdapter} onChange={e => setTetherAdapter(e.target.value)} disabled={isRunningAll}>
+                      <option value="">Auto-detect USB or cellular adapter</option>
+                      {tetherAdapters.map(iface => <option key={iface.name} value={iface.name}>{iface.displayName || iface.name}</option>)}
+                    </select>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={refreshTetherAdapters} disabled={isRunningAll}>
+                      <RefreshCw size={13} aria-hidden="true" /> Refresh adapters
+                    </button>
+                  </div>
+                </div>
+              </details>
             </div>
             <div className="diagnostics-run-footer">
               <div className="diagnostic-actions">
@@ -256,16 +262,22 @@ export const TestDebug: React.FC = () => {
                   onClick={() => exportReport('tests', { ...unifiedReport, label: finishedLabel })}>
                   <Download size={13} aria-hidden="true" /> Export test results
                 </button>}
+                <button type="button" className={`btn diagnostic-safety ${skipDisruptive ? 'diagnostic-safety-on' : 'diagnostic-safety-off'}`}
+                  aria-label="Skip disruptive tests" aria-pressed={skipDisruptive}
+                  onClick={() => setSkipDisruptive(value => !value)} disabled={isRunningAll}>
+                  {skipDisruptive ? <ShieldCheck size={14} aria-hidden="true" /> : <ShieldAlert size={14} aria-hidden="true" />}
+                  {skipDisruptive ? 'Skip disruptive tests' : 'Allow disruptive tests'}
+                </button>
                 <button type="button" className="btn btn-primary" onClick={handleRunAllUnified} disabled={isRunningAll}>
                   <Play size={13} aria-hidden="true" />
                   {isRunningAll ? 'Running tests…' : 'Run all tests'}
                 </button>
               </div>
             </div>
-            <p className="diagnostic-feedback diagnostic-warning">
+            {!skipDisruptive && <p className="diagnostic-feedback diagnostic-warning">
               <AlertTriangle size={14} aria-hidden="true" />
-              Includes disruption tests that inject link failure and route rollback into test traffic.
-            </p>
+              Includes tests that inject link failure and route rollback into test traffic.
+            </p>}
           </section>
 
           {/* Metrics & Donut Chart Summary */}
@@ -273,7 +285,7 @@ export const TestDebug: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 2fr', gap: '10px' }}>
               <div className="card" style={{ marginBottom: 0 }}>
                 <div className="card-title">
-                  <span>{finishedLabel || 'Execution breakdown'}</span>
+                  <span>{finishedLabel || (unifiedReport.safeMode ? 'Results · disruptive checks skipped' : 'Full diagnostic results')}</span>
                   <span className="font-mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                     {unifiedReport.durationMs.toFixed(1)} ms total
                   </span>
@@ -407,8 +419,7 @@ export const TestDebug: React.FC = () => {
                 {scenarios.length === 0 && (
                   <tr>
                     <td colSpan={6} style={{ textAlign: 'center', padding: '22px', color: 'var(--text-muted)' }}>
-                      No scenarios have run yet. Click <strong>Run All Tests &amp; Scenarios</strong> to execute
-                      the deterministic checks, or open <strong>Scenario Explorer</strong> to run one at a time.
+                      No scenarios have run yet. Select <strong>Run all tests</strong>, or open <strong>Scenarios</strong> to run one at a time.
                     </td>
                   </tr>
                 )}

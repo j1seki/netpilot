@@ -145,11 +145,15 @@ func (p tunProxy) DialUDP(m *M.Metadata) (net.PacketConn, error) {
 	if d := m.DstIP.Unmap(); d.Is6() {
 		f = engine.Fam6
 	}
+	dst := m.DstIP.Unmap()
 	pid := 0
-	if m.SrcIP.IsValid() && m.DstIP.IsValid() {
+	if m.SrcIP.IsValid() && dst.IsValid() {
 		pid, _ = procnet.LookupPID("udp", m.SrcIP.AsSlice(), m.SrcPort, m.DstIP.AsSlice(), m.DstPort)
 	}
-	return p.b.ListenUDPFor(context.Background(), f, pid)
+	id := procnet.Identify(pid)
+	policy := p.b.ResolvePolicy(id.Name, id.Path, dst.String())
+	policy.PID = pid
+	return p.b.ListenUDPWithPolicy(context.Background(), f, netip.AddrPortFrom(dst, m.DstPort), policy)
 }
 
 // Tun is the system-wide switch: On creates the adapter and routes, Off removes them. Both are

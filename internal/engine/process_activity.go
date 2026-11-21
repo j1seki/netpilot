@@ -16,6 +16,7 @@ type ProcessActivity struct {
 	Protocol    string    `json:"protocol"`
 	Destination string    `json:"destination"`
 	Adapter     string    `json:"adapter"`
+	RuleID      string    `json:"ruleId,omitempty"`
 	DNSQuestion string    `json:"dnsQuestion,omitempty"`
 }
 
@@ -46,19 +47,19 @@ func (b *Balancer) InspectProcess(pid int) []ProcessActivity {
 	return out
 }
 
-func (b *Balancer) recordProcessTCP(pid int, host string, port int, adapter string) {
+func (b *Balancer) recordProcessTCP(pid int, host string, port int, adapter, ruleID string) {
 	if pid > 0 && b.inspectedPID.Load() == int64(pid) {
 		b.recordActivity(pid, ProcessActivity{
-			Protocol: "TCP", Destination: net.JoinHostPort(host, strconv.Itoa(port)), Adapter: adapter,
+			Protocol: "TCP", Destination: net.JoinHostPort(host, strconv.Itoa(port)), Adapter: adapter, RuleID: ruleID,
 		})
 	}
 }
 
-func (b *Balancer) recordProcessUDP(pid int, addr net.Addr, adapter string, data []byte) {
+func (b *Balancer) recordProcessUDP(pid int, addr net.Addr, adapter, ruleID string, data []byte) {
 	if pid <= 0 || b.inspectedPID.Load() != int64(pid) || addr == nil {
 		return
 	}
-	entry := ProcessActivity{Protocol: "UDP", Destination: addr.String(), Adapter: adapter}
+	entry := ProcessActivity{Protocol: "UDP", Destination: addr.String(), Adapter: adapter, RuleID: ruleID}
 	if udp, ok := addr.(*net.UDPAddr); ok && udp.Port == 53 {
 		var parser dnsmessage.Parser
 		if header, err := parser.Start(data); err == nil && !header.Response {
@@ -84,7 +85,7 @@ func (b *Balancer) recordActivity(pid int, entry ProcessActivity) {
 		return
 	}
 	for i, old := range ins.recent {
-		if old.Protocol == entry.Protocol && old.Destination == entry.Destination && old.Adapter == entry.Adapter && old.DNSQuestion == entry.DNSQuestion {
+		if old.Protocol == entry.Protocol && old.Destination == entry.Destination && old.Adapter == entry.Adapter && old.DNSQuestion == entry.DNSQuestion && old.RuleID == entry.RuleID {
 			copy(ins.recent[i:], ins.recent[i+1:])
 			ins.recent[len(ins.recent)-1] = entry
 			return

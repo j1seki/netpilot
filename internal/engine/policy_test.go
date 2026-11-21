@@ -21,7 +21,7 @@ func (f *fakeResolver) Resolve(appName, appPath, destination string) FlowPolicy 
 	return f.policy
 }
 
-func (f *fakeResolver) ReportUsage(appName string, in, out int64) {
+func (f *fakeResolver) ReportUsage(policy FlowPolicy, in, out int64) {
 	f.in += in
 	f.out += out
 }
@@ -34,7 +34,7 @@ func TestPolicyResolverIsUsedForFlows(t *testing.T) {
 	if got.PreferredNIC != "eth0" || got.BandwidthLimitMbps != 3 {
 		t.Fatalf("policy = %+v", got)
 	}
-	b.reportUsage("game", 10, 20)
+	b.reportUsage(got, 10, 20)
 	if fr.in != 10 || fr.out != 20 {
 		t.Fatalf("usage not reported: %+v", fr)
 	}

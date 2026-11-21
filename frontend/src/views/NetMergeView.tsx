@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api, InterfaceInfo, NetMergeStatus, NetMergeConfig } from '../api/wails';
+import { AdapterQuota } from '../components/AdapterQuota';
 import {
   Power,
   RefreshCw,
@@ -18,6 +19,7 @@ export const NetMergeView: React.FC = () => {
   const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
   const [configDraft, setConfigDraft] = useState<Partial<Pick<NetMergeConfig, 'ipv6Mode' | 'mtu' | 'autoWeight'>>>({});
   const [loading, setLoading] = useState<boolean>(false);
+  const [changingMode, setChangingMode] = useState(false);
   const [limitInputs, setLimitInputs] = useState<Record<string, string>>({});
   const [socksDraft, setSocksDraft] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string>('');
@@ -29,7 +31,9 @@ export const NetMergeView: React.FC = () => {
 
   const loadStatus = async () => {
     try {
-      setStatus(await api.getNetMergeStatus());
+      const next = await api.getNetMergeStatus();
+      setStatus(next);
+      return next;
     } catch (err: any) {
       setErrorMsg(`Could not read Net-Merge status: ${err?.message || String(err)}`);
     }
@@ -85,25 +89,25 @@ export const NetMergeView: React.FC = () => {
   const osDefaultName = interfaces.find(i => i.isDefault)?.name || '';
   const physicalNames = interfaces.filter(i => i.isUp && !i.isVirtual).map(i => i.name);
 
-  const handleSwitchRoutingMode = async (mode: 'speed' | 'backup', primary?: string, secondary?: string) => {
-    const pri = primary !== undefined
-      ? primary
-      : (config?.primaryAdapter || osDefaultName || physicalNames[0] || status?.nics?.[0]?.Name || '');
-    const sec = secondary !== undefined
-      ? secondary
-      : (config?.secondaryAdapter || physicalNames.find(n => n !== pri) || status?.nics?.find(n => n.Name !== pri)?.Name || '');
+  const handleSwitchRoutingMode = async (
+    mode: 'speed' | 'backup',
+    primary = config?.primaryAdapter || '',
+    secondary = config?.secondaryAdapter || '',
+  ) => {
+    setChangingMode(true);
     setErrorMsg('');
     try {
-      await api.setNetMergeRoutingMode(mode, pri, sec);
-      showToast(status?.restartForMode
-        ? 'Routing preference saved. Stop and start net-merge to apply it.'
-        : mode === 'backup'
-          ? `Switched to Backup Failover mode (Primary: ${pri || 'OS default'} → Secondary: ${sec || 'auto'}).`
-          : 'Switched to Speed Aggregation mode (all healthy adapters used simultaneously; no primary/secondary).'
-      );
-      await loadStatus();
-    } catch (err: any) {
-      setErrorMsg(`Could not switch routing mode: ${err?.message || String(err)}`);
+      await api.setNetMergeRoutingMode(mode, primary, secondary);
+      const next = await loadStatus();
+      showToast(next?.modeChangePending
+        ? 'Routing preference saved. Restart the engine from NetPilot to apply it.'
+        : next?.isRunning || next?.socksRunning
+          ? 'Routing updated for new connections.'
+          : 'Routing preference saved for the next connection.');
+    } catch (err) {
+      setErrorMsg(`Could not switch routing mode. ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setChangingMode(false);
     }
   };
 
@@ -194,9 +198,12 @@ export const NetMergeView: React.FC = () => {
   const isRunning = status?.isRunning || false;
   const routingMode = config?.routingMode || status?.routingMode || 'speed';
   const canUseBackup = !config?.engineSource || config.engineSource === 'builtin';
-  const adapterNames = interfaces.length > 0
-    ? interfaces.filter(i => i.isUp).map(i => i.name)
-    : (status?.nics || []).map(n => n.Name);
+  const adapterNames = Array.from(new Set([
+    ...physicalNames,
+    ...(status?.nics || []).map(n => n.Name),
+    config?.primaryAdapter || '',
+    config?.secondaryAdapter || '',
+  ].filter(Boolean)));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -303,6 +310,14 @@ export const NetMergeView: React.FC = () => {
         </div>
       </div>
 
+      {status && <div className="card" style={{ marginBottom: 0 }}>
+        <strong>{isRunning ? `Running mode · ${status.routingMode === 'backup' ? 'Backup' : 'Speed'}` : 'System tunnel is in standby'}</strong>
+        {status.modeChangePending ? <p className="mobile-warning" role="status">Restart the engine from NetPilot to use the saved mode or Backup adapters. If another tray owns the tunnel, quit that tray first.</p>
+          : <p className="rule-editor-note">{status.restartForMode
+            ? 'This separate engine requires a restart for mode and Backup adapter changes.'
+            : 'Mode and Backup adapter changes apply to new NetPilot connections. Existing flows stay on their original link.'}</p>}
+      </div>}
+
       {/* Mode Selection Card: Speed Mode vs Backup Mode */}
       <div className="grid-2" style={{ gap: '14px' }}>
         {/* Speed Mode Card */}
@@ -322,7 +337,7 @@ export const NetMergeView: React.FC = () => {
                 Speed Mode (Multi-Link Aggregation)
               </span>
             </div>
-            <button className="btn btn-secondary btn-sm" type="button" aria-pressed={routingMode !== 'backup'} disabled={routingMode !== 'backup'} onClick={() => handleSwitchRoutingMode('speed')}>
+            <button className="btn btn-secondary btn-sm" type="button" aria-pressed={routingMode !== 'backup'} disabled={!status || changingMode || routingMode !== 'backup'} onClick={() => handleSwitchRoutingMode('speed')}>
               {routingMode !== 'backup' ? 'Selected' : 'Use Speed'}
             </button>
           </div>
@@ -352,12 +367,12 @@ export const NetMergeView: React.FC = () => {
                 Backup Mode (Primary → Failover Only)
               </span>
             </div>
-            <button className="btn btn-secondary btn-sm" type="button" aria-pressed={routingMode === 'backup'} disabled={!canUseBackup || routingMode === 'backup'} onClick={() => handleSwitchRoutingMode('backup')}>
+            <button className="btn btn-secondary btn-sm" type="button" aria-pressed={routingMode === 'backup'} disabled={!status || changingMode || !canUseBackup || routingMode === 'backup'} onClick={() => handleSwitchRoutingMode('backup')}>
               {routingMode === 'backup' ? 'Selected' : canUseBackup ? 'Use Backup' : 'Requires NetPilot engine'}
             </button>
           </div>
           <p style={{ fontSize: '11.5px', color: '#a1a1aa', lineHeight: 1.5, marginBottom: '10px' }}>
-            Routes 100% of traffic through the <strong>Primary Adapter</strong> while it is online. Automatically switches to the <strong>Secondary Adapter</strong> only when the primary connection fails, and switches back upon recovery.
+            Uses the <strong>Primary Adapter</strong> for new flows while it is healthy. New flows fail over to the <strong>Secondary Adapter</strong> when needed. App rules can select their own adapters.
           </p>
 
           {routingMode === 'backup' ? (
@@ -370,15 +385,16 @@ export const NetMergeView: React.FC = () => {
                   Primary Adapter {osDefaultName ? `(OS default: ${osDefaultName})` : ''}
                 </label>
                 <select
-                  value={config?.primaryAdapter || osDefaultName || adapterNames[0] || ''}
+                  value={config?.primaryAdapter || ''}
+                  disabled={changingMode}
                   onChange={e => handleSwitchRoutingMode('backup', e.target.value, config?.secondaryAdapter)}
                   style={{ width: '100%', padding: '4px 8px', fontSize: '11.5px' }}
                 >
-                  {adapterNames.length === 0 && <option value="">Auto-detect Primary</option>}
+                  <option value="">Automatic</option>
                   {adapterNames.map(name => {
                     const info = interfaces.find(i => i.name === name);
                     return (
-                      <option key={name} value={name}>
+                      <option key={name} value={name} disabled={name === config?.secondaryAdapter}>
                         {name}{info?.isDefault ? ' · OS default' : ''}{info?.isVirtual ? ' · VPN/virtual' : ''}
                       </option>
                     );
@@ -390,15 +406,16 @@ export const NetMergeView: React.FC = () => {
                   Secondary / Backup Adapter
                 </label>
                 <select
-                  value={config?.secondaryAdapter || physicalNames.find(n => n !== (config?.primaryAdapter || osDefaultName)) || adapterNames[1] || ''}
-                  onChange={e => handleSwitchRoutingMode('backup', config?.primaryAdapter || osDefaultName, e.target.value)}
+                  value={config?.secondaryAdapter || ''}
+                  disabled={changingMode}
+                  onChange={e => handleSwitchRoutingMode('backup', config?.primaryAdapter || '', e.target.value)}
                   style={{ width: '100%', padding: '4px 8px', fontSize: '11.5px' }}
                 >
-                  {adapterNames.length === 0 && <option value="">Auto-detect Secondary</option>}
+                  <option value="">Automatic</option>
                   {adapterNames.map(name => {
                     const info = interfaces.find(i => i.name === name);
                     return (
-                      <option key={name} value={name}>
+                      <option key={name} value={name} disabled={name === config?.primaryAdapter}>
                         {name}{info?.isDefault ? ' · OS default' : ''}{info?.isVirtual ? ' · VPN/virtual' : ''}
                       </option>
                     );
@@ -406,7 +423,7 @@ export const NetMergeView: React.FC = () => {
                 </select>
               </div>
               <div style={{ gridColumn: '1 / -1', fontSize: '10px', color: '#71717a' }}>
-                Defaults follow the OS default route. Manual choices are only used in Backup mode; Speed mode ignores them.
+                Automatic uses an eligible healthy link. Manual choices apply in Backup mode.
               </div>
             </div>
           ) : (
@@ -521,6 +538,8 @@ export const NetMergeView: React.FC = () => {
           </div>
         )}
       </div>
+
+      <AdapterQuota status={status} />
 
       {/* Bottom 2-Column Grid: SOCKS5 Proxy & Engine Parameters */}
       <div className="grid-2">

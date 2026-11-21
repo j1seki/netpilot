@@ -3,7 +3,11 @@
 package notify
 
 import (
+	"context"
+	"fmt"
 	"os/exec"
+	"strings"
+	"time"
 )
 
 func available() bool {
@@ -17,5 +21,14 @@ func send(title, body string) error {
 		return err
 	}
 	const script = "on run argv\ndisplay notification (item 1 of argv) with title (item 2 of argv)\nend run"
-	return exec.Command(path, "-e", script, body, title).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if output, err := exec.CommandContext(ctx, path, "-e", script, body, title).CombinedOutput(); err != nil {
+		return fmt.Errorf("macOS notification: %w (%s)", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func openSettings() error {
+	return exec.Command("open", "x-apple.systempreferences:com.apple.Notifications-Settings.extension").Run()
 }
