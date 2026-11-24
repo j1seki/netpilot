@@ -25,6 +25,8 @@ type Balancer struct {
 
 	policyMu          sync.RWMutex
 	policy            PolicyResolver
+	meterMu           sync.Mutex
+	meters            map[string]*ruleMeter
 	processTraffic    processTraffic
 	processInspection processInspection
 	inspectedPID      atomic.Int64
@@ -146,8 +148,8 @@ func (b *Balancer) DialTCP(ctx context.Context, host string, port int) (net.Conn
 // DialTCPFor connects through the matching rule's allowed links. Quota-exceeded
 // flows are refused before dialing.
 func (b *Balancer) DialTCPFor(ctx context.Context, host string, port int, policy FlowPolicy) (net.Conn, *Slot, Family, error) {
-	if policy.QuotaExceeded {
-		return nil, nil, Fam4, quotaError()
+	if err := policy.blockError(); err != nil {
+		return nil, nil, Fam4, err
 	}
 	if port == 53 && policy.CustomDNS != "" {
 		server, err := b.dnsAddress(policy.CustomDNS)
@@ -177,10 +179,6 @@ func (b *Balancer) DialTCPFor(ctx context.Context, host string, port int, policy
 	return b.dialTCPAddress(ctx, host, port, policy)
 }
 
-func quotaError() error {
-	return &dialError{rep: repFailure, err: errors.New("application data quota exceeded")}
-}
-
 func (b *Balancer) dialTCPAddress(ctx context.Context, host string, port int, policy FlowPolicy) (net.Conn, *Slot, Family, error) {
 	f, network := Fam4, "tcp4"
 	if ip, _ := netip.ParseAddr(host); ip.Unmap().Is6() {
@@ -196,9 +194,14 @@ func (b *Balancer) dialTCPAddress(ctx context.Context, host string, port int, po
 			return nil, nil, f, &dialError{rep: rep, err: lastErr}
 		}
 		tried[sl.key] = struct{}{}
+		addr := sl.addr.Load()
+		if addr.ip(f) == nil {
+			b.S.ReleaseFor(sl, f)
+			continue
+		}
 		d := net.Dialer{
-			LocalAddr: &net.TCPAddr{IP: sl.ip(f)},
-			Control:   nics.ForceEgress(sl.Index, f == Fam6),
+			LocalAddr: &net.TCPAddr{IP: addr.ip(f)},
+			Control:   nics.ForceEgress(addr.index, f == Fam6),
 			Timeout:   b.ConnectTimeout,
 			KeepAlive: 30 * time.Second,
 		}
@@ -240,12 +243,11 @@ func Relay(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler) (in, out
 // addition to the adapter-wide cap on its Slot. The limiter is shared by both
 // relay directions and remains attached to the concrete upstream TCPConn.
 func RelayLimited(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler, limitMbps float64) (in, out int64) {
-	return relayWithTraffic(client, upstream, sl, f, s, limitMbps, nil)
+	return relayWithTraffic(client, upstream, sl, f, s, newFlowLimiter(limitMbps), nil, nil)
 }
 
-func relayWithTraffic(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler, limitMbps float64, traffic *trafficCounter) (in, out int64) {
+func relayWithTraffic(client, upstream net.Conn, sl *Slot, f Family, s *Scheduler, limiter *flowLimiter, traffic *trafficCounter, meter *ruleMeter) (in, out int64) {
 	activity := s.track(sl, f)
-	flowLimit := newFlowLimiter(limitMbps)
 	var wg sync.WaitGroup
 	var once sync.Once
 	release := func() {
@@ -257,7 +259,7 @@ func relayWithTraffic(client, upstream net.Conn, sl *Slot, f Family, s *Schedule
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		n, err := pumpLimited(upstream, client, &sl.bytesOut[f], sl, false, activity, flowLimit, traffic)
+		n, err := pumpLimited(upstream, client, &sl.bytesOut[f], sl, false, activity, limiter, traffic, meter)
 		out = n
 		if isLinkDown(err) {
 			s.Fail(sl, f, relayFailCooldown)
@@ -265,7 +267,7 @@ func relayWithTraffic(client, upstream net.Conn, sl *Slot, f Family, s *Schedule
 		release()
 	}()
 	var err error
-	in, err = pumpLimited(client, upstream, &sl.bytesIn[f], sl, true, activity, flowLimit, traffic)
+	in, err = pumpLimited(client, upstream, &sl.bytesIn[f], sl, true, activity, limiter, traffic, meter)
 	if isLinkDown(err) {
 		s.Fail(sl, f, relayFailCooldown)
 	}
@@ -281,10 +283,10 @@ func isLinkDown(err error) bool {
 }
 
 func pump(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activity *flowActivity) (int64, error) {
-	return pumpLimited(dst, src, counter, sl, down, activity, nil, nil)
+	return pumpLimited(dst, src, counter, sl, down, activity, nil, nil, nil)
 }
 
-func pumpLimited(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activity *flowActivity, flowLimit *flowLimiter, traffic *trafficCounter) (int64, error) {
+func pumpLimited(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, activity *flowActivity, flowLimit *flowLimiter, traffic *trafficCounter, meter *ruleMeter) (int64, error) {
 	bp := bufPool.Get().(*[]byte)
 	defer bufPool.Put(bp)
 	buf := *bp
@@ -296,6 +298,7 @@ func pumpLimited(dst, src net.Conn, counter *atomic.Int64, sl *Slot, down bool, 
 			activity.bytes.Add(int64(n))
 			counter.Add(int64(n))
 			traffic.add(n)
+			meter.add(down, n)
 			if flowLimit != nil {
 				if down {
 					flowLimit.read(n)

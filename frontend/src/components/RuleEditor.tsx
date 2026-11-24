@@ -13,7 +13,7 @@ export function RuleEditor({ draft, interfaces, close, saved }: {
   const original = draft.rule;
   const [rule, setRule] = useState<RuleRecord>(() => original ?? {
     id: `rule-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`,
-    appName: draft.appName ?? '',
+    appName: draft.appPath ? '' : draft.appName ?? '',
     appPath: draft.appPath ?? '',
     domainPattern: '',
     preferredInterface: '',
@@ -73,7 +73,7 @@ export function RuleEditor({ draft, interfaces, close, saved }: {
       </div>
       <p className="rule-editor-note">Set a name, path, or destination. A match on any one can select the policy. The highest-priority match wins.</p>
       <label>Application name<input autoFocus value={rule.appName} onChange={e => set('appName', e.target.value)} placeholder="chrome.exe" /></label>
-      <label>Executable path<input value={rule.appPath} onChange={e => set('appPath', e.target.value)} placeholder="/usr/bin/example" /></label>
+      <label>Executable or macOS app path<input value={rule.appPath} onChange={e => set('appPath', e.target.value)} placeholder="/usr/bin/example" /></label>
       <label>Destinations<input value={rule.domainPattern ?? ''} onChange={e => set('domainPattern', e.target.value)} placeholder="*.example.com, 10.0.0.0/8" /></label>
       <div className="grid-2">
         <label>Preferred adapter<select required value={preferredAvailable ? rule.preferredInterface : ''} onChange={e => set('preferredInterface', e.target.value)}>
@@ -91,7 +91,7 @@ export function RuleEditor({ draft, interfaces, close, saved }: {
       {!fallbackAvailable && <p className="rule-editor-note">Saved fallback route {rule.fallbackInterface} needs a detected adapter or None.</p>}
       <p className="rule-editor-note">A pinned rule with no usable configured adapter blocks new matching flows.</p>
       <div className="grid-2">
-        <label>Speed cap per flow (Mbps)<input type="number" min="0" step="any" value={rule.bandwidthLimitMbps} onChange={e => set('bandwidthLimitMbps', Number(e.target.value))} /></label>
+        <label>Shared speed cap (Mbps)<input type="number" min="0" step="any" value={rule.bandwidthLimitMbps} onChange={e => set('bandwidthLimitMbps', Number(e.target.value))} /></label>
         <label>Data quota (MB)<input type="number" min="0" step="any" value={rule.dataQuotaMb} onChange={e => set('dataQuotaMb', Number(e.target.value))} /></label>
       </div>
       <div className="grid-2">

@@ -805,9 +805,7 @@ func (s *NetPilotService) GetInterfaces() []InterfaceInfo {
 }
 
 // DiscoverApplications returns currently active applications with matched policies.
-// When net-merge is NOT active, the default adapter is "System Default" and NetPilot does nothing
-// (pure standby — no custom routing rules are enforced). When net-merge IS active, the default
-// adapter is "net-merge" and active routing rules are evaluated.
+// Policy predictions are included when the current system tunnel enforces them.
 func (s *NetPilotService) DiscoverApplications() []apps.ProcessInfo {
 	procs := s.appManager.Discover()
 	host := s.hostTraffic.Snapshot()
@@ -816,6 +814,7 @@ func (s *NetPilotService) DiscoverApplications() []apps.ProcessInfo {
 		rates = s.netmergeCtrl.ProcessRates()
 	}
 	isActive := s.netmergeCtrl != nil && s.netmergeCtrl.IsActive()
+	useRules := isActive && s.netmergeCtrl.SystemRulesActive()
 	defaultAdapter := "System Default"
 	if isActive {
 		defaultAdapter = "net-merge"
@@ -829,12 +828,15 @@ func (s *NetPilotService) DiscoverApplications() []apps.ProcessInfo {
 			procs[i].NetworkSource = host.Source
 		}
 		procs[i].AssignedNIC = defaultAdapter
-		if !isActive {
+		if !useRules {
 			continue
 		}
 		decision := s.ruleEngine.Evaluate(procs[i].Name, procs[i].Executable, "", defaultAdapter)
 		if decision.MatchedRuleID != "" {
 			procs[i].AssignedNIC = decision.SelectedInterface
+			if decision.Blocked {
+				procs[i].AssignedNIC = "Blocked"
+			}
 			procs[i].RuleMatched = decision.MatchedRuleID
 			procs[i].CustomDNS = decision.CustomDNS
 			procs[i].BandwidthLimitMbps = decision.BandwidthLimitMbps
@@ -936,6 +938,12 @@ func (s *NetPilotService) EvaluateRoute(appName, path, destination string) rules
 			SelectedInterface: "System Default",
 			Reason:            "Net-Merge is inactive (Standby Mode): using System Default adapter; NetPilot is not modifying routes.",
 			EvaluatedAt:       time.Now(),
+		}
+	}
+	if !s.netmergeCtrl.SystemRulesActive() {
+		return rules.MatchDecision{
+			AppName: appName, Destination: destination, SelectedInterface: "net-merge",
+			Reason: "The active tunnel uses its own routing configuration", EvaluatedAt: time.Now(),
 		}
 	}
 	return s.ruleEngine.Evaluate(appName, path, destination, "net-merge")

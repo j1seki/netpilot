@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,10 +20,21 @@ type FlowPolicy struct {
 	BandwidthLimitMbps float64 `json:"bandwidthLimitMbps,omitempty"`
 	QuotaExceeded      bool    `json:"quotaExceeded,omitempty"`
 	RuleID             string  `json:"ruleId,omitempty"`
+	Unavailable        bool    `json:"-"`
 }
 
-// PolicyResolver turns an application identity into a FlowPolicy and receives the flow's
-// final byte counts so per-application quotas can be maintained.
+func (p FlowPolicy) blockError() error {
+	if p.Unavailable {
+		return &dialError{rep: repFailure, err: errors.New("application routing policy is unavailable")}
+	}
+	if p.QuotaExceeded {
+		return &dialError{rep: repFailure, err: errors.New("application data quota exceeded")}
+	}
+	return nil
+}
+
+// PolicyResolver maps application traffic to a rule and receives byte deltas
+// for enforcing that rule's quota.
 type PolicyResolver interface {
 	Resolve(appName, appPath, destination string) FlowPolicy
 	ReportUsage(policy FlowPolicy, bytesIn, bytesOut int64)
@@ -68,8 +80,7 @@ func (b *Balancer) ResolvePolicy(appName, appPath, destination string) FlowPolic
 	return b.resolvePolicy(appName, appPath, destination)
 }
 
-// flowLimiter is a per-flow token bucket pair. Adapter caps are shared by every flow on the
-// adapter; this adds the per-application cap on top of it.
+// flowLimiter paces the two directions independently.
 type flowLimiter struct {
 	in, out *bucket
 }
@@ -94,28 +105,69 @@ func (l *flowLimiter) write(n int) {
 	}
 }
 
-// limitedConn applies a per-flow cap while still exposing an ordinary net.Conn to the relay.
-type limitedConn struct {
-	net.Conn
-	lim *flowLimiter
+type ruleMeter struct {
+	id      string
+	in, out atomic.Int64
+
+	// Guarded by Balancer.meterMu. Each flow keeps the limiter it was assigned.
+	rate  float64
+	limit *flowLimiter
 }
 
-func (c *limitedConn) Read(p []byte) (int, error) {
-	n, err := c.Conn.Read(p)
-	c.lim.read(n)
-	return n, err
-}
-
-func (c *limitedConn) Write(p []byte) (int, error) {
-	c.lim.write(len(p))
-	return c.Conn.Write(p)
-}
-
-func maybeLimited(conn net.Conn, mbitPerSec float64) net.Conn {
-	if mbitPerSec <= 0 {
-		return conn
+func (m *ruleMeter) add(down bool, n int) {
+	if m == nil || n <= 0 {
+		return
 	}
-	return &limitedConn{Conn: conn, lim: newFlowLimiter(mbitPerSec)}
+	if down {
+		m.in.Add(int64(n))
+	} else {
+		m.out.Add(int64(n))
+	}
+}
+
+func (b *Balancer) meterFor(policy FlowPolicy) (*ruleMeter, *flowLimiter) {
+	if policy.RuleID == "" {
+		return nil, newFlowLimiter(policy.BandwidthLimitMbps)
+	}
+	b.meterMu.Lock()
+	defer b.meterMu.Unlock()
+	if b.meters == nil {
+		b.meters = make(map[string]*ruleMeter)
+	}
+	meter := b.meters[policy.RuleID]
+	if meter == nil {
+		meter = &ruleMeter{id: policy.RuleID}
+		b.meters[policy.RuleID] = meter
+	}
+	if meter.rate != policy.BandwidthLimitMbps {
+		meter.rate = policy.BandwidthLimitMbps
+		meter.limit = newFlowLimiter(meter.rate)
+	}
+	return meter, meter.limit
+}
+
+func (b *Balancer) flushRuleMeter(meter *ruleMeter) {
+	if meter == nil {
+		return
+	}
+	in, out := meter.in.Swap(0), meter.out.Swap(0)
+	if in != 0 || out != 0 {
+		b.reportUsage(FlowPolicy{RuleID: meter.id}, in, out)
+	}
+}
+
+// FlushPolicyUsage publishes bytes from still-open flows. Closing a flow also
+// flushes its rule, and atomic swaps ensure each byte is reported only once.
+func (b *Balancer) FlushPolicyUsage() {
+	b.meterMu.Lock()
+	meters := make([]*ruleMeter, 0, len(b.meters))
+	for _, meter := range b.meters {
+		meters = append(meters, meter)
+	}
+	b.meterMu.Unlock()
+	for _, meter := range meters {
+		b.flushRuleMeter(meter)
+	}
 }
 
 // appIdentity is the context key used when the caller learned the app before dialing.
@@ -148,15 +200,16 @@ func (b *Balancer) DialPinnedFor(ctx context.Context, host string, port int, pol
 	}
 	traffic, endTraffic := b.trackProcess(policy.PID)
 	b.recordProcessTCP(policy.PID, host, port, sl.Name, policy.RuleID)
+	meter, limiter := b.meterFor(policy)
 	return &slotConn{
 		TCPConn:    tcp,
 		sl:         sl,
 		fam:        f,
 		s:          b.S,
 		activity:   b.S.track(sl, f),
-		limiter:    newFlowLimiter(policy.BandwidthLimitMbps),
-		policy:     policy,
-		onClose:    b.reportUsage,
+		limiter:    limiter,
+		meter:      meter,
+		flushUsage: b.flushRuleMeter,
 		traffic:    traffic,
 		endTraffic: endTraffic,
 	}, nil

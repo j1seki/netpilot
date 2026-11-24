@@ -191,10 +191,13 @@ export const DashboardView: React.FC = () => {
     }
   };
 
-  const getAppRule = (appName: string): RuleRecord | undefined => {
+  const getAppRule = (app: ProcessInfo): RuleRecord | undefined => {
     const basename = (name: string) => name.trim().toLowerCase().split(/[\\/]/).pop()?.replace(/\.exe$/, '');
-    const name = basename(appName);
-    return name ? rules.find(r => basename(r.appName) === name) : undefined;
+    const name = basename(app.name);
+    const executable = app.executable.trim().toLowerCase();
+    return rules.find(rule => rule.id === app.ruleMatched) ?? rules.find(rule =>
+      (executable && executable === rule.appPath.trim().toLowerCase()) || (name && basename(rule.appName) === name)
+    );
   };
 
   const formatRouteSummary = (rule?: RuleRecord): string => {
@@ -709,7 +712,7 @@ export const DashboardView: React.FC = () => {
                       </tr>
                     )}
                     {(!grouped || expanded) && group.processes.map(app => {
-                      const matchedRule = getAppRule(app.name);
+                      const matchedRule = getAppRule(app);
                       return (
                         <tr key={app.pid} className={grouped ? 'process-child-row' : undefined}>
                           <td>
@@ -734,7 +737,7 @@ export const DashboardView: React.FC = () => {
                               </span>
                             ) : systemAppRules && matchedRule ? (
                               <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 600 }}>
-                                {formatRouteSummary(matchedRule)}
+                                {app.assignedNic === 'Blocked' ? 'Blocked' : formatRouteSummary(matchedRule)}
                               </span>
                             ) : (
                               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 500 }}>

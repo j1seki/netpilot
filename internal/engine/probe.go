@@ -19,8 +19,8 @@ const (
 	probeEveryDown = 4 * time.Second
 )
 
-func probe(sl *Slot, f Family, targets []string) (bool, time.Duration) {
-	ip := sl.ip(f)
+func probe(addr *slotAddr, f Family, targets []string) (bool, time.Duration) {
+	ip := addr.ip(f)
 	if ip == nil {
 		return false, 0
 	}
@@ -29,7 +29,7 @@ func probe(sl *Slot, f Family, targets []string) (bool, time.Duration) {
 		network = "tcp6"
 	}
 	for _, t := range targets {
-		d := net.Dialer{LocalAddr: &net.TCPAddr{IP: ip}, Control: nics.ForceEgress(sl.Index, f == Fam6), Timeout: probeTimeout}
+		d := net.Dialer{LocalAddr: &net.TCPAddr{IP: ip}, Control: nics.ForceEgress(addr.index, f == Fam6), Timeout: probeTimeout}
 		start := time.Now()
 		if c, err := d.Dial(network, t); err == nil {
 			rtt := time.Since(start)
@@ -41,8 +41,9 @@ func probe(sl *Slot, f Family, targets []string) (bool, time.Duration) {
 }
 
 type probeJob struct {
-	sl *Slot
-	f  Family
+	sl   *Slot
+	f    Family
+	addr *slotAddr
 }
 
 // RunProbes checks every adapter's internet access per address family: new ones immediately,
@@ -60,27 +61,26 @@ func (s *Scheduler) RunProbes(stop <-chan struct{}) {
 		}
 		for _, j := range s.probeDue() {
 			go func() {
-				defer j.sl.probing[j.f].Store(false)
 				targets := s.probeTargets(j.f)
-				up, rtt := probe(j.sl, j.f, targets)
-				s.RecordProbe(j.sl, j.f, up, rtt)
+				up, rtt := probe(j.addr, j.f, targets)
+				s.finishProbe(j, up, rtt)
 			}()
 		}
 	}
 }
 
 // probeDue returns the (slot, family) pairs that need a probe now and marks them in flight.
-func (s *Scheduler) probeDue() []probeJob {
+func (s *Scheduler) probeDue() []*probeJob {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	var due []probeJob
+	var due []*probeJob
 	for _, sl := range s.slots {
 		if !sl.present {
 			continue
 		}
 		for _, f := range []Family{Fam4, Fam6} {
-			if sl.ip(f) == nil || sl.probing[f].Load() {
+			if sl.ip(f) == nil || sl.probing[f] != nil {
 				continue
 			}
 			every := probeEveryUp
@@ -91,11 +91,24 @@ func (s *Scheduler) probeDue() []probeJob {
 				every = probeEveryDown
 			}
 			if now.Sub(sl.lastProbe[f]) >= every {
+				job := &probeJob{sl: sl, f: f, addr: sl.addr.Load()}
 				sl.lastProbe[f] = now
-				sl.probing[f].Store(true)
-				due = append(due, probeJob{sl, f})
+				sl.probing[f] = job
+				due = append(due, job)
 			}
 		}
 	}
 	return due
+}
+
+func (s *Scheduler) finishProbe(job *probeJob, up bool, rtt time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sl, f := job.sl, job.f
+	if sl.probing[f] == job {
+		sl.probing[f] = nil
+		if sl.present {
+			s.recordProbeLocked(sl, f, up, rtt)
+		}
+	}
 }

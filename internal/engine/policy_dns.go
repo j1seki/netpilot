@@ -53,13 +53,18 @@ func (b *Balancer) resolveHost(ctx context.Context, host string, policy FlowPoli
 					return nil, lastErr
 				}
 				tried[sl.key] = struct{}{}
-				d := net.Dialer{Control: nics.ForceEgress(sl.Index, f == Fam6), Timeout: b.ConnectTimeout}
+				addr := sl.addr.Load()
+				if addr.ip(f) == nil {
+					b.S.ReleaseFor(sl, f)
+					continue
+				}
+				d := net.Dialer{Control: nics.ForceEgress(addr.index, f == Fam6), Timeout: b.ConnectTimeout}
 				if strings.HasPrefix(network, "tcp") {
 					network = "tcp"
-					d.LocalAddr = &net.TCPAddr{IP: sl.ip(f)}
+					d.LocalAddr = &net.TCPAddr{IP: addr.ip(f)}
 				} else {
 					network = "udp"
-					d.LocalAddr = &net.UDPAddr{IP: sl.ip(f)}
+					d.LocalAddr = &net.UDPAddr{IP: addr.ip(f)}
 				}
 				conn, err := d.DialContext(ctx, network+family, server.String())
 				b.S.ReleaseFor(sl, f)

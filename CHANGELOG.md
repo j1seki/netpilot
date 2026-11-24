@@ -3,6 +3,13 @@
 What changed in each release. Each version's section becomes its GitHub release notes, so add the
 entry here before pushing a version tag.
 
+## [0.4.5-beta.1] - 2026-11-24
+
+- Linux’s elevated NetPilot helper enforces the desktop’s rules and reports live routing evidence in Inspect. If the desktop disappears, the helper restores system routing.
+- Each forwarding process shares one upload budget and one download budget per rule. Usage from open flows counts toward the rule’s quota, which blocks new connections once reached.
+- Adapter reconnects refresh the source address, interface identity, and health samples together. Results from a previous connection cannot mark the replacement adapter down.
+- Strict routing previews show when a rule blocks connections. New rules created from a process use its executable path when available. A macOS rule can match helper processes inside a selected `.app` bundle.
+
 ## [0.4.4] - 2026-11-20
 
 ### Application routing and Metrics

@@ -310,6 +310,7 @@ func (e *Engine) registerCatalog() {
 			_ = ctx.RuleEngine.Reload()
 
 			ctx.Logf("Simulating wlan0 link probe failure")
+			ctx.FailoverSM.Register("eth0")
 			ctx.FailoverSM.RecordProbe("wlan0", false, 0, "connection timeout")
 			ctx.FailoverSM.RecordProbe("wlan0", false, 0, "connection timeout") // reaches FailThreshold 2
 

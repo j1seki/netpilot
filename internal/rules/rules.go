@@ -30,6 +30,7 @@ type MatchDecision struct {
 	DataQuotaMB        float64       `json:"dataQuotaMb"`
 	DataUsedMB         float64       `json:"dataUsedMb"`
 	QuotaExceeded      bool          `json:"quotaExceeded"`
+	Blocked            bool          `json:"blocked,omitempty"`
 	CustomDNS          string        `json:"customDns,omitempty"`
 	IsFastestRouting   bool          `json:"isFastestRouting,omitempty"`
 	ProbeRTT           time.Duration `json:"probeRtt,omitempty"`
@@ -221,9 +222,12 @@ func matchingCriterion(rule db.RuleRecord, appName, normPath, normDest string) s
 		return "application name"
 	}
 	if rule.AppPath != "" && normPath != "" {
-		pattern := strings.ToLower(rule.AppPath)
+		pattern := strings.ToLower(strings.TrimSpace(rule.AppPath))
 		if ok, _ := filepath.Match(pattern, normPath); ok || normPath == pattern {
 			return "executable path"
+		}
+		if strings.HasSuffix(pattern, ".app") && strings.HasPrefix(normPath, pattern+"/contents/") {
+			return "application bundle"
 		}
 	}
 	if rule.DomainPattern != "" && matchesDestination(rule.DomainPattern, normDest) {
@@ -264,7 +268,10 @@ func (e *Engine) Evaluate(appName, appPath, destination string, defaultInterface
 			// Check quota
 			if r.DataQuotaMB > 0 && r.DataUsedMB >= r.DataQuotaMB {
 				decision.QuotaExceeded = true
-				decision.Reason = fmt.Sprintf("Data quota exceeded (%.1f MB / %.1f MB). Throttling/blocking.", r.DataUsedMB, r.DataQuotaMB)
+				decision.Blocked = true
+				decision.SelectedInterface = ""
+				decision.Reason = fmt.Sprintf("Data quota reached (%.1f MB / %.1f MB)", r.DataUsedMB, r.DataQuotaMB)
+				return decision
 			}
 
 			// Check if rule requests dynamic Fastest-Adapter routing
@@ -282,45 +289,34 @@ func (e *Engine) Evaluate(appName, appPath, destination string, defaultInterface
 			}
 
 			// Check preferred interface health
-			prefHealthy := true
-			if len(e.healthyNICs) > 0 {
-				h, ok := e.healthyNICs[r.PreferredInterface]
-				prefHealthy = ok && h
-			}
-
-			if prefHealthy {
+			if e.available(r.PreferredInterface) {
 				decision.SelectedInterface = r.PreferredInterface
 				decision.Reason = fmt.Sprintf("Matched rule %q (Priority %d): routed to preferred adapter %s", r.ID, r.Priority, r.PreferredInterface)
 				return decision
 			}
 
 			// Preferred is unhealthy; check fallback
-			if r.FallbackInterface != "" {
-				fbHealthy := true
-				if len(e.healthyNICs) > 0 {
-					h, ok := e.healthyNICs[r.FallbackInterface]
-					fbHealthy = ok && h
-				}
-				if fbHealthy {
-					decision.SelectedInterface = r.FallbackInterface
-					decision.IsFallback = true
-					decision.FallbackReason = fmt.Sprintf("Preferred interface %s is down/unhealthy", r.PreferredInterface)
-					decision.Reason = fmt.Sprintf("Matched rule %q: failover from %s to fallback adapter %s", r.ID, r.PreferredInterface, r.FallbackInterface)
-					return decision
-				}
+			if r.FallbackInterface != "" && e.available(r.FallbackInterface) {
+				decision.SelectedInterface = r.FallbackInterface
+				decision.IsFallback = true
+				decision.FallbackReason = fmt.Sprintf("Preferred adapter %s is unavailable", r.PreferredInterface)
+				decision.Reason = fmt.Sprintf("Matched rule %q, using fallback %s", r.ID, r.FallbackInterface)
+				return decision
 			}
 
-			// Both preferred and fallback unhealthy; fall through to default interface
-			decision.SelectedInterface = defaultInterface
-			decision.IsFallback = true
-			decision.FallbackReason = fmt.Sprintf("Both preferred (%s) and fallback (%s) are unavailable", r.PreferredInterface, r.FallbackInterface)
-			decision.Reason = fmt.Sprintf("Default interface %s used because target interfaces are down", defaultInterface)
+			decision.SelectedInterface = ""
+			decision.Blocked = true
+			decision.Reason = fmt.Sprintf("Rule %q blocks new connections while its configured adapters are unavailable", r.ID)
 			return decision
 		}
 	}
 
 	decision.Reason = fmt.Sprintf("No specific rule matched: routed to default system interface %s", defaultInterface)
 	return decision
+}
+
+func (e *Engine) available(adapter string) bool {
+	return adapter == "ALL" || adapter == "net-merge" || len(e.healthyNICs) == 0 || e.healthyNICs[adapter]
 }
 
 func matchesDestination(patterns, destination string) bool {

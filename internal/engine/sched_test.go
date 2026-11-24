@@ -360,11 +360,11 @@ func TestProbeAgainstLocalListener(t *testing.T) {
 	}()
 	s := NewScheduler([]nics.Nic{nic("A", "127.0.0.2", 1)})
 	s.SetProbeTargets([]string{ln.Addr().String()}, nil)
-	if up, _ := probe(s.slots[0], Fam4, s.probeTargets(Fam4)); !up {
+	if up, _ := probe(s.slots[0].addr.Load(), Fam4, s.probeTargets(Fam4)); !up {
 		t.Fatal("probe should pass against a reachable target")
 	}
 	ln.Close()
-	if up, _ := probe(s.slots[0], Fam4, s.probeTargets(Fam4)); up {
+	if up, _ := probe(s.slots[0].addr.Load(), Fam4, s.probeTargets(Fam4)); up {
 		t.Fatal("probe should fail once the target is gone")
 	}
 }
@@ -618,8 +618,8 @@ func TestUpdateRefreshesInterfaceIndexAndResetsLinkSampling(t *testing.T) {
 	sl.downUntil[Fam4], sl.downUntil[Fam6] = time.Now().Add(time.Hour), time.Now().Add(time.Hour)
 
 	s.Update([]nics.Nic{{Name: "Ethernet", Index: 19, IP: net.ParseIP("192.0.2.10"), Weight: 1}})
-	if sl.Index != 19 {
-		t.Fatalf("index = %d, want refreshed index 19", sl.Index)
+	if index := sl.addr.Load().index; index != 19 {
+		t.Fatalf("index = %d, want refreshed index 19", index)
 	}
 	if sl.linkPrimed || sl.linkRateIn != 0 || sl.linkRateOut != 0 {
 		t.Fatal("OS link counter baseline must be reset after interface re-enumeration")
@@ -648,4 +648,26 @@ func TestBackupAutomaticPrimaryBeforeExplicitSecondary(t *testing.T) {
 		t.Fatalf("fallback = %v, want backup", fallback)
 	}
 	sched.Release(fallback)
+}
+
+func TestReconnectDiscardsPreviousProbe(t *testing.T) {
+	adapter := nics.Nic{Name: "tether", Index: 4, IP: net.ParseIP("192.0.2.10"), Weight: 1}
+	s := NewScheduler([]nics.Nic{adapter})
+	slot := s.Acquire(nil)
+	defer s.Release(slot)
+	old := s.probeDue()[0]
+	s.Update(nil)
+	s.Update([]nics.Nic{adapter})
+	current := s.probeDue()[0]
+	if current.addr == old.addr {
+		t.Fatal("reconnect must refresh the adapter identity even when the address and index are reused")
+	}
+	s.finishProbe(old, false, 0)
+	if slot.state[Fam4] != stateUnknown || slot.probing[Fam4] != current {
+		t.Fatal("previous probe changed the new adapter's health or cleared its active probe")
+	}
+	s.finishProbe(current, true, 5*time.Millisecond)
+	if slot.state[Fam4] != stateUp || slot.rttEWMA[Fam4] != 5 {
+		t.Fatal("current probe did not mark the adapter healthy")
+	}
 }

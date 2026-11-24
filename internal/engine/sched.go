@@ -36,25 +36,34 @@ func (l linkState) String() string {
 	return [...]string{"checking", "up", "no internet"}[l]
 }
 
-type slotAddr struct{ ip4, ip6 net.IP }
+type slotAddr struct {
+	index    int
+	ip4, ip6 net.IP
+}
+
+func (a *slotAddr) ip(f Family) net.IP {
+	if f == Fam6 {
+		return a.ip6
+	}
+	return a.ip4
+}
 
 // Slot is a NIC plus its live counters. Counters are atomic so the data path never takes a lock.
 type Slot struct {
-	Name  string
-	Index int
-	key   string
-	addr  atomic.Pointer[slotAddr]
+	Name string
+	key  string
+	addr atomic.Pointer[slotAddr]
 
 	active, total, failed atomic.Int64 // active is across families (idle check on removal)
 	actF                  [2]atomic.Int64
 	bytesIn, bytesOut     [2]atomic.Int64
-	probing               [2]atomic.Bool
 	limit                 atomic.Pointer[limitPair] // nil = unlimited; see limit.go
 
 	// guarded by Scheduler.mu
 	weight          [2]float64
 	present         bool
 	state           [2]linkState
+	probing         [2]*probeJob
 	lastProbe       [2]time.Time
 	downUntil       [2]time.Time
 	lastIn, lastOut [2]int64
@@ -114,11 +123,7 @@ func (sl *Slot) busy(f Family) int64 {
 }
 
 func (sl *Slot) ip(f Family) net.IP {
-	a := sl.addr.Load()
-	if f == Fam6 {
-		return a.ip6
-	}
-	return a.ip4
+	return sl.addr.Load().ip(f)
 }
 
 type SlotStats struct {
@@ -255,6 +260,10 @@ func (s *Scheduler) probeTargets(f Family) []string {
 func (s *Scheduler) RecordProbe(sl *Slot, f Family, up bool, rtt time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.recordProbeLocked(sl, f, up, rtt)
+}
+
+func (s *Scheduler) recordProbeLocked(sl *Slot, f Family, up bool, rtt time.Duration) {
 	if up {
 		sl.state[f] = stateUp
 		sl.downUntil[f] = time.Time{}
@@ -379,7 +388,7 @@ func (s *Scheduler) Limits() map[string]float64 {
 }
 
 func normAddr(n nics.Nic) *slotAddr {
-	a := &slotAddr{}
+	a := &slotAddr{index: n.Index}
 	if n.IP != nil {
 		a.ip4 = n.IP.To4()
 	}
@@ -395,10 +404,12 @@ func normAddr(n nics.Nic) *slotAddr {
 func (s *Scheduler) Update(nics []nics.Nic) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, sl := range s.slots {
-		sl.present = false
-	}
+	seen := make(map[string]bool, len(nics))
 	for _, n := range nics {
+		seen[n.Name] = true
+		if n.Weight <= 0 || math.IsNaN(n.Weight) || math.IsInf(n.Weight, 0) {
+			n.Weight = 1
+		}
 		na := normAddr(n)
 		var found *Slot
 		for _, sl := range s.slots {
@@ -408,52 +419,42 @@ func (s *Scheduler) Update(nics []nics.Nic) {
 			}
 		}
 		if found == nil {
-			sl := &Slot{Name: n.Name, Index: n.Index, key: n.Name, weight: [2]float64{n.Weight, n.Weight}, present: true}
+			sl := &Slot{Name: n.Name, key: n.Name, weight: [2]float64{n.Weight, n.Weight}, present: true}
 			sl.addr.Store(na)
 			sl.setLimit(s.effectiveLimit(n.Name))
 			s.slots = append(s.slots, sl)
 			continue
 		}
+		old := found.addr.Load()
+		reconnected := !found.present || old.index != na.index
 		found.present = true
-		if found.Index != n.Index {
-			// The OS may reuse an interface name after recreating an adapter. Treat a
-			// changed index as a new link for probe and OS-counter sampling purposes.
-			found.Index = n.Index
+		if reconnected {
 			found.linkPrimed = false
 			found.linkRateIn, found.linkRateOut = 0, 0
-			for _, f := range []Family{Fam4, Fam6} {
-				found.state[f] = stateUnknown
-				found.lastProbe[f], found.downUntil[f] = time.Time{}, time.Time{}
-				found.peak[f] = 0
-				if s.auto {
-					found.weight[f] = 1
-				}
-			}
 		}
 		if !s.auto {
 			found.weight = [2]float64{n.Weight, n.Weight}
 		}
-		old := found.addr.Load()
 		for _, f := range []Family{Fam4, Fam6} {
-			changed := !old.ip4.Equal(na.ip4)
-			if f == Fam6 {
-				changed = !old.ip6.Equal(na.ip6)
-			}
-			if changed {
+			if reconnected || !old.ip(f).Equal(na.ip(f)) {
 				found.state[f] = stateUnknown
+				found.probing[f] = nil
 				found.lastProbe[f], found.downUntil[f] = time.Time{}, time.Time{}
 				found.peak[f] = 0
+				found.rttOK[f] = false
+				found.rttEWMA[f], found.jitterEWMA[f], found.lastRTT[f] = 0, 0, 0
 				if s.auto {
 					found.weight[f] = 1
 				}
 			}
 		}
-		if !old.ip4.Equal(na.ip4) || !old.ip6.Equal(na.ip6) {
+		if reconnected || !old.ip4.Equal(na.ip4) || !old.ip6.Equal(na.ip6) {
 			found.addr.Store(na)
 		}
 	}
 	kept := s.slots[:0]
 	for _, sl := range s.slots {
+		sl.present = seen[sl.key]
 		if sl.present || sl.active.Load() > 0 {
 			kept = append(kept, sl)
 		}
@@ -481,18 +482,23 @@ func (s *Scheduler) Tick(dt time.Duration) {
 	type sample struct {
 		in, out uint64
 		ok      bool
+		addr    *slotAddr
 	}
 
 	samples := make([]sample, len(slots))
 	for i, sl := range slots {
-		in, out, ok := nics.Octets(sl.Index)
-		samples[i] = sample{in, out, ok}
+		addr := sl.addr.Load()
+		in, out, ok := nics.Octets(addr.index)
+		samples[i] = sample{in, out, ok, addr}
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sec := dt.Seconds()
 	for i, sl := range slots {
+		if sl.addr.Load() != samples[i].addr {
+			continue
+		}
 		in, out, ok := samples[i].in, samples[i].out, samples[i].ok
 		if !sl.present || !ok {
 			sl.linkRateIn, sl.linkRateOut, sl.linkPrimed = 0, 0, false
@@ -678,7 +684,7 @@ func (s *Scheduler) acquireFor(f Family, allowed, skip map[string]struct{}, requ
 		if fastest {
 			score = sl.rttEWMA[f]
 		}
-		if score < bestScore {
+		if best == nil || score < bestScore {
 			best, bestScore = sl, score
 		}
 	}

@@ -15,9 +15,9 @@ function AddressList({ values, empty }: { values: string[]; empty: string }) {
 
 const scopeDescription: Record<ProcessInspection['ruleScope'], string> = {
   system: 'The NetPilot tunnel can enforce matching rules on new traffic it handles.',
-  socks: 'The live test uses NetPilot’s SOCKS5 forwarder. An app must use the proxy for its own traffic to follow these rules.',
+  socks: 'These rules apply to app traffic sent through NetPilot’s SOCKS5 proxy.',
   separate: 'A separate tunnel owns system routing. Start NetPilot’s SOCKS5 proxy to test these rules, or start the built-in tunnel from an elevated NetPilot window for system-wide rules.',
-  standby: 'Start NetPilot’s SOCKS5 proxy or the in-app system tunnel in Net-Merge to test a live route.',
+  standby: 'Start NetPilot’s system tunnel or SOCKS5 proxy in Net-Merge to test a live route.',
 };
 
 const ruleResult: Record<ProcessRuleMatch['result'], string> = {
@@ -65,7 +65,7 @@ function RuleVerification({ snapshot, verify }: { snapshot: ProcessInspection; v
   });
 
   return <div className="inspection-view inspection-rules" key="rules">
-    <p className="inspection-help">{scopeDescription[snapshot.ruleScope]} Preview checks the saved match. A live test opens one TCP connection through the active NetPilot forwarder. The default port is 443.</p>
+    <p className="inspection-help">{scopeDescription[snapshot.ruleScope]} Preview checks the saved match. A live test opens one TCP connection from NetPilot using the matching rule. The default port is 443.</p>
     {!forwarding && <button className="btn btn-secondary btn-sm" type="button" disabled={startingProxy} onClick={startProxy}>
       {startingProxy ? 'Starting proxy…' : 'Start local SOCKS5 proxy'}
     </button>}
@@ -232,7 +232,7 @@ export function AppInspection({ process, onClose }: { process: ProcessInfo; onCl
                         ))}</tbody>
                       </table>
                     </div> : <p className="inspection-empty">No attributed activity observed since opening the inspector.</p>}
-                  </> : <p className="inspection-empty">Forwarded activity is available through the in-app NetPilot tunnel or SOCKS proxy.</p>}
+                  </> : <p className="inspection-empty">Forwarded activity is available through the NetPilot tunnel or SOCKS proxy.</p>}
                 </div>
               )}
             </section>

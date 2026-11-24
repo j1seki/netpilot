@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/netip"
 	"sync"
-	"sync/atomic"
 
 	"netpilot/internal/nics"
 )
@@ -21,10 +20,8 @@ type slotConn struct {
 	once        sync.Once
 	activity    *flowActivity
 	limiter     *flowLimiter
-	policy      FlowPolicy
-	usageIn     atomic.Int64
-	usageOut    atomic.Int64
-	onClose     func(policy FlowPolicy, in, out int64)
+	meter       *ruleMeter
+	flushUsage  func(*ruleMeter)
 	traffic     *trafficCounter
 	endTraffic  func()
 	trafficOnce sync.Once
@@ -37,7 +34,7 @@ func (c *slotConn) Read(p []byte) (int, error) {
 	n, err := c.TCPConn.Read(p)
 	if n > 0 {
 		c.sl.bytesIn[c.fam].Add(int64(n))
-		c.usageIn.Add(int64(n))
+		c.meter.add(true, n)
 		c.traffic.add(n)
 		if c.activity != nil {
 			c.activity.bytes.Add(int64(n))
@@ -52,7 +49,7 @@ func (c *slotConn) Write(p []byte) (int, error) {
 	c.limiter.write(len(p))
 	n, err := c.sl.writePaced(c.TCPConn, p, false)
 	c.sl.bytesOut[c.fam].Add(int64(n))
-	c.usageOut.Add(int64(n))
+	c.meter.add(false, n)
 	c.traffic.add(n)
 	if c.activity != nil {
 		c.activity.bytes.Add(int64(n))
@@ -76,8 +73,8 @@ func (c *slotConn) Close() error {
 	c.release()
 	err := c.TCPConn.Close()
 	c.trafficOnce.Do(func() {
-		if c.onClose != nil {
-			c.onClose(c.policy, c.usageIn.Load(), c.usageOut.Load())
+		if c.flushUsage != nil {
+			c.flushUsage(c.meter)
 		}
 		if c.endTraffic != nil {
 			c.endTraffic()
@@ -102,8 +99,7 @@ type slotPacketConn struct {
 	balancer    *Balancer
 	policy      FlowPolicy
 	limiter     *flowLimiter
-	usageIn     atomic.Int64
-	usageOut    atomic.Int64
+	meter       *ruleMeter
 	dnsOriginal netip.AddrPort
 	dnsUpstream netip.AddrPort
 	traffic     *trafficCounter
@@ -122,7 +118,7 @@ func (c *slotPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	}
 	if n > 0 {
 		c.sl.bytesIn[c.fam].Add(int64(n))
-		c.usageIn.Add(int64(n))
+		c.meter.add(true, n)
 		c.traffic.add(n)
 		c.sl.throttlePacket(true, n)
 		c.limiter.read(n)
@@ -139,7 +135,7 @@ func (c *slotPacketConn) WriteTo(p []byte, a net.Addr) (int, error) {
 	}
 	n, err := c.PacketConn.WriteTo(p, target)
 	c.sl.bytesOut[c.fam].Add(int64(n))
-	c.usageOut.Add(int64(n))
+	c.meter.add(false, n)
 	c.traffic.add(n)
 	if n > 0 {
 		c.balancer.recordProcessUDP(c.policy.PID, target, c.sl.Name, c.policy.RuleID, p[:n])
@@ -150,7 +146,7 @@ func (c *slotPacketConn) WriteTo(p []byte, a net.Addr) (int, error) {
 func (c *slotPacketConn) Close() error {
 	err := c.PacketConn.Close()
 	c.trafficOnce.Do(func() {
-		c.balancer.reportUsage(c.policy, c.usageIn.Load(), c.usageOut.Load())
+		c.balancer.flushRuleMeter(c.meter)
 		if c.endTraffic != nil {
 			c.endTraffic()
 		}
@@ -171,8 +167,8 @@ func (b *Balancer) ListenUDPFor(ctx context.Context, f Family, pid int) (net.Pac
 
 // ListenUDPWithPolicy pins a TUN UDP flow and can redirect an ordinary DNS query.
 func (b *Balancer) ListenUDPWithPolicy(ctx context.Context, f Family, dst netip.AddrPort, policy FlowPolicy) (net.PacketConn, error) {
-	if policy.QuotaExceeded {
-		return nil, quotaError()
+	if err := policy.blockError(); err != nil {
+		return nil, err
 	}
 	var upstream netip.AddrPort
 	if dst.Port() == 53 && policy.CustomDNS != "" {
@@ -198,8 +194,13 @@ func (b *Balancer) ListenUDPWithPolicy(ctx context.Context, f Family, dst netip.
 			return nil, lastErr
 		}
 		tried[sl.key] = struct{}{}
-		lc := net.ListenConfig{Control: nics.ForceEgress(sl.Index, f == Fam6)}
-		pc, err := lc.ListenPacket(ctx, network, net.JoinHostPort(sl.ip(f).String(), "0"))
+		addr := sl.addr.Load()
+		if addr.ip(f) == nil {
+			b.S.ReleaseFor(sl, f)
+			continue
+		}
+		lc := net.ListenConfig{Control: nics.ForceEgress(addr.index, f == Fam6)}
+		pc, err := lc.ListenPacket(ctx, network, net.JoinHostPort(addr.ip(f).String(), "0"))
 		b.S.ReleaseFor(sl, f)
 		if err != nil {
 			if classify(err).linkDown {
@@ -209,9 +210,10 @@ func (b *Balancer) ListenUDPWithPolicy(ctx context.Context, f Family, dst netip.
 			continue
 		}
 		traffic, end := b.trackProcess(policy.PID)
+		meter, limiter := b.meterFor(policy)
 		return &slotPacketConn{
 			PacketConn: pc, sl: sl, fam: f, balancer: b, policy: policy,
-			limiter: newFlowLimiter(policy.BandwidthLimitMbps), traffic: traffic, endTraffic: end,
+			limiter: limiter, meter: meter, traffic: traffic, endTraffic: end,
 			dnsUpstream: upstream, dnsOriginal: dst,
 		}, nil
 	}

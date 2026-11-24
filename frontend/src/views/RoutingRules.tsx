@@ -155,12 +155,12 @@ export const RoutingRules: React.FC<{ active: boolean; goToProcesses: () => void
         <p>{status?.systemAppRules ? 'System-wide NetPilot forwarding applies matching rules to new flows.'
           : status?.socksRunning ? 'Rules apply to clients using the NetPilot SOCKS5 proxy.'
           : status?.isRunning ? 'The separate tunnel engine uses its own routing. Start the NetPilot SOCKS5 proxy to use these rules with supported clients.'
-          : 'Rules are saved. They take effect when traffic uses in-process NetPilot forwarding or its SOCKS5 proxy.'}</p>
+          : 'Rules are saved. Start the NetPilot system tunnel or SOCKS5 proxy to apply them to new connections.'}</p>
         <ul>
           <li>Higher-priority rules win. Application name, path and destination are independent matches.</li>
           <li>A pinned adapter takes precedence over Speed or Backup for new matching flows.</li>
           <li>Adapter inclusion, address family and link health can make a pin unusable. Add an explicit fallback to keep new flows working.</li>
-          <li>Adapter caps and per-flow caps both apply. A reached app quota blocks new matching flows. On the NetPilot engine, an adapter quota temporarily lowers the effective cap and preserves the manual limit.</li>
+          <li>A rule shares its speed cap across matched connections. Adapter caps also apply. Once usage reaches a rule’s quota, new matching connections are blocked.</li>
           <li>Custom DNS uses the selected routing policy. IPv6 policy can block IPv6 resolvers. OS resolver services, caches, VPN routes and encrypted DNS can bypass per-app DNS.</li>
           <li>Mobile and Net-Merge share MTU, IPv6, scheduling, and reachability probes. Restore previous reinstates the saved Mobile snapshot. Applying a full connection profile can also change routing mode.</li>
           <li>Custom reachability probes affect adapter health, including Fastest selection and Backup failover. Backup adapter choices set the failover order.</li>

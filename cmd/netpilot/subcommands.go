@@ -193,7 +193,7 @@ func nmStartPprof(addr string) error {
 	return nil
 }
 
-func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer, error) {
+func (c *nmCommon) boot(trayMode func() string) (*engine.Scheduler, *engine.Balancer, error) {
 	if c.mtu < 1280 || c.mtu > 65535 {
 		return nil, nil, fmt.Errorf("-mtu must be between 1280 and 65535, got %d", c.mtu)
 	}
@@ -267,31 +267,11 @@ func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer
 		for now := range time.Tick(time.Second) {
 			sched.SetQuotaLimits(state.ReadQuotaLease(c.stateDir, now))
 			sched.Tick(now.Sub(last))
+			bal.FlushPolicyUsage()
 			last = now
-			if mode != nil {
-				if m := mode(); m != "" {
-					rm, pri, sec := sched.Mode()
-					if rm == engine.ModeBackup {
-						m = m + " [backup"
-						if pri != "" {
-							m += ":" + pri
-						}
-						if sec != "" {
-							m += "->" + sec
-						}
-						m += "]"
-					}
-					state.Write(c.stateDir, state.Status{
-						Version: "net-merge " + netmerge.EmbeddedVersion() + " (NetPilot engine)", EngineSource: "builtin",
-						RoutingMode: c.mode, MTU: c.mtu, PrimaryAdapter: pri, SecondaryAdapter: sec,
-						PID:         os.Getpid(),
-						Mode:        m,
-						V6:          bal.V6State(),
-						Since:       c.since,
-						Updated:     now,
-						NICs:        sched.Snapshot(),
-						ProcessMbps: bal.ProcessRates(now),
-					})
+			if trayMode != nil {
+				if mode := trayMode(); mode != "" {
+					c.writeStatus(now, sched, bal, mode, false)
 				}
 			}
 		}
@@ -304,6 +284,26 @@ func (c *nmCommon) boot(mode func() string) (*engine.Scheduler, *engine.Balancer
 		}()
 	}
 	return sched, bal, nil
+}
+
+func (c *nmCommon) writeStatus(now time.Time, sched *engine.Scheduler, bal *engine.Balancer, mode string, appRules bool) {
+	routing, primary, secondary := sched.Mode()
+	if routing == engine.ModeBackup {
+		mode += " [backup"
+		if primary != "" {
+			mode += ":" + primary
+		}
+		if secondary != "" {
+			mode += "->" + secondary
+		}
+		mode += "]"
+	}
+	state.Write(c.stateDir, state.Status{
+		Version: "net-merge " + netmerge.EmbeddedVersion() + " (NetPilot engine)", EngineSource: "builtin",
+		RoutingMode: string(routing), MTU: c.mtu, PrimaryAdapter: primary, SecondaryAdapter: secondary,
+		PID: os.Getpid(), Mode: mode, V6: bal.V6State(), Since: c.since, Updated: now,
+		NICs: sched.Snapshot(), ProcessMbps: bal.ProcessRates(now), SystemAppRules: appRules,
+	})
 }
 
 func nmDescribeNic(n nics.Nic) string {
@@ -390,6 +390,7 @@ func nmCmdRun(args []string) {
 	hidden := fs.Bool("hidden", false, "when elevating, hide the new console window")
 	crashAfter := fs.Duration("crash-after", 0, "test only: exit abruptly after this long")
 	runFor := fs.Duration("for", 0, "turn off automatically after this long")
+	policySocket := fs.String("policy-socket", "", "Linux desktop application policy socket")
 	fs.Parse(args)
 
 	if !platform.IsAdmin() {
@@ -415,10 +416,19 @@ func nmCmdRun(args []string) {
 	}
 	state.TakeMarker(c.stateDir, "off")
 
-	sched, bal, err := c.boot(func() string { return "system-wide" })
+	sched, bal, err := c.boot(nil)
 	if err != nil {
 		logx.Printf("error: %v\n", err)
 		os.Exit(1)
+	}
+	var policies *netmerge.PolicyClient
+	if *policySocket != "" {
+		policies, err = netmerge.OpenPolicyClient(*policySocket)
+		if err != nil {
+			logx.Printf("error: connect to desktop application rules: %v\n", err)
+			os.Exit(1)
+		}
+		bal.SetPolicyResolver(policies)
 	}
 	t := tun.New(bal)
 	t.MTU = c.mtu
@@ -428,17 +438,8 @@ func nmCmdRun(args []string) {
 	}
 	logx.Printf("net-merge is ON: all IPv4 traffic is balanced across the adapters above.\n")
 
-	// Write status immediately so callers waiting for activation see it right away
-	state.Write(c.stateDir, state.Status{
-		Version: "net-merge " + netmerge.EmbeddedVersion() + " (NetPilot engine)", EngineSource: "builtin",
-		RoutingMode: c.mode, MTU: c.mtu, PrimaryAdapter: c.primary, SecondaryAdapter: c.secondary,
-		PID:     os.Getpid(),
-		Mode:    "system-wide",
-		V6:      bal.V6State(),
-		Since:   c.since,
-		Updated: time.Now(),
-		NICs:    sched.Snapshot(),
-	})
+	// Publish status only after the tunnel and the requested policy connection are ready.
+	c.writeStatus(time.Now(), sched, bal, "system-wide", policies != nil)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -451,12 +452,30 @@ func nmCmdRun(args []string) {
 	}
 	poll := time.NewTicker(300 * time.Millisecond)
 	defer poll.Stop()
+	statusTick := time.NewTicker(time.Second)
+	defer statusTick.Stop()
+	policyFailures := 0
 	for {
 		select {
 		case <-sig:
 		case <-timeUp:
 		case <-crash:
 			os.Exit(3)
+		case <-statusTick.C:
+			if policies != nil {
+				if err := policies.Check(); err != nil {
+					policyFailures++
+					if policyFailures < 3 {
+						continue
+					}
+					logx.Printf("desktop policy connection lost, stopping system-wide routing: %v\n", err)
+					break
+				}
+				policyFailures = 0
+				policies.SyncActivity(bal)
+			}
+			c.writeStatus(time.Now(), sched, bal, "system-wide", policies != nil)
+			continue
 		case <-poll.C:
 			if req, ok := state.TakeLimit(c.stateDir); ok {
 				sched.SetLimit(req.Adapter, req.Mbps)
@@ -471,6 +490,7 @@ func nmCmdRun(args []string) {
 		break
 	}
 	t.Close()
+	bal.FlushPolicyUsage()
 	state.Clear(c.stateDir)
 	logx.Printf("net-merge is OFF.\n")
 }

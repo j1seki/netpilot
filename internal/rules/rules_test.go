@@ -33,6 +33,21 @@ func TestDecisionExposesFallbackInterface(t *testing.T) {
 	if d.SelectedInterface != "wlan0" || !d.IsFallback {
 		t.Fatalf("decision = %+v, want fallback to wlan0", d)
 	}
+	e.UpdateNICHealth(map[string]bool{"eth0": false, "wlan0": false, "wwan0": true})
+	d = e.Evaluate("game.exe", "", "", "wwan0")
+	if !d.Blocked || d.SelectedInterface != "" || d.IsFallback {
+		t.Fatalf("strict rule should block when neither adapter is available: %+v", d)
+	}
+}
+
+func TestBundleRuleMatchesNestedHelpers(t *testing.T) {
+	rule := db.RuleRecord{AppPath: "/Applications/Browser.app"}
+	if match := matchingCriterion(rule, "Browser Helper", "/applications/browser.app/contents/frameworks/helper", ""); match != "application bundle" {
+		t.Fatalf("bundle match = %q", match)
+	}
+	if match := matchingCriterion(rule, "Browser Other", "/applications/browser.app.backup/contents/macos/browser", ""); match != "" {
+		t.Fatalf("similarly named app matched the bundle: %q", match)
+	}
 }
 
 func TestDomainPatternPlainNameIsExactAndWildcardUsesLabelBoundary(t *testing.T) {

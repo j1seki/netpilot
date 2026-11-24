@@ -30,9 +30,9 @@ Download and upload speeds, idle and loaded latency, and bufferbloat measure lin
 
 Create and edit policies from **Systems → Application Routing Policies** or **Rules**. A policy can match an application name, executable path, or destination, then select a detected network adapter, optional fallback, bandwidth limit, traffic quota, and custom DNS. Inspect a running process to see matching policies. The live TCP route check reports the adapter and source address used by its probe.
 
-System-wide application policies require the built-in NetPilot engine and elevated permissions. On Windows, run NetPilot as administrator. With the SOCKS5 proxy, an application must be configured to use NetPilot's local proxy. The separate upstream engine can run a system-wide tunnel, but it does not apply NetPilot's application policies. A routing rule affects new connections, so reconnect an application after changing its policy. Custom DNS works when NetPilot can see the hostname before it is resolved. Operating-system resolvers, encrypted DNS, VPN routes, and application caches can affect DNS behavior.
+System-wide application policies use the built-in NetPilot engine and require elevated permissions. On Linux, the elevated helper started by the desktop uses its saved rules and stops the tunnel if it loses the desktop connection. On Windows, run NetPilot as administrator. Apps configured to use NetPilot's SOCKS5 proxy also follow its rules. The separate upstream engine uses its own routing configuration. A routing rule affects new connections, so reconnect an application after changing its policy. Custom DNS works when NetPilot can see the hostname before it is resolved. Operating-system resolvers, encrypted DNS, VPN routes, and application caches can affect DNS behavior.
 
-Speed mode distributes connections across available links. Backup mode keeps new connections on the selected primary link and uses a backup when the primary is unavailable. An application's explicit adapter choice takes precedence for that application's new connections. The chosen adapter must have an address for the connection's IP family and pass the configured reachability checks. Per-adapter and per-application bandwidth limits both apply. A reached application quota blocks new connections that match the policy.
+Speed mode distributes connections across available links. Backup mode keeps new connections on the selected primary link and uses a backup when the primary is unavailable. An application's explicit adapter choice takes precedence for that application's new connections. The chosen adapter must have an address for the connection's IP family and pass the configured reachability checks. Each forwarding process shares a rule’s speed cap across matched connections, alongside any adapter cap. Open connections contribute to the rule’s quota, and reaching the quota blocks new matching connections.
 
 ### Mobile and connection profiles
 
@@ -82,7 +82,7 @@ chmod +x netpilot-linux-arm64.AppImage
 
 ### Verifying an application rule
 
-Save the rule in **Application Routing** or **Rules**, then open **Active Processes → Inspect → Routing rules**. The live test reports the outbound adapter and source IP after a TCP connection succeeds. Observed rule matches appear when the running application opens fresh connections through the in-app tunnel or proxy. System-wide rule enforcement requires the desktop's in-app NetPilot engine. On Windows, launch NetPilot as administrator for that mode.
+Save the rule in **Application Routing** or **Rules**, then open **Active Processes → Inspect → Routing rules**. The live test reports the adapter and source IP of a TCP connection opened by NetPilot using the matching rule. **Forwarded activity** shows observed rule matches as the inspected app opens fresh connections through the NetPilot tunnel or proxy.
 
 On macOS, install NetPilot in Applications. If macOS blocks a copy you downloaded from the official release page, use **Privacy & Security → Open Anyway**, or the DMG's **Open NetPilot.command** helper to verify the bundle and remove quarantine from that copy after confirming.
 

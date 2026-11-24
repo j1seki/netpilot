@@ -62,6 +62,31 @@ func TestFlowLimiterIsOptional(t *testing.T) {
 	}
 }
 
+func TestRuleSharesRateAndReportsOngoingUsage(t *testing.T) {
+	resolver := &fakeResolver{}
+	b := NewBalancer(NewScheduler(nil))
+	b.SetPolicyResolver(resolver)
+	policy := FlowPolicy{RuleID: "app-policy", BandwidthLimitMbps: 10}
+	first, firstLimit := b.meterFor(policy)
+	second, secondLimit := b.meterFor(policy)
+	_, otherLimit := b.meterFor(FlowPolicy{RuleID: "other-policy", BandwidthLimitMbps: 10})
+	if first != second || firstLimit == nil || firstLimit != secondLimit || firstLimit == otherLimit {
+		t.Fatal("flows from the same rule must share their own speed budget")
+	}
+	first.add(false, 25)
+	second.add(true, 50)
+	b.FlushPolicyUsage()
+	if resolver.in != 50 || resolver.out != 25 {
+		t.Fatalf("wrong usage while flows are open: %d in, %d out", resolver.in, resolver.out)
+	}
+	first.add(true, 5)
+	b.flushRuleMeter(second)
+	b.FlushPolicyUsage()
+	if resolver.in != 55 || resolver.out != 25 {
+		t.Fatalf("byte deltas lost or counted twice: %d in, %d out", resolver.in, resolver.out)
+	}
+}
+
 func TestDialPinnedForWithBandwidthCapKeepsTCPConn(t *testing.T) {
 	target, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {

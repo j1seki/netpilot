@@ -88,6 +88,8 @@ type Controller struct {
 	// In-process scheduler and balancer
 	sched          *engine.Scheduler
 	balancer       *engine.Balancer
+	policy         engine.PolicyResolver
+	policyServer   *policyServer
 	tunDev         *tun.Tun
 	tunOn          bool
 	tunSince       time.Time
@@ -276,6 +278,7 @@ func (c *Controller) initScheduler() {
 				}
 			case now := <-tickTicker.C:
 				c.sched.Tick(now.Sub(last))
+				c.balancer.FlushPolicyUsage()
 				last = now
 				c.mu.RLock()
 				if interval := time.Duration(c.config.RescanSec) * time.Second; interval != rescanEvery {
@@ -341,6 +344,13 @@ func (c *Controller) IsForwarding() bool {
 	return ok
 }
 
+// SystemRulesActive reports whether the current tunnel enforces desktop policies.
+func (c *Controller) SystemRulesActive() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tunOn && c.balancer.HasPolicyResolver() || c.desktopPolicyTunnelLocked()
+}
+
 // ProcessRates reports attributed traffic from the integrated TUN or SOCKS engine.
 func (c *Controller) ProcessRates() map[int]float64 {
 	c.mu.RLock()
@@ -365,11 +375,13 @@ func (c *Controller) ProcessRates() map[int]float64 {
 	return local
 }
 
-// InspectProcess returns request metadata from forwarding in this process.
-// Separate engines only expose the operating system's socket snapshot to the UI.
+// InspectProcess returns recent metadata from forwarding owned by this desktop.
 func (c *Controller) InspectProcess(pid int) ([]engine.ProcessActivity, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.desktopPolicyTunnelLocked() {
+		return c.policyServer.inspect(pid), true
+	}
 	if c.balancer == nil || (!c.tunOn && !c.socksRunning) {
 		return nil, false
 	}
@@ -388,10 +400,10 @@ type RuleRouteProbe struct {
 
 func (c *Controller) TestRuleRoute(ctx context.Context, app, path, host string, port int) (RuleRouteProbe, error) {
 	c.mu.RLock()
-	b, active := c.balancer, c.tunOn || c.socksRunning
+	b, active := c.balancer, c.tunOn || c.socksRunning || c.desktopPolicyTunnelLocked()
 	c.mu.RUnlock()
 	if !active || b == nil || !b.HasPolicyResolver() {
-		return RuleRouteProbe{}, fmt.Errorf("start NetPilot’s SOCKS5 proxy or its in-app system tunnel to test a live rule")
+		return RuleRouteProbe{}, fmt.Errorf("start NetPilot’s system tunnel or SOCKS5 proxy to test a live rule")
 	}
 	policy := b.ResolvePolicy(app, path, host)
 	if policy.RuleID == "" {
@@ -494,12 +506,25 @@ func (c *Controller) SetProbeTargets(v4, v6 []string) error {
 
 // SetPolicyResolver wires the per-application rule engine into the live balancer.
 func (c *Controller) SetPolicyResolver(r engine.PolicyResolver) {
-	c.mu.RLock()
-	b := c.balancer
-	c.mu.RUnlock()
-	if b != nil {
-		b.SetPolicyResolver(r)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.policy = r
+	if c.balancer != nil {
+		c.balancer.SetPolicyResolver(r)
 	}
+}
+
+func (c *Controller) desktopPolicyTunnelLocked() bool {
+	if c.policyServer == nil {
+		return false
+	}
+	st, ok := state.Read(c.stateDir)
+	return ok && c.ownsPolicyTunnel(st)
+}
+
+func (c *Controller) ownsPolicyTunnel(st *state.Status) bool {
+	return c.policyServer != nil && st.EngineSource == "builtin" && st.SystemAppRules &&
+		st.PID == c.launchedPID && st.Since.Equal(c.launchedSince)
 }
 
 func resolveActiveAdapter(isRunning bool, cfg Config, snap []engine.SlotStats) string {
@@ -593,6 +618,7 @@ func (c *Controller) GetStatus() (StatusInfo, error) {
 		info.Mode = st.Mode
 		info.RunningVersion = st.Version
 		info.RunningSource = st.EngineSource
+		info.SystemAppRules = c.ownsPolicyTunnel(st)
 		info.RoutingMode = "speed"
 		if st.RoutingMode == "backup" {
 			info.RoutingMode = "backup"
@@ -636,9 +662,10 @@ func (c *Controller) SetSystemWide(on bool) error {
 	defer c.mu.Unlock()
 
 	if !on {
+		defer c.closePolicyServerLocked()
 		c.stopLocalTunnelLocked()
 		if _, ok := state.Read(c.stateDir); ok || platform.InstanceRunning() {
-			return state.SendMarker(c.stateDir, "off")
+			return c.stopRunnerLocked()
 		}
 		return nil
 	}
@@ -651,6 +678,7 @@ func (c *Controller) SetSystemWide(on bool) error {
 		return nil
 	}
 
+	c.closePolicyServerLocked()
 	c.applySchedulerModeLocked()
 	_ = embedded.EnsureWintunDLL(c.stateDir)
 
@@ -747,6 +775,21 @@ func (c *Controller) SetSystemWide(on bool) error {
 	state.TakeMarker(c.stateDir, "off")
 	_ = state.Prepare(c.stateDir)
 
+	var policy *policyServer
+	if runtime.GOOS == "linux" && !platform.IsAdmin() && bin.EngineSource == "builtin" && c.policy != nil {
+		var err error
+		policy, err = startPolicyServer(c.policy)
+		if err != nil {
+			return fmt.Errorf("start application routing policy server: %w", err)
+		}
+		defer func() {
+			if c.policyServer != policy {
+				policy.close()
+			}
+		}()
+		args = append(args, "-policy-socket", policy.socket)
+	}
+
 	var launchErr error
 	if runtime.GOOS == "windows" && !platform.IsAdmin() && bin.EngineSource == "builtin" {
 		// Trigger UAC elevation directly on our single binary (`netpilot.exe run ...`)
@@ -768,11 +811,15 @@ func (c *Controller) SetSystemWide(on bool) error {
 
 	if c.waitForActiveStatus(12 * time.Second) {
 		if st, ok := state.Read(c.stateDir); ok {
+			if policy != nil && (st.EngineSource != "builtin" || !st.SystemAppRules) {
+				return fmt.Errorf("the running engine has no connection to NetPilot's application rules")
+			}
 			c.launchedPID, c.launched = st.PID, bin
 			c.launchedConfig = c.config
 			c.launchedSince = st.Since
+			c.policyServer = policy
+			return nil
 		}
-		return nil
 	}
 
 	if logBytes, err := os.ReadFile(logPath); err == nil && len(logBytes) > 0 {
@@ -805,6 +852,29 @@ func (c *Controller) stopLocalTunnelLocked() {
 	}
 }
 
+func (c *Controller) closePolicyServerLocked() {
+	if c.policyServer != nil {
+		c.policyServer.close()
+		c.policyServer = nil
+	}
+}
+
+func (c *Controller) stopRunnerLocked() error {
+	if err := state.SendMarker(c.stateDir, "off"); err != nil {
+		return err
+	}
+	// Keep the rule service available while our helper closes its flows and
+	// reports their usage. Independent engines still stop asynchronously.
+	deadline := time.Now().Add(6 * time.Second)
+	for c.desktopPolicyTunnelLocked() {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the NetPilot tunnel did not confirm it stopped")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil
+}
+
 // Close stops monitoring and shuts down forwarding owned by this controller.
 func (c *Controller) Close() error {
 	c.stopMonitor.Do(func() { close(c.stopCh) })
@@ -815,10 +885,11 @@ func (c *Controller) Close() error {
 func (c *Controller) StopOwned() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer c.closePolicyServerLocked()
 	socksErr := c.stopSocks5Locked()
 	c.stopLocalTunnelLocked()
 	if st, ok := state.Read(c.stateDir); ok && c.launchedPID > 0 && st.PID == c.launchedPID && st.Since.Equal(c.launchedSince) {
-		if err := state.SendMarker(c.stateDir, "off"); err != nil {
+		if err := c.stopRunnerLocked(); err != nil {
 			return err
 		}
 	}

@@ -37,6 +37,7 @@ type Status struct {
 	Updated          time.Time
 	NICs             []engine.SlotStats
 	ProcessMbps      map[int]float64 `json:",omitempty"`
+	SystemAppRules   bool            `json:",omitempty"`
 }
 
 func DefaultDir() string {
