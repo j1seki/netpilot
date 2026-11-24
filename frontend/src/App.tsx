@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   api,
   BrandingInfo,
@@ -18,6 +18,7 @@ import { Analytics } from './views/Analytics';
 import { TestDebug } from './views/TestDebug';
 import { Tools } from './views/Tools';
 import { Settings } from './views/Settings';
+import { SimpleView } from './views/SimpleView';
 import {
   GitMerge,
   ArrowDown,
@@ -44,23 +45,41 @@ export type MainTab =
   | 'connectivity';
 
 const MAIN_TABS: MainTab[] = ['dashboard', 'netmerge', 'rules', 'usage', 'tools', 'test-suite', 'settings', 'connectivity'];
-const openTTL = new URLSearchParams(window.location.search).get('tab') === 'ttl';
+const requestedTab = new URLSearchParams(window.location.search).get('tab');
+const openTTL = requestedTab === 'ttl';
+const viewPreference = 'netpilot.viewMode';
+type ViewMode = 'simple' | 'advanced';
 
 function initialTab(): MainTab {
   // Deep links are handy for docs and for jumping straight to a page:
   // index.html?tab=usage#/usage-style URLs from the tray/docs.
-  const requested = new URLSearchParams(window.location.search).get('tab') as MainTab | null;
+  const requested = requestedTab as MainTab | null;
   if (openTTL) return 'connectivity';
   return requested && MAIN_TABS.includes(requested) ? requested : 'dashboard';
+}
+
+function initialView(): ViewMode {
+  if (openTTL || MAIN_TABS.includes(requestedTab as MainTab)) return 'advanced';
+  try {
+    return localStorage.getItem(viewPreference) === 'advanced' ? 'advanced' : 'simple';
+  } catch {
+    return 'simple';
+  }
 }
 
 export const App: React.FC = () => {
   useEffect(listenForDesktopTests, []);
   const startTab = initialTab();
   const [currentTab, setCurrentTab] = useState<MainTab>(startTab);
+  const [view, setView] = useState(initialView);
+  const [advancedMounted, setAdvancedMounted] = useState(() => view === 'advanced');
   const [branding, setBranding] = useState<BrandingInfo | null>(null);
   const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
+  const [interfacesLoaded, setInterfacesLoaded] = useState(false);
+  const [interfacesError, setInterfacesError] = useState('');
   const [netMergeStatus, setNetMergeStatus] = useState<NetMergeStatus | null>(null);
+  const [statusError, setStatusError] = useState('');
+  const statusRequest = useRef(0);
   const [visitedTabs, setVisitedTabs] = useState<Record<MainTab, boolean>>({
     dashboard: startTab === 'dashboard',
     netmerge: startTab === 'netmerge',
@@ -75,39 +94,56 @@ export const App: React.FC = () => {
   // Real aggregate rolling history for top-bar sparkline
   const [globalRxHist, setGlobalRxHist] = useState<number[]>([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
-  const loadHeaderData = async () => {
+  const refreshStatus = useCallback(async () => {
+    const request = ++statusRequest.current;
     try {
-      const [b, ifaces, nm] = await Promise.all([
-        api.getBranding(),
-        api.getInterfaces(),
-        api.getNetMergeStatus(),
-      ]);
-      setBranding(b);
-      setInterfaces(ifaces);
-      setNetMergeStatus(nm);
-
-      const totalRx = ifaces.reduce((acc, i) => acc + (i.rxMbps || 0), 0);
-      setGlobalRxHist(prev => [...prev.slice(1), totalRx]);
-    } catch (_) {}
-  };
+      const status = await api.getNetMergeStatus();
+      if (request === statusRequest.current) {
+        setNetMergeStatus(status);
+        setStatusError('');
+      }
+    } catch (error) {
+      if (request === statusRequest.current) setStatusError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
 
   useEffect(() => {
+    let disposed = false;
+    api.getBranding().then(result => { if (!disposed) setBranding(result); }).catch(() => {});
+    const loadHeaderData = () => {
+      void refreshStatus();
+      api.getInterfaces().then(result => { if (!disposed) receiveInterfaces(result); }).catch(() => {
+        if (!disposed) setInterfacesError('Could not read network connections.');
+      });
+    };
     loadHeaderData();
     const interval = setInterval(loadHeaderData, 2500);
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      disposed = true;
+      ++statusRequest.current;
+      clearInterval(interval);
+    };
+  }, [refreshStatus]);
+
+  function receiveInterfaces(next: InterfaceInfo[]) {
+    setInterfaces(next);
+    setInterfacesLoaded(true);
+    setInterfacesError('');
+    const totalRx = next.reduce((acc, i) => acc + (i.rxMbps || 0), 0);
+    setGlobalRxHist(prev => [...prev.slice(1), totalRx]);
+  }
 
   // Live telemetry from the backend's Server-Sent Events stream. The polling effect above
   // is a fallback for environments where EventSource cannot reach /api/events.
   useEffect(() => {
     return subscribeTelemetry(payload => {
       if (payload.interfaces) {
-        setInterfaces(payload.interfaces);
-        const totalRx = payload.interfaces.reduce((acc, i) => acc + (i.rxMbps || 0), 0);
-        setGlobalRxHist(prev => [...prev.slice(1), totalRx]);
+        receiveInterfaces(payload.interfaces);
       }
       if (payload.netMerge) {
+        ++statusRequest.current;
         setNetMergeStatus(payload.netMerge);
+        setStatusError('');
       }
     });
   }, []);
@@ -116,6 +152,24 @@ export const App: React.FC = () => {
     setCurrentTab(tab);
     setVisitedTabs(prev => ({ ...prev, [tab]: true }));
   };
+
+  const changeView = (next: ViewMode) => {
+    if (next === 'advanced') setAdvancedMounted(true);
+    setView(next);
+    try { localStorage.setItem(viewPreference, next); } catch { /* storage may be disabled */ }
+  };
+
+  const openAdvanced = (tab: MainTab) => {
+    switchTab(tab);
+    changeView('advanced');
+  };
+
+  const viewSwitch = (
+    <div className="view-switch" role="group" aria-label="Workspace view">
+      <button type="button" aria-pressed={view === 'simple'} onClick={() => changeView('simple')}>Simple</button>
+      <button type="button" aria-pressed={view === 'advanced'} onClick={() => changeView('advanced')}>Advanced</button>
+    </div>
+  );
 
   const totalRx = interfaces.reduce((acc, i) => acc + (i.rxMbps || 0), 0);
   const totalTx = interfaces.reduce((acc, i) => acc + (i.txMbps || 0), 0);
@@ -138,20 +192,18 @@ export const App: React.FC = () => {
   ];
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100vh',
-      width: '100vw',
-      backgroundColor: '#09090b',
-      color: '#fafafa',
-      overflow: 'hidden',
-    }}>
+    <div className="app-shell">
       <NotificationBanner />
-      {/* Top header */}
-      <header className="app-header" style={{
-        backgroundColor: '#0c0c0f',
-        borderBottom: '1px solid #232329',
+      {view === 'simple' && <header className="simple-header">
+        <div className="simple-header-brand">
+          <span className="simple-brand-mark" aria-hidden="true"><GitMerge size={20} /></span>
+          <span>{branding?.name || 'NetPilot'}</span>
+        </div>
+        {viewSwitch}
+      </header>}
+      {view === 'advanced' && <header className="app-header" style={{
+        backgroundColor: 'var(--bg-header)',
+        borderBottom: '1px solid var(--border-color)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -163,19 +215,19 @@ export const App: React.FC = () => {
             width: '30px',
             height: '30px',
             borderRadius: '7px',
-            backgroundColor: isMergeRunning ? 'rgba(16, 185, 129, 0.14)' : '#18181b',
-            border: `1px solid ${isMergeRunning ? 'rgba(16, 185, 129, 0.4)' : '#27272a'}`,
+            backgroundColor: isMergeRunning ? 'rgba(16, 185, 129, 0.14)' : 'var(--bg-tertiary)',
+            border: `1px solid ${isMergeRunning ? 'rgba(16, 185, 129, 0.4)' : 'var(--border-control)'}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
           }}>
-            <GitMerge size={16} color={isMergeRunning ? '#10b981' : '#a1a1aa'} />
+            <GitMerge size={16} color={isMergeRunning ? 'var(--accent-primary)' : 'var(--text-secondary)'} />
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div>
               <div className="app-brand-status" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '14.5px', fontWeight: 700, color: '#fafafa', letterSpacing: '-0.02em' }}>
+                <span style={{ fontSize: '14.5px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
                   {branding?.name || 'NetPilot'}
                 </span>
 
@@ -189,8 +241,8 @@ export const App: React.FC = () => {
                   padding: '2px 8px',
                   borderRadius: '999px',
                   backgroundColor: isMergeRunning ? 'rgba(16, 185, 129, 0.12)' : 'rgba(113, 113, 122, 0.14)',
-                  color: isMergeRunning ? '#34d399' : '#a1a1aa',
-                  border: `1px solid ${isMergeRunning ? 'rgba(16, 185, 129, 0.3)' : '#27272a'}`,
+                  color: isMergeRunning ? 'var(--text-success)' : 'var(--text-secondary)',
+                  border: `1px solid ${isMergeRunning ? 'rgba(16, 185, 129, 0.3)' : 'var(--border-control)'}`,
                 }}>
                   <span className={`beszel-dot ${isMergeRunning ? 'online' : 'standby'}`} style={{ width: '6px', height: '6px' }} />
                   <span>{isMergeRunning ? `Adapter: ${defaultAdapter}` : 'Standby · System Default'}</span>
@@ -207,7 +259,7 @@ export const App: React.FC = () => {
                     padding: '2px 7px',
                     borderRadius: '999px',
                     backgroundColor: routingMode === 'backup' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(56, 189, 248, 0.12)',
-                    color: routingMode === 'backup' ? '#fbbf24' : '#38bdf8',
+                    color: routingMode === 'backup' ? 'var(--text-warning)' : 'var(--text-info)',
                     border: `1px solid ${routingMode === 'backup' ? 'rgba(245, 158, 11, 0.28)' : 'rgba(56, 189, 248, 0.28)'}`,
                   }}>
                     {routingMode === 'backup' ? <ShieldAlert size={10} /> : <Zap size={10} />}
@@ -226,22 +278,22 @@ export const App: React.FC = () => {
             display: 'flex',
             alignItems: 'center',
             gap: '14px',
-            backgroundColor: '#121215',
-            border: '1px solid #232329',
+            backgroundColor: 'var(--bg-card)',
+            border: '1px solid var(--border-color)',
             borderRadius: '7px',
             padding: '4px 12px',
           }}>
             <div style={{ width: '88px', height: '20px' }}>
-              <Sparkline data={globalRxHist} color={isMergeRunning ? '#10b981' : '#38bdf8'} width={88} height={20} />
+              <Sparkline data={globalRxHist} color={isMergeRunning ? 'var(--accent-primary)' : 'var(--text-info)'} width={88} height={20} />
             </div>
 
             <div className="font-mono" style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '11.5px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#38bdf8', fontWeight: 600 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-info)', fontWeight: 600 }}>
                 <ArrowDown size={12} />
                 <span className="app-bandwidth-rate">{activeRxStr}</span>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#f59e0b', fontWeight: 600 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--accent-warning)', fontWeight: 600 }}>
                 <ArrowUp size={12} />
                 <span className="app-bandwidth-rate">{activeTxStr}</span>
               </div>
@@ -267,20 +319,29 @@ export const App: React.FC = () => {
             );
           })}
         </nav>
-      </header>
+        {viewSwitch}
+      </header>}
 
-      {/* Main Content Area */}
-      <main className="app-content" style={{
+      {view === 'simple' && <SimpleView
+        interfaces={interfaces}
+        interfacesLoaded={interfacesLoaded}
+        interfacesError={interfacesError}
+        status={netMergeStatus}
+        statusError={statusError}
+        refreshStatus={refreshStatus}
+        openAdvanced={openAdvanced}
+      />}
+      {advancedMounted && <main className="app-content" hidden={view !== 'advanced'} style={{
         flex: 1,
         overflowY: 'auto',
-        backgroundColor: '#09090b',
+        backgroundColor: 'var(--bg-primary)',
       }}>
         <div style={{ display: currentTab === 'dashboard' ? 'block' : 'none' }}>
-          <DashboardView />
+          <DashboardView active={view === 'advanced' && currentTab === 'dashboard'} />
         </div>
         {visitedTabs.netmerge && (
           <div style={{ display: currentTab === 'netmerge' ? 'block' : 'none' }}>
-            <NetMergeView />
+            <NetMergeView active={view === 'advanced' && currentTab === 'netmerge'} />
           </div>
         )}
         {visitedTabs.connectivity && (
@@ -313,7 +374,7 @@ export const App: React.FC = () => {
             <Settings />
           </div>
         )}
-      </main>
+      </main>}
     </div>
   );
 };

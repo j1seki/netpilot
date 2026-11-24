@@ -7,7 +7,7 @@ import { TTLView } from './TTLView';
 import { RefreshCw, RotateCcw, Save, Smartphone, Trash2, Zap } from 'lucide-react';
 
 const gradeColors: Record<string, string> = {
-  A: '#10b981', B: '#38bdf8', C: '#facc15', D: '#fb923c', F: '#fb7185',
+  A: 'var(--accent-primary)', B: 'var(--text-info)', C: 'var(--text-warning)', D: 'var(--text-warning)', F: 'var(--text-danger)',
 };
 const fmtMbps = (value: number) => value >= 1 ? `${value.toFixed(1)} Mbps` : `${Math.round(value * 1000)} Kbps`;
 const ipv6Label = (value: string) => value === 'off' ? 'IPv4 only' : value === 'on' ? 'IPv6 enabled' : 'Automatic';
@@ -136,7 +136,7 @@ export function ConnectivityView({ initialTTL = false }: { initialTTL?: boolean 
   return <div className="mobile-page">
     <header className="mobile-page-header">
       <div>
-        <h1><Smartphone size={16} color="#10b981" /> Mobile &amp; Connectivity</h1>
+        <h1><Smartphone size={16} color="var(--accent-primary)" /> Mobile &amp; Connectivity</h1>
         <p>Identify the PC link connected to your phone and tune how the NetPilot tunnel handles that connection.</p>
       </div>
       <button className="btn btn-secondary btn-sm" type="button" disabled={busy} onClick={() => { setError(''); void load(); }}>
@@ -300,7 +300,7 @@ export function ConnectivityView({ initialTTL = false }: { initialTTL?: boolean 
               <option value={5}>5 s</option>
               <option value={10}>10 s</option>
             </select>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#a1a1aa' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={includeMerged} onChange={e => setIncludeMerged(e.target.checked)} />
               Merged pool
             </label>
@@ -312,7 +312,7 @@ export function ConnectivityView({ initialTTL = false }: { initialTTL?: boolean 
         </div>
 
         {speedResults.length === 0 ? (
-          <div style={{ fontSize: '11.5px', color: '#a1a1aa' }}>
+          <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
             Each adapter is measured through its own interface, so the numbers reflect that link
             rather than whichever route the OS would pick. The merged run goes through the local
             SOCKS5 front-end.
@@ -339,9 +339,9 @@ export function ConnectivityView({ initialTTL = false }: { initialTTL?: boolean 
                   <td className="font-mono">{r.loadedMs > 0 ? `${r.loadedMs.toFixed(0)} ms` : '—'}</td>
                   <td>
                     {r.error ? (
-                      <span style={{ color: '#fb7185', fontSize: '10.5px' }}>{r.error}</span>
+                      <span style={{ color: 'var(--text-danger)', fontSize: '10.5px' }}>{r.error}</span>
                     ) : (
-                      <span className="status-pill" style={{ color: (gradeColors[r.grade] || '#a1a1aa'), borderColor: (gradeColors[r.grade] || '#a1a1aa') }}>
+                      <span className="status-pill" style={{ color: (gradeColors[r.grade] || 'var(--text-secondary)'), borderColor: (gradeColors[r.grade] || 'var(--text-secondary)') }}>
                         {r.grade} · +{Math.round(r.bufferbloatMs)} ms
                       </span>
                     )}
@@ -351,7 +351,7 @@ export function ConnectivityView({ initialTTL = false }: { initialTTL?: boolean 
             </tbody>
           </table>
         )}
-        <p style={{ margin: '8px 0 0', color: '#a1a1aa', fontSize: '11px' }}>
+        <p style={{ margin: '8px 0 0', color: 'var(--text-secondary)', fontSize: '11px' }}>
           Benchmarks measure link performance and may use mobile data.
         </p>
       </details>

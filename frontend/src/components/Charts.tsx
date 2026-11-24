@@ -14,12 +14,13 @@ interface SparklineProps {
 
 export const Sparkline: React.FC<SparklineProps> = ({
   data,
-  color = '#38bdf8',
+  color = 'var(--text-info)',
   width = 100,
   height = 24,
   strokeWidth = 1.5,
   fill = true,
 }) => {
+  const gradId = `spark-grad-${React.useId()}`;
   if (!data || data.length < 2) {
     return (
       <svg width={width} height={height} style={{ overflow: 'visible' }}>
@@ -41,8 +42,6 @@ export const Sparkline: React.FC<SparklineProps> = ({
 
   const pathD = `M ${points.join(' L ')}`;
   const areaD = `${pathD} L ${width},${height} L 0,${height} Z`;
-  const gradId = `spark-grad-${color.replace('#', '')}-${Math.floor(Math.random() * 10000)}`;
-
   return (
     <svg width={width} height={height} style={{ overflow: 'visible', display: 'block' }}>
       <defs>
@@ -101,20 +100,20 @@ export const ThroughputGraph: React.FC<ThroughputGraphProps> = ({
   const rxArea = rxPath ? `${rxPath} L 1000,${height} L 0,${height} Z` : '';
 
   return (
-    <div style={{ position: 'relative', width: '100%', backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: '6px', border: '1px solid var(--border)', padding: '10px 12px 6px 12px' }}>
+    <div style={{ position: 'relative', width: '100%', backgroundColor: 'var(--bg-inset)', borderRadius: '6px', border: '1px solid var(--border)', padding: '10px 12px 6px 12px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '11px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#38bdf8' }} />
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--text-info)' }} />
             <span style={{ color: 'var(--text-secondary)' }}>{rxLabel}:</span>
-            <span className="font-mono" style={{ color: '#38bdf8', fontWeight: 700 }}>
+            <span className="font-mono" style={{ color: 'var(--text-info)', fontWeight: 700 }}>
               {currentRx >= 1 ? currentRx.toFixed(2) : currentRx.toFixed(3)} Mbps
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#4ade80' }} />
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--text-success)' }} />
             <span style={{ color: 'var(--text-secondary)' }}>{txLabel}:</span>
-            <span className="font-mono" style={{ color: '#4ade80', fontWeight: 700 }}>
+            <span className="font-mono" style={{ color: 'var(--text-success)', fontWeight: 700 }}>
               {currentTx >= 1 ? currentTx.toFixed(2) : currentTx.toFixed(3)} Mbps
             </span>
           </div>
@@ -127,22 +126,22 @@ export const ThroughputGraph: React.FC<ThroughputGraphProps> = ({
       <svg viewBox={`0 0 1000 ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: `${height}px`, display: 'block' }}>
         <defs>
           <linearGradient id="live-rx-grad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.3} />
-            <stop offset="100%" stopColor="#38bdf8" stopOpacity={0.02} />
+            <stop offset="0%" stopColor="var(--text-info)" stopOpacity={0.3} />
+            <stop offset="100%" stopColor="var(--text-info)" stopOpacity={0.02} />
           </linearGradient>
         </defs>
 
         {/* Grid lines */}
-        <line x1="0" y1={height * 0.25} x2="1000" y2={height * 0.25} stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
-        <line x1="0" y1={height * 0.50} x2="1000" y2={height * 0.50} stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
-        <line x1="0" y1={height * 0.75} x2="1000" y2={height * 0.75} stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
+        <line x1="0" y1={height * 0.25} x2="1000" y2={height * 0.25} stroke="var(--chart-grid)" strokeDasharray="4 4" />
+        <line x1="0" y1={height * 0.50} x2="1000" y2={height * 0.50} stroke="var(--chart-grid)" strokeDasharray="4 4" />
+        <line x1="0" y1={height * 0.75} x2="1000" y2={height * 0.75} stroke="var(--chart-grid)" strokeDasharray="4 4" />
 
         {/* Rx Area & Line */}
         {rxArea && <path d={rxArea} fill="url(#live-rx-grad)" />}
-        {rxPath && <path d={rxPath} fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" />}
+        {rxPath && <path d={rxPath} fill="none" stroke="var(--text-info)" strokeWidth="2" strokeLinecap="round" />}
 
         {/* Tx Line */}
-        {txPath && <path d={txPath} fill="none" stroke="#4ade80" strokeWidth="2" strokeLinecap="round" strokeDasharray="6 3" />}
+        {txPath && <path d={txPath} fill="none" stroke="var(--text-success)" strokeWidth="2" strokeLinecap="round" strokeDasharray="6 3" />}
       </svg>
     </div>
   );
@@ -188,7 +187,7 @@ export const DonutChart: React.FC<DonutChartProps> = ({
             cy={size / 2}
             r={radius}
             fill="none"
-            stroke="rgba(255,255,255,0.06)"
+            stroke="var(--chart-grid)"
             strokeWidth={thickness}
           />
           {segments.map((seg, idx) => {
@@ -230,7 +229,7 @@ export const DonutChart: React.FC<DonutChartProps> = ({
             justifyContent: 'center',
             pointerEvents: 'none',
           }}>
-            {centerTitle && <span className="font-mono" style={{ fontSize: '13px', fontWeight: 700, color: 'white' }}>{centerTitle}</span>}
+            {centerTitle && <span className="font-mono" style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{centerTitle}</span>}
             {centerSub && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{centerSub}</span>}
           </div>
         )}
@@ -248,7 +247,7 @@ export const DonutChart: React.FC<DonutChartProps> = ({
                   {seg.label}
                 </span>
               </div>
-              <span className="font-mono" style={{ fontWeight: 600, color: 'white', marginLeft: '6px' }}>
+              <span className="font-mono" style={{ fontWeight: 600, color: 'var(--text-primary)', marginLeft: '6px' }}>
                 {pct}%
               </span>
             </div>
@@ -280,7 +279,7 @@ export const BarGauge: React.FC<BarGaugeProps> = ({
   color,
 }) => {
   const percent = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
-  const barColor = color || (percent > 90 ? '#ef4444' : percent > 70 ? '#f59e0b' : '#38bdf8');
+  const barColor = color || (percent > 90 ? 'var(--accent-danger)' : percent > 70 ? 'var(--accent-warning)' : 'var(--text-info)');
 
   return (
     <div style={{ width: '100%' }}>
@@ -292,7 +291,7 @@ export const BarGauge: React.FC<BarGaugeProps> = ({
           </span>
         </div>
       )}
-      <div style={{ width: '100%', height: `${height}px`, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: `${height}px`, overflow: 'hidden' }}>
+      <div style={{ width: '100%', height: `${height}px`, backgroundColor: 'var(--chart-grid)', borderRadius: `${height}px`, overflow: 'hidden' }}>
         <div style={{ width: `${percent}%`, height: '100%', backgroundColor: barColor, borderRadius: `${height}px`, transition: 'width 0.3s ease' }} />
       </div>
     </div>
@@ -319,20 +318,20 @@ export const MonthlyBarChart: React.FC<MonthlyBarChartProps> = ({ data, height =
   const maxMb = Math.max(...data.map(d => Math.max(d.rxMb, d.txMb)), 50);
 
   return (
-    <div style={{ width: '100%', backgroundColor: 'rgba(0,0,0,0.2)', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border)' }}>
+    <div style={{ width: '100%', backgroundColor: 'var(--bg-inset)', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
         <span style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)' }}>Monthly traffic volume</span>
         <div style={{ display: 'flex', gap: '12px', fontSize: '10.5px' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#38bdf8' }}>
-            <span style={{ width: '7px', height: '7px', backgroundColor: '#38bdf8', borderRadius: '1px' }} /> Download (Rx)
+          <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-info)' }}>
+            <span style={{ width: '7px', height: '7px', backgroundColor: 'var(--text-info)', borderRadius: '1px' }} /> Download (Rx)
           </span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#4ade80' }}>
-            <span style={{ width: '7px', height: '7px', backgroundColor: '#4ade80', borderRadius: '1px' }} /> Upload (Tx)
+          <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-success)' }}>
+            <span style={{ width: '7px', height: '7px', backgroundColor: 'var(--text-success)', borderRadius: '1px' }} /> Upload (Tx)
           </span>
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '20px', height: `${height}px`, borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '4px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '20px', height: `${height}px`, borderBottom: '1px solid var(--chart-grid)', paddingBottom: '4px' }}>
         {data.map((item, idx) => {
           const rxH = Math.max(3, (item.rxMb / maxMb) * (height - 18));
           const txH = Math.max(3, (item.txMb / maxMb) * (height - 18));
@@ -344,7 +343,7 @@ export const MonthlyBarChart: React.FC<MonthlyBarChartProps> = ({ data, height =
                   style={{
                     width: '18px',
                     height: `${rxH}px`,
-                    backgroundColor: '#38bdf8',
+                    backgroundColor: 'var(--text-info)',
                     borderRadius: '2px 2px 0 0',
                     transition: 'height 0.4s ease',
                   }}
@@ -354,7 +353,7 @@ export const MonthlyBarChart: React.FC<MonthlyBarChartProps> = ({ data, height =
                   style={{
                     width: '18px',
                     height: `${txH}px`,
-                    backgroundColor: '#4ade80',
+                    backgroundColor: 'var(--text-success)',
                     borderRadius: '2px 2px 0 0',
                     transition: 'height 0.4s ease',
                   }}

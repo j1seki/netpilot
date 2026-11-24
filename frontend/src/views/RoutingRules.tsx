@@ -119,7 +119,7 @@ export const RoutingRules: React.FC<{ active: boolean; goToProcesses: () => void
           borderRadius: '7px',
           background: 'rgba(56, 189, 248, 0.12)',
           border: '1px solid rgba(56, 189, 248, 0.3)',
-          color: '#7dd3fc',
+          color: 'var(--text-info-soft)',
           fontSize: '11.5px',
           display: 'flex',
           alignItems: 'center',
@@ -191,7 +191,7 @@ export const RoutingRules: React.FC<{ active: boolean; goToProcesses: () => void
             ) : (
               rules.map(r => (
                 <tr key={r.id} style={{ opacity: r.enabled ? 1 : 0.62 }}>
-                  <td className="font-mono" style={{ fontWeight: 700, color: '#60a5fa' }}>
+                  <td className="font-mono" style={{ fontWeight: 700, color: 'var(--text-info-soft)' }}>
                     {r.priority}
                   </td>
                   <td>
@@ -205,11 +205,11 @@ export const RoutingRules: React.FC<{ active: boolean; goToProcesses: () => void
                   </td>
                   <td>
                     {r.preferredInterface === 'FASTEST' ? (
-                      <span style={{ background: 'rgba(234, 179, 8, 0.2)', color: '#facc15', padding: '3px 8px', borderRadius: '4px', fontSize: '11.5px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ background: 'rgba(234, 179, 8, 0.2)', color: 'var(--text-warning)', padding: '3px 8px', borderRadius: '4px', fontSize: '11.5px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                         <Zap size={12} /> FASTEST (Lowest RTT)
                       </span>
                     ) : (
-                      <span style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', padding: '3px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 600 }}>
+                      <span style={{ background: 'rgba(59, 130, 246, 0.15)', color: 'var(--text-info-soft)', padding: '3px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 600 }}>
                         {r.preferredInterface}
                       </span>
                     )}
@@ -226,11 +226,11 @@ export const RoutingRules: React.FC<{ active: boolean; goToProcesses: () => void
                   <td>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                       <span className="font-mono" style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Gauge size={12} color="#94a3b8" />
+                        <Gauge size={12} color="var(--text-secondary)" />
                         {r.bandwidthLimitMbps > 0 ? `${r.bandwidthLimitMbps} Mbps` : 'Unlimited speed'}
                       </span>
                       {r.dataQuotaMb > 0 ? (
-                        <span className="font-mono" style={{ fontSize: '11px', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span className="font-mono" style={{ fontSize: '11px', color: 'var(--accent-warning)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <ShieldAlert size={11} />
                           Quota: {r.dataQuotaMb >= 1024 ? `${(r.dataQuotaMb / 1024).toFixed(1)} GB` : `${r.dataQuotaMb} MB`}
                         </span>
@@ -241,7 +241,7 @@ export const RoutingRules: React.FC<{ active: boolean; goToProcesses: () => void
                   </td>
                   <td>
                     {r.customDns ? (
-                      <span className="font-mono" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#6ee7b7', padding: '3px 7px', borderRadius: '4px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                      <span className="font-mono" style={{ background: 'rgba(16, 185, 129, 0.15)', color: 'var(--text-success)', padding: '3px 7px', borderRadius: '4px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                         <Globe size={11} /> {r.customDns}
                       </span>
                     ) : (
@@ -255,14 +255,14 @@ export const RoutingRules: React.FC<{ active: boolean; goToProcesses: () => void
                       title={r.enabled ? 'Disable this policy' : 'Enable this policy'}
                       aria-label={r.enabled ? 'Disable policy' : 'Enable policy'}
                     >
-                      {r.enabled ? <ToggleRight size={22} color="#10b981" /> : <ToggleLeft size={22} color="#64748b" />}
+                      {r.enabled ? <ToggleRight size={22} color="var(--accent-primary)" /> : <ToggleLeft size={22} color="var(--text-muted)" />}
                     </button>
                   </td>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <button
                         onClick={() => setDraft({ rule: r })}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#93c5fd', padding: '3px' }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-info-soft)', padding: '3px' }}
                         title="Edit policy"
                         aria-label="Edit policy"
                       >
@@ -270,7 +270,7 @@ export const RoutingRules: React.FC<{ active: boolean; goToProcesses: () => void
                       </button>
                       <button
                         onClick={() => handleDelete(r.id)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', padding: '3px' }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-danger)', padding: '3px' }}
                         title="Delete policy"
                         aria-label="Delete policy"
                       >
@@ -289,7 +289,7 @@ export const RoutingRules: React.FC<{ active: boolean; goToProcesses: () => void
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-title">
           <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Copy size={14} color="#38bdf8" /> Example Policies (disabled by default)
+            <Copy size={14} color="var(--text-info)" /> Example Policies (disabled by default)
           </span>
 
         </div>
@@ -306,22 +306,22 @@ export const RoutingRules: React.FC<{ active: boolean; goToProcesses: () => void
                 alignItems: 'center',
                 gap: '12px',
                 padding: '9px 11px',
-                background: '#09090b',
-                border: '1px dashed #27272a',
+                background: 'var(--bg-primary)',
+                border: '1px dashed var(--border-control)',
                 borderRadius: '6px',
               }}
             >
               <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
-                  <span style={{ fontWeight: 700, fontSize: '12px', color: '#fafafa' }}>{ex.appName}</span>
+                  <span style={{ fontWeight: 700, fontSize: '12px', color: 'var(--text-primary)' }}>{ex.appName}</span>
 
                   {ex.bandwidthLimitMbps > 0 && (
-                    <span style={{ fontSize: '10.5px', color: '#f59e0b' }}>{ex.bandwidthLimitMbps} Mbps cap</span>
+                    <span style={{ fontSize: '10.5px', color: 'var(--accent-warning)' }}>{ex.bandwidthLimitMbps} Mbps cap</span>
                   )}
                 </div>
-                <div style={{ fontSize: '10.5px', color: '#a1a1aa' }}>{ex.description}</div>
+                <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>{ex.description}</div>
                 {ex.domainPattern && (
-                  <div className="font-mono" style={{ fontSize: '10px', color: '#71717a' }}>{ex.domainPattern}</div>
+                  <div className="font-mono" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{ex.domainPattern}</div>
                 )}
               </div>
               <button

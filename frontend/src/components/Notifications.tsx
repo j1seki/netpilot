@@ -37,7 +37,7 @@ export function Notifications() {
   };
 
   return <section className="card" style={{ marginBottom: 0 }} aria-labelledby="notifications-heading">
-    <div className="card-title"><Bell size={14} color="#fb923c" /><span id="notifications-heading">Notifications</span></div>
+    <div className="card-title"><Bell size={14} color="var(--text-warning)" /><span id="notifications-heading">Notifications</span></div>
     <p className="rule-editor-note">Enabled events appear in NetPilot. Desktop banners also depend on system permissions and Do Not Disturb.</p>
     <div className="notification-options">
       {topics.map(([key, label]) => <label key={key}>
@@ -64,7 +64,7 @@ export function Notifications() {
         <ExternalLink size={12} /> System notification settings
       </button>
     </div>
-    {message && <p role={failed ? 'alert' : 'status'} className="rule-editor-note" style={{ color: failed ? '#fb7185' : '#6ee7b7', marginTop: 8 }}>{message}</p>}
+    {message && <p role={failed ? 'alert' : 'status'} className="rule-editor-note" style={{ color: failed ? 'var(--text-danger)' : 'var(--text-success)', marginTop: 8 }}>{message}</p>}
   </section>;
 }
 

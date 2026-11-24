@@ -199,7 +199,7 @@ export const Settings: React.FC = () => {
             borderRadius: '8px',
             background: 'rgba(244, 63, 94, 0.14)',
             border: '1px solid rgba(244, 63, 94, 0.35)',
-            color: '#fb7185',
+            color: 'var(--text-danger)',
             fontSize: '12px',
             display: 'flex',
             alignItems: 'center',
@@ -218,7 +218,7 @@ export const Settings: React.FC = () => {
             borderRadius: '8px',
             background: 'rgba(16, 185, 129, 0.14)',
             border: '1px solid rgba(16, 185, 129, 0.35)',
-            color: '#34d399',
+            color: 'var(--text-success)',
             fontSize: '12px',
             display: 'flex',
             alignItems: 'center',
@@ -238,7 +238,7 @@ export const Settings: React.FC = () => {
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-title">
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Minimize2 size={15} color="#10b981" />
+            <Minimize2 size={15} color="var(--accent-primary)" />
             <span>Window & System Tray Behavior</span>
           </div>
           <span className="status-pill pass">
@@ -246,7 +246,7 @@ export const Settings: React.FC = () => {
           </span>
         </div>
 
-        <p style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '12px' }}>
+        <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
           Choose what happens when you click the window close (X) button. By default, NetPilot minimizes to the system tray so you can reopen NetPilot from the tray at any time.
         </p>
 
@@ -257,23 +257,23 @@ export const Settings: React.FC = () => {
               padding: '14px 16px',
               borderRadius: '8px',
               cursor: 'pointer',
-              background: closeAction === 'minimize' ? 'rgba(16, 185, 129, 0.08)' : '#09090b',
-              border: `1px solid ${closeAction === 'minimize' ? '#10b981' : '#27272a'}`,
+              background: closeAction === 'minimize' ? 'rgba(16, 185, 129, 0.08)' : 'var(--bg-primary)',
+              border: `1px solid ${closeAction === 'minimize' ? 'var(--accent-primary)' : 'var(--border-control)'}`,
               display: 'flex',
               flexDirection: 'column',
               gap: '6px',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '13px', color: '#fafafa' }}>
-                <Minimize2 size={14} color="#10b981" />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '13px', color: 'var(--text-primary)' }}>
+                <Minimize2 size={14} color="var(--accent-primary)" />
                 <span>Minimize to System Tray (Default)</span>
               </div>
               {closeAction === 'minimize' && (
                 <span className="status-pill pass">ACTIVE</span>
               )}
             </div>
-            <div style={{ fontSize: '11.5px', color: '#a1a1aa' }}>
+            <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
               Clicking the close button hides the window to the system tray. Click the NetPilot tray icon or choose "Open NetPilot" from the tray menu to restore.
             </div>
           </div>
@@ -284,23 +284,23 @@ export const Settings: React.FC = () => {
               padding: '14px 16px',
               borderRadius: '8px',
               cursor: 'pointer',
-              background: closeAction === 'close' ? 'rgba(244, 63, 94, 0.08)' : '#09090b',
-              border: `1px solid ${closeAction === 'close' ? '#f43f5e' : '#27272a'}`,
+              background: closeAction === 'close' ? 'rgba(244, 63, 94, 0.08)' : 'var(--bg-primary)',
+              border: `1px solid ${closeAction === 'close' ? 'var(--accent-danger)' : 'var(--border-control)'}`,
               display: 'flex',
               flexDirection: 'column',
               gap: '6px',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '13px', color: '#fafafa' }}>
-                <PowerOff size={14} color="#f43f5e" />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '13px', color: 'var(--text-primary)' }}>
+                <PowerOff size={14} color="var(--accent-danger)" />
                 <span>Quit / Close Application</span>
               </div>
               {closeAction === 'close' && (
                 <span className="status-pill fail">ACTIVE</span>
               )}
             </div>
-            <div style={{ fontSize: '11.5px', color: '#a1a1aa' }}>
+            <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
               Clicking the close button exits NetPilot completely instead of keeping it running in the system tray.
             </div>
           </div>
@@ -311,7 +311,7 @@ export const Settings: React.FC = () => {
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-title">
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Box size={15} color="#38bdf8" />
+            <Box size={15} color="var(--text-info)" />
             <span>Net-Merge Engine</span>
           </div>
           {binInfo && (
@@ -325,7 +325,7 @@ export const Settings: React.FC = () => {
           )}
         </div>
 
-        <p style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '12px' }}>
+        <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
           Upgrade or downgrade by selecting an official release. Stop net-merge and its SOCKS proxy before switching. The NetPilot engine is always available for Backup Failover and the in-app SOCKS proxy; official releases use Speed mode.
         </p>
 
@@ -358,13 +358,13 @@ export const Settings: React.FC = () => {
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-title">
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <HardDrive size={15} color="#c084fc" />
+            <HardDrive size={15} color="var(--text-purple)" />
             <span>Configuration Backup & Restore</span>
           </div>
           <span className="status-pill pass">PORTABLE JSON</span>
         </div>
 
-        <p style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '12px' }}>
+        <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
           Export routing rules, adapter speed caps, friendly adapter names and net-merge settings as a single JSON file.
           Import it on another machine or after a reinstall to restore your setup.
         </p>
@@ -405,13 +405,13 @@ export const Settings: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Terminal size={15} color="#f59e0b" />
+              <Terminal size={15} color="var(--accent-warning)" />
               <span>Console & Silent Subprocess Control</span>
             </div>
             <span className="status-pill pass">CREATE_NO_WINDOW ACTIVE</span>
           </div>
 
-          <p style={{ fontSize: '11.5px', color: '#a1a1aa', marginBottom: '12px' }}>
+          <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
             All background probes, PowerShell/netsh commands, and <code>net-merge</code> child processes run silently with <code>CREATE_NO_WINDOW</code> so CMD windows never pop up on Windows.
           </p>
 
@@ -423,7 +423,7 @@ export const Settings: React.FC = () => {
               fontSize: '12px',
               cursor: 'pointer',
               fontWeight: 500,
-              color: '#fafafa',
+              color: 'var(--text-primary)',
             }}
           >
             <input
@@ -438,12 +438,12 @@ export const Settings: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Shield size={15} color="#10b981" />
+              <Shield size={15} color="var(--accent-primary)" />
               <span>Execution Mode: {modeState?.currentMode}</span>
             </div>
           </div>
 
-          <p style={{ fontSize: '11.5px', color: '#a1a1aa', marginBottom: '12px' }}>
+          <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
             {modeState?.description}
           </p>
 
@@ -465,22 +465,22 @@ export const Settings: React.FC = () => {
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-title">
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Cpu size={15} color="#38bdf8" />
+            <Cpu size={15} color="var(--text-info)" />
             <span>Runtime Environment & Branding</span>
           </div>
         </div>
 
-        <div className="grid-2" style={{ fontSize: '12px', color: '#a1a1aa' }}>
+        <div className="grid-2" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div><strong style={{ color: '#fafafa' }}>Application:</strong> {branding?.name} v{branding?.version}</div>
-            <div><strong style={{ color: '#fafafa' }}>Bundle ID:</strong> <span className="font-mono">{branding?.id}</span></div>
-            <div><strong style={{ color: '#fafafa' }}>Embedded Engine:</strong> <span className="font-mono">net-merge + net-merge-tray</span></div>
+            <div><strong style={{ color: 'var(--text-primary)' }}>Application:</strong> {branding?.name} v{branding?.version}</div>
+            <div><strong style={{ color: 'var(--text-primary)' }}>Bundle ID:</strong> <span className="font-mono">{branding?.id}</span></div>
+            <div><strong style={{ color: 'var(--text-primary)' }}>Embedded Engine:</strong> <span className="font-mono">net-merge + net-merge-tray</span></div>
           </div>
           {capReport && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <div><strong style={{ color: '#fafafa' }}>OS / Arch:</strong> {capReport.environment.runtimeOs}/{capReport.environment.runtimeArch}</div>
-              <div><strong style={{ color: '#fafafa' }}>Kernel:</strong> <span className="font-mono">{capReport.environment.kernelRelease}</span></div>
-              <div><strong style={{ color: '#fafafa' }}>Privileges:</strong> {capReport.environment.isElevated ? 'Elevated (Admin/Root)' : 'Standard User'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>OS / Arch:</strong> {capReport.environment.runtimeOs}/{capReport.environment.runtimeArch}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Kernel:</strong> <span className="font-mono">{capReport.environment.kernelRelease}</span></div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Privileges:</strong> {capReport.environment.isElevated ? 'Elevated (Admin/Root)' : 'Standard User'}</div>
             </div>
           )}
         </div>

@@ -167,7 +167,7 @@ export const Tools: React.FC = () => {
   };
 
   const latencyColor = (ms: number) =>
-    ms <= 0 ? '#71717a' : ms < 50 ? '#34d399' : ms < 150 ? '#fbbf24' : '#fb7185';
+    ms <= 0 ? 'var(--text-muted)' : ms < 50 ? 'var(--text-success)' : ms < 150 ? 'var(--text-warning)' : 'var(--text-danger)';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -177,7 +177,7 @@ export const Tools: React.FC = () => {
           borderRadius: '7px',
           background: 'rgba(244, 63, 94, 0.12)',
           border: '1px solid rgba(244, 63, 94, 0.3)',
-          color: '#fb7185',
+          color: 'var(--text-danger)',
           fontSize: '11.5px',
           display: 'flex',
           alignItems: 'center',
@@ -194,7 +194,7 @@ export const Tools: React.FC = () => {
           borderRadius: '7px',
           background: 'rgba(16, 185, 129, 0.12)',
           border: '1px solid rgba(16, 185, 129, 0.3)',
-          color: '#34d399',
+          color: 'var(--text-success)',
           fontSize: '11.5px',
           display: 'flex',
           alignItems: 'center',
@@ -210,7 +210,7 @@ export const Tools: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-              <Radio size={14} color="#10b981" />
+              <Radio size={14} color="var(--accent-primary)" />
               <span>Ping (ICMP Echo)</span>
             </div>
             {pingResult && (
@@ -246,16 +246,16 @@ export const Tools: React.FC = () => {
           {pingResult && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {pingResult.error && (
-                <div style={{ color: '#fb7185', fontSize: '11.5px' }}>{pingResult.error}</div>
+                <div style={{ color: 'var(--text-danger)', fontSize: '11.5px' }}>{pingResult.error}</div>
               )}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
                 {[
-                  { label: 'Loss', value: `${pingResult.packetLoss.toFixed(0)}%`, color: pingResult.packetLoss > 0 ? '#fb7185' : '#34d399' },
+                  { label: 'Loss', value: `${pingResult.packetLoss.toFixed(0)}%`, color: pingResult.packetLoss > 0 ? 'var(--text-danger)' : 'var(--text-success)' },
                   { label: 'Min', value: `${pingResult.minMs.toFixed(1)} ms`, color: latencyColor(pingResult.minMs) },
                   { label: 'Avg', value: `${pingResult.avgMs.toFixed(1)} ms`, color: latencyColor(pingResult.avgMs) },
                   { label: 'Max', value: `${pingResult.maxMs.toFixed(1)} ms`, color: latencyColor(pingResult.maxMs) },
                 ].map(item => (
-                  <div key={item.label} style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '6px 8px', borderRadius: '4px' }}>
+                  <div key={item.label} style={{ backgroundColor: 'var(--bg-inset)', padding: '6px 8px', borderRadius: '4px' }}>
                     <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{item.label}</div>
                     <div className="font-mono" style={{ fontSize: '13px', fontWeight: 700, color: item.color }}>{item.value}</div>
                   </div>
@@ -270,8 +270,8 @@ export const Tools: React.FC = () => {
                     overflow: 'auto',
                     fontSize: '10.5px',
                     whiteSpace: 'pre-wrap',
-                    color: '#a1a1aa',
-                    backgroundColor: '#09090b',
+                    color: 'var(--text-secondary)',
+                    backgroundColor: 'var(--bg-primary)',
                     borderRadius: '5px',
                     padding: '8px',
                   }}>{pingResult.output}</pre>
@@ -285,7 +285,7 @@ export const Tools: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-              <Globe size={14} color="#38bdf8" />
+              <Globe size={14} color="var(--text-info)" />
               <span>DNS Lookup</span>
             </div>
             {dnsResult && !dnsResult.error && (
@@ -312,16 +312,16 @@ export const Tools: React.FC = () => {
 
           {dnsResult && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {dnsResult.error && <div style={{ color: '#fb7185', fontSize: '11.5px' }}>{dnsResult.error}</div>}
+              {dnsResult.error && <div style={{ color: 'var(--text-danger)', fontSize: '11.5px' }}>{dnsResult.error}</div>}
               {dnsResult.records.length === 0 && !dnsResult.error && (
                 <div style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}>No records returned.</div>
               )}
               {dnsResult.records.map((record, idx) => (
                 <div key={`${record}-${idx}`} className="font-mono" style={{
                   fontSize: '11.5px',
-                  color: '#d4d4d8',
-                  backgroundColor: '#09090b',
-                  border: '1px solid #232329',
+                  color: 'var(--text-strong)',
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
                   borderRadius: '4px',
                   padding: '4px 8px',
                   wordBreak: 'break-all',
@@ -339,7 +339,7 @@ export const Tools: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-              <Server size={14} color="#c084fc" />
+              <Server size={14} color="var(--text-purple)" />
               <span>TCP Port Check</span>
             </div>
             {portResult && (
@@ -379,7 +379,7 @@ export const Tools: React.FC = () => {
 
           {portResult && (
             <div style={{ fontSize: '11.5px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: portResult.open ? '#34d399' : '#fb7185' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: portResult.open ? 'var(--text-success)' : 'var(--text-danger)' }}>
                 {portResult.open ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
                 <span>
                   {portHost}:{port} is {portResult.open ? 'open' : 'closed or filtered'}
@@ -395,7 +395,7 @@ export const Tools: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-              <Power size={14} color="#f59e0b" />
+              <Power size={14} color="var(--accent-warning)" />
               <span>Wake-on-LAN</span>
             </div>
             <span className="status-pill warn">MAGIC PACKET</span>
@@ -444,7 +444,7 @@ export const Tools: React.FC = () => {
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-title">
           <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-            <Wifi size={14} color="#34d399" />
+            <Wifi size={14} color="var(--text-success)" />
             <span>Adapter Friendly Names ({interfaces.length})</span>
           </div>
           <button className="btn btn-secondary btn-sm" onClick={() => load().catch(e => console.error(e))}>
@@ -481,14 +481,14 @@ export const Tools: React.FC = () => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span className={`beszel-dot ${iface.isUp ? 'online' : 'down'}`} />
                       <div>
-                        <div style={{ fontWeight: 600, color: '#fafafa' }}>{labels[iface.name] || iface.name}</div>
-                        <div style={{ fontSize: '10.5px', color: '#71717a' }}>
+                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{labels[iface.name] || iface.name}</div>
+                        <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
                           {iface.ip || 'Unassigned'}{iface.isDefault ? ' · OS default' : ''}
                         </div>
                       </div>
                     </div>
                   </td>
-                  <td className="font-mono" style={{ fontSize: '11px', color: '#a1a1aa' }}>{iface.name}</td>
+                  <td className="font-mono" style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{iface.name}</td>
                   <td>
                     <input
                       type="text"

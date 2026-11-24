@@ -129,7 +129,7 @@ export const UpdatePanel: React.FC = () => {
     <div className="card" style={{ marginBottom: 0 }}>
       <div className="card-title">
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <RefreshCw size={15} color="#38bdf8" />
+          <RefreshCw size={15} color="var(--text-info)" />
           <span>Automatic Updates</span>
         </div>
         <span className={`status-pill ${activeChannel === 'beta' ? 'warn' : 'pass'}`}>
@@ -137,7 +137,7 @@ export const UpdatePanel: React.FC = () => {
         </span>
       </div>
 
-      <p style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '12px' }}>
+      <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
         NetPilot can check GitHub for a newer build, verify its published SHA-256 checksum, then install and
         restart itself. Choose <strong>Stable</strong> for production releases or <strong>Beta</strong> to
         receive prerelease builds as soon as they are published.
@@ -150,14 +150,14 @@ export const UpdatePanel: React.FC = () => {
             padding: '13px 15px',
             borderRadius: '8px',
             cursor: busy ? 'default' : 'pointer',
-            background: activeChannel === 'stable' ? 'rgba(16, 185, 129, 0.08)' : '#09090b',
-            border: `1px solid ${activeChannel === 'stable' ? '#10b981' : '#27272a'}`,
+            background: activeChannel === 'stable' ? 'rgba(16, 185, 129, 0.08)' : 'var(--bg-primary)',
+            border: `1px solid ${activeChannel === 'stable' ? 'var(--accent-primary)' : 'var(--border-control)'}`,
             opacity: busy ? 0.7 : 1,
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '13px', color: '#fafafa' }}>
-              <ShieldCheck size={14} color="#10b981" />
+            <span style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '13px', color: 'var(--text-primary)' }}>
+              <ShieldCheck size={14} color="var(--accent-primary)" />
               Stable
             </span>
             {activeChannel === 'stable' ? (
@@ -166,7 +166,7 @@ export const UpdatePanel: React.FC = () => {
               <span className="status-pill pass" style={{ opacity: 0.65 }}>RECOMMENDED</span>
             )}
           </div>
-          <div style={{ fontSize: '11.5px', color: '#a1a1aa' }}>
+          <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
             Only production releases. New features arrive after they have been tested.
           </div>
         </div>
@@ -177,14 +177,14 @@ export const UpdatePanel: React.FC = () => {
             padding: '13px 15px',
             borderRadius: '8px',
             cursor: busy ? 'default' : 'pointer',
-            background: activeChannel === 'beta' ? 'rgba(245, 158, 11, 0.08)' : '#09090b',
-            border: `1px solid ${activeChannel === 'beta' ? '#f59e0b' : '#27272a'}`,
+            background: activeChannel === 'beta' ? 'rgba(245, 158, 11, 0.08)' : 'var(--bg-primary)',
+            border: `1px solid ${activeChannel === 'beta' ? 'var(--accent-warning)' : 'var(--border-control)'}`,
             opacity: busy ? 0.7 : 1,
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '13px', color: '#fafafa' }}>
-              <Sparkles size={14} color="#f59e0b" />
+            <span style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '13px', color: 'var(--text-primary)' }}>
+              <Sparkles size={14} color="var(--accent-warning)" />
               Beta
             </span>
             {activeChannel === 'beta' ? (
@@ -193,7 +193,7 @@ export const UpdatePanel: React.FC = () => {
               <span className="status-pill warn" style={{ opacity: 0.65 }}>PRERELEASE</span>
             )}
           </div>
-          <div style={{ fontSize: '11.5px', color: '#a1a1aa' }}>
+          <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
             Beta, release-candidate and other prerelease builds, plus every stable release.
           </div>
         </div>
@@ -207,7 +207,7 @@ export const UpdatePanel: React.FC = () => {
           fontSize: '12px',
           cursor: busy ? 'default' : 'pointer',
           fontWeight: 500,
-          color: '#fafafa',
+          color: 'var(--text-primary)',
           marginBottom: '12px',
         }}
       >
@@ -234,7 +234,7 @@ export const UpdatePanel: React.FC = () => {
         )}
 
         {status?.updateAvailable && status.installSupported && (
-          <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10.5px', color: '#71717a' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10.5px', color: 'var(--text-muted)' }}>
             <Rocket size={11} />
             {status.installNote || 'NetPilot will restart to finish the update.'}
           </span>
@@ -262,7 +262,7 @@ export const UpdatePanel: React.FC = () => {
             borderRadius: '7px',
             background: 'rgba(244, 63, 94, 0.12)',
             border: '1px solid rgba(244, 63, 94, 0.35)',
-            color: '#fb7185',
+            color: 'var(--text-danger)',
             fontSize: '11.5px',
             display: 'flex',
             alignItems: 'flex-start',
@@ -282,7 +282,7 @@ export const UpdatePanel: React.FC = () => {
             borderRadius: '7px',
             background: 'rgba(244, 63, 94, 0.12)',
             border: '1px solid rgba(244, 63, 94, 0.35)',
-            color: '#fb7185',
+            color: 'var(--text-danger)',
             fontSize: '11.5px',
             display: 'flex',
             alignItems: 'flex-start',
@@ -300,51 +300,51 @@ export const UpdatePanel: React.FC = () => {
             marginTop: '12px',
             padding: '11px 13px',
             borderRadius: '7px',
-            background: '#09090b',
+            background: 'var(--bg-primary)',
             border: '1px solid rgba(56, 189, 248, 0.28)',
             fontSize: '11.5px',
             lineHeight: 1.65,
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
-            <ArrowUpCircle size={15} color="#38bdf8" />
-            <span style={{ fontWeight: 700, color: '#fafafa' }}>
+            <ArrowUpCircle size={15} color="var(--text-info)" />
+            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
               NetPilot {status.latest} is available
             </span>
             {status.prerelease && <span className="status-pill warn">PRERELEASE</span>}
-            <span style={{ color: '#71717a' }}>
+            <span style={{ color: 'var(--text-muted)' }}>
               you have {status.current}
               {fmtDate(status.publishedAt) ? ` · published ${fmtDate(status.publishedAt)}` : ''}
             </span>
           </div>
 
           {status.releaseName && status.releaseName !== status.latest && (
-            <div style={{ color: '#a1a1aa', marginTop: '3px' }}>{status.releaseName}</div>
+            <div style={{ color: 'var(--text-secondary)', marginTop: '3px' }}>{status.releaseName}</div>
           )}
 
           {status.assetName && (
-            <div style={{ color: '#8b8b93', marginTop: '4px' }}>
+            <div style={{ color: 'var(--text-muted)', marginTop: '4px' }}>
               Package: <span className="font-mono">{status.assetName}</span>
               {status.assetSize ? ` · ${fmtBytes(status.assetSize)}` : ''}
               {status.checksumVerified ? (
-                <span style={{ color: '#34d399' }}> · SHA-256 verified</span>
+                <span style={{ color: 'var(--text-success)' }}> · SHA-256 verified</span>
               ) : null}
             </div>
           )}
 
           {(downloading || status.state === 'installing' || status.state === 'restarting') && (
             <div style={{ marginTop: '9px' }}>
-              <div style={{ height: '6px', borderRadius: '999px', background: '#27272a', overflow: 'hidden' }}>
+              <div style={{ height: '6px', borderRadius: '999px', background: 'var(--border-control)', overflow: 'hidden' }}>
                 <div
                   style={{
                     height: '100%',
                     width: `${Math.round(progress * 100)}%`,
-                    background: 'linear-gradient(90deg, #38bdf8, #10b981)',
+                    background: 'linear-gradient(90deg, var(--text-info), var(--accent-primary))',
                     transition: 'width 250ms ease',
                   }}
                 />
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px', fontSize: '10.5px', color: '#8b8b93' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px', fontSize: '10.5px', color: 'var(--text-muted)' }}>
                 <span>{status.message || 'Downloading…'}</span>
                 <span className="font-mono">
                   {downloading
@@ -356,14 +356,14 @@ export const UpdatePanel: React.FC = () => {
           )}
 
           {!downloading && status.state !== 'installing' && status.state !== 'restarting' && status.installNote && (
-            <div style={{ marginTop: '5px', color: '#fbbf24' }}>{status.installNote}</div>
+            <div style={{ marginTop: '5px', color: 'var(--text-warning)' }}>{status.installNote}</div>
           )}
 
           <a
             href={status.releasesUrl}
             target="_blank"
             rel="noreferrer"
-            style={{ display: 'inline-block', marginTop: '6px', color: '#38bdf8' }}
+            style={{ display: 'inline-block', marginTop: '6px', color: 'var(--text-info)' }}
           >
             Release notes
           </a>
@@ -371,7 +371,7 @@ export const UpdatePanel: React.FC = () => {
       )}
 
       {upToDate && (
-        <div style={{ marginTop: '12px', fontSize: '11.5px', color: '#34d399', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div style={{ marginTop: '12px', fontSize: '11.5px', color: 'var(--text-success)', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <CheckCircle2 size={14} />
           <span>
             {status.message || `NetPilot ${status.current} is the newest ${channelLabel(activeChannel)} release.`}
@@ -380,13 +380,13 @@ export const UpdatePanel: React.FC = () => {
       )}
 
       {status?.state === 'ready' && (
-        <div style={{ marginTop: '12px', fontSize: '11.5px', color: '#facc15', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div style={{ marginTop: '12px', fontSize: '11.5px', color: 'var(--text-warning)', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <Rocket size={14} />
           <span>{status.message || 'Update staged. Restart NetPilot to finish installing.'}</span>
         </div>
       )}
 
-      <div style={{ marginTop: '10px', fontSize: '10px', color: '#71717a', lineHeight: 1.55 }}>
+      <div style={{ marginTop: '10px', fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.55 }}>
         {status?.checkedAt
           ? `Last checked ${new Date(status.checkedAt).toLocaleString()}.`
           : 'Not checked yet.'}{' '}

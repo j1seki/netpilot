@@ -65,7 +65,7 @@ export function AdapterQuota({ status }: { status: NetMergeStatus | null }) {
         </div>
       ) : <p className="view-subtitle">Connect an eligible adapter to set a quota.</p>}
       {feedback && <p role="status">{feedback}</p>}
-      {error && <p role="alert" style={{ color: '#fb7185' }}>{error}</p>}
+      {error && <p role="alert" style={{ color: 'var(--text-danger)' }}>{error}</p>}
     </div>
   );
 }

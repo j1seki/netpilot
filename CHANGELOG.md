@@ -3,6 +3,12 @@
 What changed in each release. Each version's section becomes its GitHub release notes, so add the
 entry here before pushing a version tag.
 
+## [0.4.5-beta.2] - 2026-11-24
+
+- Simple view brings routing controls, animated traffic charts, and application rules together. Add a rule from a running app or enter its name or executable path.
+- Advanced view opens the full workspace. NetPilot remembers your view preference.
+- Both views follow the system’s light or dark appearance and respect reduced motion.
+
 ## [0.4.5-beta.1] - 2026-11-24
 
 - Linux’s elevated NetPilot helper enforces the desktop’s rules and reports live routing evidence in Inspect. If the desktop disappears, the helper restores system routing.

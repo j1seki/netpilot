@@ -59,7 +59,7 @@ function ProcessMetricCells({ process, grouped = false }: { process: ProcessMetr
   </>;
 }
 
-export const DashboardView: React.FC = () => {
+export const DashboardView = ({ active }: { active: boolean }) => {
   const [interfaces, setInterfaces] = useState<AdapterWithHistory[]>([]);
   const [nmStatus, setNmStatus] = useState<NetMergeStatus | null>(null);
   const [apps, setApps] = useState<ProcessInfo[]>([]);
@@ -151,10 +151,11 @@ export const DashboardView: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!active) return;
     loadData().catch((e) => console.error(e));
     const interval = setInterval(() => loadData().catch((e) => console.error(e)), 2000);
     return () => clearInterval(interval);
-  }, []);
+  }, [active]);
 
   const isMergeActive = nmStatus?.isRunning ?? false;
   const systemAppRules = nmStatus?.systemAppRules ?? false;
@@ -249,7 +250,7 @@ export const DashboardView: React.FC = () => {
           borderRadius: '8px',
           background: 'rgba(244, 63, 94, 0.14)',
           border: '1px solid rgba(244, 63, 94, 0.35)',
-          color: '#fb7185',
+          color: 'var(--text-danger)',
           fontSize: '12px',
           fontWeight: 600,
           display: 'flex',
@@ -257,7 +258,7 @@ export const DashboardView: React.FC = () => {
           alignItems: 'center',
         }}>
           <span>{errorMsg}</span>
-          <button onClick={() => setErrorMsg('')} style={{ background: 'transparent', border: 'none', color: '#fb7185', cursor: 'pointer' }}>
+          <button onClick={() => setErrorMsg('')} style={{ background: 'transparent', border: 'none', color: 'var(--text-danger)', cursor: 'pointer' }}>
             <X size={14} />
           </button>
         </div>
@@ -267,27 +268,27 @@ export const DashboardView: React.FC = () => {
       <div className="card netpilot-enter" style={{ marginBottom: 0, padding: '0', overflow: 'hidden' }}>
         <div className="adapter-card-heading" style={{
           padding: '13px 16px',
-          borderBottom: '1px solid #232329',
+          borderBottom: '1px solid var(--border-color)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <GitMerge size={15} color="#10b981" />
-            <span style={{ fontSize: '13px', fontWeight: 600, color: '#fafafa' }}>
+            <GitMerge size={15} color="var(--accent-primary)" />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
               Network Adapters ({interfaces.length})
             </span>
           </div>
 
-          <div className="adapter-card-controls" style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '11px', color: '#a1a1aa' }}>
+          <div className="adapter-card-controls" style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '11px', color: 'var(--text-secondary)' }}>
             <span>
               Default Route:{' '}
-              <strong style={{ color: isMergeActive ? '#10b981' : '#fafafa' }}>
+              <strong style={{ color: isMergeActive ? 'var(--accent-primary)' : 'var(--text-primary)' }}>
                 {isMergeActive ? 'net-merge' : `System Default${osDefaultAdapter ? ` (${osDefaultAdapter.name})` : ''}`}
               </strong>
             </span>
             <span>
-              Active Flows: <strong className="font-mono" style={{ color: '#fafafa' }}>{totalSlotsActive}</strong>
+              Active Flows: <strong className="font-mono" style={{ color: 'var(--text-primary)' }}>{totalSlotsActive}</strong>
             </span>
             <button
               type="button"
@@ -339,32 +340,32 @@ export const DashboardView: React.FC = () => {
               const txBarPct = Math.min(100, Math.max(tx > 0 ? 4 : 0, (tx / txCap) * 100));
 
               let roleLabel = 'Merged Pool';
-              let roleColor = '#38bdf8';
+              let roleColor = 'var(--text-info)';
               if (!isMergeActive) {
                 roleLabel = iface.isDefault ? 'OS Default' : 'Standby';
-                roleColor = iface.isDefault ? '#10b981' : '#71717a';
+                roleColor = iface.isDefault ? 'var(--accent-primary)' : 'var(--text-muted)';
               } else if (routingMode === 'backup') {
                 if (iface.name === nmStatus?.activeAdapter) {
                   roleLabel = iface.name === primaryAdapter ? 'Primary Active' : 'Failover Active';
-                  roleColor = '#10b981';
+                  roleColor = 'var(--accent-primary)';
                 } else if (iface.name === primaryAdapter) {
                   roleLabel = 'Primary Standby';
-                  roleColor = '#a1a1aa';
+                  roleColor = 'var(--text-secondary)';
                 } else if (iface.name === secondaryAdapter) {
                   roleLabel = 'Failover Standby';
-                  roleColor = '#f59e0b';
+                  roleColor = 'var(--accent-warning)';
                 } else {
                   roleLabel = 'Backup Pool';
-                  roleColor = '#a1a1aa';
+                  roleColor = 'var(--text-secondary)';
                 }
               } else {
                 // Speed mode has no primary/secondary: every healthy adapter is
                 // used at once. The OS default is still highlighted for context.
                 roleLabel = iface.isDefault ? 'Merged · OS Default' : 'Merged Pool';
-                roleColor = iface.isDefault ? '#38bdf8' : '#a1a1aa';
+                roleColor = iface.isDefault ? 'var(--text-info)' : 'var(--text-secondary)';
               }
 
-              const latencyColor = (ms: number) => ms <= 0 ? '#71717a' : ms < 50 ? '#34d399' : ms < 150 ? '#fbbf24' : '#fb7185';
+              const latencyColor = (ms: number) => ms <= 0 ? 'var(--text-muted)' : ms < 50 ? 'var(--text-success)' : ms < 150 ? 'var(--text-warning)' : 'var(--text-danger)';
               const latencyText = (ms: number) => {
                 if (!(ms > 0)) return '—';
                 if (ms < 1) return `${ms.toFixed(2)} ms`;
@@ -379,10 +380,10 @@ export const DashboardView: React.FC = () => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
                       <span className={`beszel-dot ${iface.isUp ? 'online' : 'down'}`} />
                       <div>
-                        <div style={{ fontWeight: 600, fontSize: '13px', color: '#fafafa', display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                        <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
                           <span>{iface.displayName || iface.name}</span>
                           {iface.label && iface.label !== iface.name && (
-                            <span className="font-mono" style={{ fontSize: '9.5px', color: '#71717a', fontWeight: 500 }}>
+                            <span className="font-mono" style={{ fontSize: '9.5px', color: 'var(--text-muted)', fontWeight: 500 }}>
                               ({iface.name})
                             </span>
                           )}
@@ -397,7 +398,7 @@ export const DashboardView: React.FC = () => {
                             </span>
                           )}
                         </div>
-                        <div style={{ fontSize: '10.5px', color: '#71717a' }}>
+                        <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
                           {iface.isUp ? 'Online' : 'Offline'}
                           {nmSlot ? ` · ${nmSlot.Active} flows` : ''}
                         </div>
@@ -407,14 +408,14 @@ export const DashboardView: React.FC = () => {
 
                   {/* LAN & WAN IPs (WAN hidden until the eye toggle is used) */}
                   <td className="font-mono" style={{ fontSize: '11px' }}>
-                    <div style={{ color: '#d4d4d8' }}>{iface.ip || 'Unassigned'}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: iface.wanIp ? '#10b981' : '#71717a', fontSize: '10.5px' }}>
+                    <div style={{ color: 'var(--text-strong)' }}>{iface.ip || 'Unassigned'}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: iface.wanIp ? 'var(--accent-primary)' : 'var(--text-muted)', fontSize: '10.5px' }}>
                       <Globe size={10} />
                       <span title={showWan ? (iface.wanIp || 'Local subnet') : 'WAN IP hidden — click Show WAN in the table header'}>
                         {showWan ? (iface.wanIp || 'Local subnet') : (iface.wanIp ? '••••••••' : 'Local subnet')}
                       </span>
-                      {showWan && iface.location && <span style={{ color: '#71717a' }}>({iface.location})</span>}
-                      {showWan && iface.isp && <span style={{ color: '#71717a' }}>· {iface.isp}</span>}
+                      {showWan && iface.location && <span style={{ color: 'var(--text-muted)' }}>({iface.location})</span>}
+                      {showWan && iface.isp && <span style={{ color: 'var(--text-muted)' }}>· {iface.isp}</span>}
                     </div>
                   </td>
 
@@ -435,7 +436,7 @@ export const DashboardView: React.FC = () => {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxWidth: '150px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
                         <span style={{ color: roleColor, fontWeight: 600 }}>{roleLabel}</span>
-                        <span className="font-mono" style={{ color: '#a1a1aa' }}>{weightPct}%</span>
+                        <span className="font-mono" style={{ color: 'var(--text-secondary)' }}>{weightPct}%</span>
                       </div>
                       <div className="beszel-meter">
                         <div
@@ -453,12 +454,12 @@ export const DashboardView: React.FC = () => {
                   <td>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxWidth: '170px' }}>
                       <div className="font-mono" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px' }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#38bdf8', fontWeight: 600 }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: 'var(--text-info)', fontWeight: 600 }}>
                           <ArrowDown size={11} />
                           {rxStr}
                         </span>
                         {iface.rxLimitMbps && iface.rxLimitMbps > 0 ? (
-                          <span style={{ color: '#71717a', fontSize: '10px' }}>cap {iface.rxLimitMbps}M</span>
+                          <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>cap {iface.rxLimitMbps}M</span>
                         ) : null}
                       </div>
                       <div className="beszel-meter">
@@ -466,7 +467,7 @@ export const DashboardView: React.FC = () => {
                           className="beszel-meter-fill"
                           style={{
                             width: `${rxBarPct}%`,
-                            backgroundColor: '#38bdf8',
+                            backgroundColor: 'var(--text-info)',
                           }}
                         />
                       </div>
@@ -477,12 +478,12 @@ export const DashboardView: React.FC = () => {
                   <td>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxWidth: '140px' }}>
                       <div className="font-mono" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px' }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#f59e0b', fontWeight: 600 }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: 'var(--accent-warning)', fontWeight: 600 }}>
                           <ArrowUp size={11} />
                           {txStr}
                         </span>
                         {(iface.txLimitMbps ?? 0) > 0 && (
-                          <span style={{ color: '#71717a', fontSize: '10px' }}>cap {iface.txLimitMbps}M</span>
+                          <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>cap {iface.txLimitMbps}M</span>
                         )}
                       </div>
                       <div className="beszel-meter">
@@ -490,7 +491,7 @@ export const DashboardView: React.FC = () => {
                           className="beszel-meter-fill"
                           style={{
                             width: `${txBarPct}%`,
-                            backgroundColor: '#f59e0b',
+                            backgroundColor: 'var(--accent-warning)',
                           }}
                         />
                       </div>
@@ -500,7 +501,7 @@ export const DashboardView: React.FC = () => {
                   {/* Sparkline */}
                   <td style={{ textAlign: 'right' }}>
                     <div style={{ display: 'inline-block' }}>
-                      <Sparkline data={iface.rxHistory} color="#10b981" width={86} height={22} />
+                      <Sparkline data={iface.rxHistory} color="var(--accent-primary)" width={86} height={22} />
                     </div>
                   </td>
                   <td><AdapterHideButton name={iface.name} hidden={section.group === 'hidden'} toggle={() => visibility.setHidden(iface.name, section.group !== 'hidden')} /></td>
@@ -519,7 +520,7 @@ export const DashboardView: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-              <Edit3 size={14} color="#10b981" />
+              <Edit3 size={14} color="var(--accent-primary)" />
               <span>Application Routing Policies ({rules.length})</span>
             </div>
 
@@ -532,7 +533,7 @@ export const DashboardView: React.FC = () => {
             </button>
           </div>
 
-          <p style={{ fontSize: '11.5px', color: '#a1a1aa', marginBottom: '12px' }}>
+          <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
             {systemAppRules
               ? 'Default adapter is net-merge. Applications below can be pinned to specific adapters, failover pairs, or bandwidth caps.'
               : isMergeActive
@@ -540,19 +541,19 @@ export const DashboardView: React.FC = () => {
                 : 'All applications use System Default in Standby. Start Net-Merge or the local SOCKS5 proxy to route traffic through NetPilot.'}
           </p>
 
-          {ruleError && <p role="alert" style={{ color: '#fb7185' }}>{ruleError}</p>}
+          {ruleError && <p role="alert" style={{ color: 'var(--text-danger)' }}>{ruleError}</p>}
           {rules.length === 0 ? (
             <div style={{
               padding: '26px 16px',
               textAlign: 'center',
-              background: '#09090b',
-              border: '1px dashed #27272a',
+              background: 'var(--bg-primary)',
+              border: '1px dashed var(--border-control)',
               borderRadius: '7px',
-              color: '#71717a',
+              color: 'var(--text-muted)',
               fontSize: '12px',
             }}>
               No custom application policies configured. Default traffic routes via{' '}
-              <strong style={{ color: isMergeActive ? '#10b981' : '#fafafa' }}>
+              <strong style={{ color: isMergeActive ? 'var(--accent-primary)' : 'var(--text-primary)' }}>
                 {isMergeActive ? 'net-merge' : 'System Default'}
               </strong>.
             </div>
@@ -575,7 +576,7 @@ export const DashboardView: React.FC = () => {
                   return (
                     <tr key={rule.id}>
                       <td>
-                        <div style={{ fontWeight: 600, color: '#fafafa', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <div style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <span>{rule.appName}</span>
                           {isRunningNow && (
                             <span className="beszel-dot online" style={{ width: '6px', height: '6px' }} title="Running" />
@@ -590,15 +591,15 @@ export const DashboardView: React.FC = () => {
                           fontWeight: 600,
                           padding: '2px 7px',
                           borderRadius: '5px',
-                          background: isMergeActive ? 'rgba(16, 185, 129, 0.12)' : '#18181b',
-                          color: isMergeActive ? '#34d399' : '#a1a1aa',
-                          border: `1px solid ${isMergeActive ? 'rgba(16, 185, 129, 0.25)' : '#27272a'}`,
+                          background: isMergeActive ? 'rgba(16, 185, 129, 0.12)' : 'var(--bg-tertiary)',
+                          color: isMergeActive ? 'var(--text-success)' : 'var(--text-secondary)',
+                          border: `1px solid ${isMergeActive ? 'rgba(16, 185, 129, 0.25)' : 'var(--border-control)'}`,
                         }}>
                           {formatConfiguredRoute(rule)}
                         </span>
                       </td>
 
-                      <td className="font-mono" style={{ fontSize: '11px', color: '#a1a1aa' }}>
+                      <td className="font-mono" style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
                         {rule.bandwidthLimitMbps > 0 ? `${rule.bandwidthLimitMbps} Mbps` : 'Unlimited'}
                         {rule.customDns ? ` · ${rule.customDns}` : ''}
                       </td>
@@ -622,7 +623,7 @@ export const DashboardView: React.FC = () => {
                           style={{
                             background: 'transparent',
                             border: 'none',
-                            color: '#fb7185',
+                            color: 'var(--text-danger)',
                             cursor: 'pointer',
                             padding: '4px',
                           }}
@@ -721,7 +722,7 @@ export const DashboardView: React.FC = () => {
                               <div className="process-identity">
                                 <div className="process-name-text" title={app.name}>{app.name}</div>
                                 {(app.socketCount ?? 0) > 0 && (
-                                  <div style={{ fontSize: '10px', color: '#71717a' }}>
+                                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
                                     {app.socketCount} sockets
                                   </div>
                                 )}
@@ -732,15 +733,15 @@ export const DashboardView: React.FC = () => {
                           <ProcessMetricCells process={app} />
                           <td>
                             {!isMergeActive ? (
-                              <span style={{ fontSize: '11px', color: '#71717a' }}>
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                                 System Default
                               </span>
                             ) : systemAppRules && matchedRule ? (
-                              <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 600 }}>
+                              <span style={{ fontSize: '11px', color: 'var(--text-info)', fontWeight: 600 }}>
                                 {app.assignedNic === 'Blocked' ? 'Blocked' : formatRouteSummary(matchedRule)}
                               </span>
                             ) : (
-                              <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 500 }}>
+                              <span style={{ fontSize: '11px', color: 'var(--accent-primary)', fontWeight: 500 }}>
                                 net-merge
                               </span>
                             )}

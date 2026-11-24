@@ -134,7 +134,7 @@ export const Analytics: React.FC = () => {
   const appSegments = apps.slice(0, 5).map((app, idx) => ({
     label: app.name,
     value: Math.max(1, app.socketCount || 1),
-    color: idx === 0 ? '#38bdf8' : idx === 1 ? '#4ade80' : idx === 2 ? '#facc15' : idx === 3 ? '#c084fc' : '#f87171',
+    color: idx === 0 ? 'var(--text-info)' : idx === 1 ? 'var(--text-success)' : idx === 2 ? 'var(--text-warning)' : idx === 3 ? 'var(--text-purple)' : 'var(--text-danger)',
   }));
 
   const handleExportCsv = () => {
@@ -198,7 +198,7 @@ export const Analytics: React.FC = () => {
           borderRadius: '7px',
           background: 'rgba(244, 63, 94, 0.12)',
           border: '1px solid rgba(244, 63, 94, 0.3)',
-          color: '#fb7185',
+          color: 'var(--text-danger)',
           fontSize: '11.5px',
         }}>
           {errorMsg}
@@ -220,7 +220,7 @@ export const Analytics: React.FC = () => {
           <span className="metric-label">
             {isMergeRunning ? 'Merged Throughput (net-merge)' : 'OS Default Link Load'}
           </span>
-          <div className="metric-value" style={{ color: isMergeRunning ? '#10b981' : '#60a5fa' }}>
+          <div className="metric-value" style={{ color: isMergeRunning ? 'var(--accent-primary)' : 'var(--text-info-soft)' }}>
             {rate(primaryLoad)} <span style={{ fontSize: '11px' }}>{rateUnit}</span>
           </div>
           <span className="metric-sub">
@@ -234,7 +234,7 @@ export const Analytics: React.FC = () => {
 
         <div className="metric-box">
           <span className="metric-label">Busiest Adapter</span>
-          <div className="metric-value" style={{ color: '#38bdf8' }}>
+          <div className="metric-value" style={{ color: 'var(--text-info)' }}>
             {rate(busiestLoad)} <span style={{ fontSize: '11px' }}>{rateUnit}</span>
           </div>
           <span className="metric-sub">
@@ -246,7 +246,7 @@ export const Analytics: React.FC = () => {
 
         <div className="metric-box">
           <span className="metric-label">Recorded Volume ({periodMeta.label})</span>
-          <div className="metric-value" style={{ color: '#facc15' }}>
+          <div className="metric-value" style={{ color: 'var(--text-warning)' }}>
             {volume(usage.totalMb)} <span style={{ fontSize: '11px' }}>{volumeUnit}</span>
           </div>
           <span className="metric-sub">
@@ -279,7 +279,7 @@ export const Analytics: React.FC = () => {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', gap: '12px', flexWrap: 'wrap' }}>
           <div>
             <div style={{ fontSize: '13.5px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Calendar size={15} color="#60a5fa" />
+              <Calendar size={15} color="var(--text-info-soft)" />
               Usage History
             </div>
             <p style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
@@ -328,7 +328,7 @@ export const Analytics: React.FC = () => {
               className="btn btn-secondary btn-sm"
               onClick={() => handleResetUsage('all')}
               disabled={resetBusy}
-              style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', padding: '5px 10px', color: '#fb7185' }}
+              style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', padding: '5px 10px', color: 'var(--text-danger)' }}
               title="Delete all recorded usage counters and history"
             >
               <Trash2 size={12} />
@@ -344,27 +344,27 @@ export const Analytics: React.FC = () => {
           gap: '8px',
           marginBottom: '10px',
         }}>
-          <div style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '4px' }}>
+          <div style={{ backgroundColor: 'var(--bg-inset)', padding: '6px 10px', borderRadius: '4px' }}>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Download (Rx)</div>
-            <div className="font-mono" style={{ fontSize: '15px', fontWeight: 700, color: '#38bdf8' }}>
+            <div className="font-mono" style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-info)' }}>
               {volume(usage.totalRxMb)} <span style={{ fontSize: '10px' }}>{volumeUnit}</span>
             </div>
           </div>
-          <div style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '4px' }}>
+          <div style={{ backgroundColor: 'var(--bg-inset)', padding: '6px 10px', borderRadius: '4px' }}>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Upload (Tx)</div>
-            <div className="font-mono" style={{ fontSize: '15px', fontWeight: 700, color: '#4ade80' }}>
+            <div className="font-mono" style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-success)' }}>
               {volume(usage.totalTxMb)} <span style={{ fontSize: '10px' }}>{volumeUnit}</span>
             </div>
           </div>
-          <div style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '4px' }}>
+          <div style={{ backgroundColor: 'var(--bg-inset)', padding: '6px 10px', borderRadius: '4px' }}>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Total volume</div>
-            <div className="font-mono" style={{ fontSize: '15px', fontWeight: 700, color: '#facc15' }}>
+            <div className="font-mono" style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-warning)' }}>
               {volume(usage.totalMb)} <span style={{ fontSize: '10px' }}>{volumeUnit}</span>
             </div>
           </div>
-          <div style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '4px' }}>
+          <div style={{ backgroundColor: 'var(--bg-inset)', padding: '6px 10px', borderRadius: '4px' }}>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Rows / Format</div>
-            <div style={{ fontSize: '11.5px', fontWeight: 600, color: '#60a5fa', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <div style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text-info-soft)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <FileSpreadsheet size={12} /> {usage.records.length} · CSV
             </div>
           </div>
@@ -393,17 +393,17 @@ export const Analytics: React.FC = () => {
             ) : (
               usage.records.map((rec, idx) => (
                 <tr key={`${rec.period}-${rec.interfaceName}-${rec.appName}-${idx}`}>
-                  <td className="font-mono" style={{ fontWeight: 600, color: '#93c5fd' }}>{rec.period}</td>
+                  <td className="font-mono" style={{ fontWeight: 600, color: 'var(--text-info-soft)' }}>{rec.period}</td>
                   <td>
-                    <span style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', padding: '1px 6px', borderRadius: '3px', fontSize: '11px' }}>
+                    <span style={{ background: 'rgba(59, 130, 246, 0.15)', color: 'var(--text-info-soft)', padding: '1px 6px', borderRadius: '3px', fontSize: '11px' }}>
                       {rec.interfaceName}
                     </span>
                   </td>
                   <td style={{ fontWeight: 600 }}>{rec.appName || 'All Process Traffic'}</td>
-                  <td className="font-mono" style={{ color: '#38bdf8' }}>
+                  <td className="font-mono" style={{ color: 'var(--text-info)' }}>
                     <ArrowDown size={10} /> {volume(rec.rxMb)} {volumeUnit}
                   </td>
-                  <td className="font-mono" style={{ color: '#4ade80' }}>
+                  <td className="font-mono" style={{ color: 'var(--text-success)' }}>
                     <ArrowUp size={10} /> {volume(rec.txMb)} {volumeUnit}
                   </td>
                   <td className="font-mono" style={{ fontWeight: 700 }}>

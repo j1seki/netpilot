@@ -174,10 +174,10 @@ export const TestDebug: React.FC = () => {
 
   // Build chart segments for test report
   const chartSegments = unifiedReport ? [
-    { label: 'Passed', value: unifiedReport.passed, color: '#10b981' },
-    { label: 'Skipped', value: unifiedReport.skipped, color: '#f59e0b' },
-    { label: 'Blocked', value: unifiedReport.blocked, color: '#8b5cf6' },
-    { label: 'Failed', value: unifiedReport.failed, color: '#ef4444' },
+    { label: 'Passed', value: unifiedReport.passed, color: 'var(--accent-primary)' },
+    { label: 'Skipped', value: unifiedReport.skipped, color: 'var(--accent-warning)' },
+    { label: 'Blocked', value: unifiedReport.blocked, color: 'var(--text-purple)' },
+    { label: 'Failed', value: unifiedReport.failed, color: 'var(--accent-danger)' },
   ].filter(s => s.value > 0) : [];
 
   return (
@@ -189,7 +189,7 @@ export const TestDebug: React.FC = () => {
           borderRadius: '7px',
           background: 'rgba(244, 63, 94, 0.12)',
           border: '1px solid rgba(244, 63, 94, 0.3)',
-          color: '#fb7185',
+          color: 'var(--text-danger)',
           fontSize: '11.5px',
         }}>
           {errorMsg}
@@ -301,26 +301,26 @@ export const TestDebug: React.FC = () => {
 
               <div className="card" style={{ marginBottom: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))', gap: '8px', padding: '12px' }}>
                 <div style={{ background: 'rgba(16, 185, 129, 0.1)', padding: '8px 10px', borderRadius: '4px' }}>
-                  <div style={{ fontSize: '10.5px', color: '#6ee7b7' }}>Passed</div>
-                  <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: '#34d399' }}>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-success)' }}>Passed</div>
+                  <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text-success)' }}>
                     {unifiedReport.passed}
                   </div>
                 </div>
                 <div style={{ background: 'rgba(245, 158, 11, 0.1)', padding: '8px 10px', borderRadius: '4px' }}>
-                  <div style={{ fontSize: '10.5px', color: '#fde68a' }}>Skipped</div>
-                  <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: '#fbbf24' }}>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-warning)' }}>Skipped</div>
+                  <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text-warning)' }}>
                     {unifiedReport.skipped}
                   </div>
                 </div>
                 <div style={{ background: 'rgba(139, 92, 246, 0.1)', padding: '8px 10px', borderRadius: '4px' }}>
-                  <div style={{ fontSize: '10.5px', color: '#c4b5fd' }}>Blocked</div>
-                  <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: '#a78bfa' }}>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-purple)' }}>Blocked</div>
+                  <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text-purple)' }}>
                     {unifiedReport.blocked}
                   </div>
                 </div>
                 <div style={{ background: 'rgba(239, 68, 68, 0.1)', padding: '8px 10px', borderRadius: '4px' }}>
-                  <div style={{ fontSize: '10.5px', color: '#fca5a5' }}>Failed</div>
-                  <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: '#f87171' }}>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-danger)' }}>Failed</div>
+                  <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text-danger)' }}>
                     {unifiedReport.failed}
                   </div>
                 </div>
@@ -334,7 +334,7 @@ export const TestDebug: React.FC = () => {
             <div className="card" style={{ marginBottom: 0 }}>
               <div className="card-title">
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Server size={14} color="#60a5fa" /> Platform Unit & Integration Suites
+                  <Server size={14} color="var(--text-info-soft)" /> Platform Unit & Integration Suites
                 </span>
                 <span className="font-mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                   {unifiedReport.suites.reduce((sum, s) => sum + s.total, 0)} test cases
@@ -362,11 +362,11 @@ export const TestDebug: React.FC = () => {
                       </td>
                       <td>
                         {c.affectsConnection ? (
-                          <span style={{ fontSize: '10px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '2px 6px', borderRadius: '3px', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title={c.disruptionWarning}>
+                          <span style={{ fontSize: '10px', background: 'rgba(245, 158, 11, 0.15)', color: 'var(--text-warning)', padding: '2px 6px', borderRadius: '3px', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title={c.disruptionWarning}>
                             <AlertTriangle size={10} /> Disruptive
                           </span>
                         ) : (
-                          <span style={{ fontSize: '10px', background: 'rgba(16, 185, 129, 0.12)', color: '#34d399', padding: '2px 6px', borderRadius: '3px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <span style={{ fontSize: '10px', background: 'rgba(16, 185, 129, 0.12)', color: 'var(--text-success)', padding: '2px 6px', borderRadius: '3px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                             <ShieldCheck size={10} /> Safe
                           </span>
                         )}
@@ -398,7 +398,7 @@ export const TestDebug: React.FC = () => {
           <div className="card" style={{ marginBottom: 0 }}>
             <div className="card-title">
               <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Zap size={14} color="#facc15" /> Deterministic Scenarios
+                <Zap size={14} color="var(--text-warning)" /> Deterministic Scenarios
               </span>
               <span className="font-mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                 {scenarios.length} scenarios
@@ -437,13 +437,13 @@ export const TestDebug: React.FC = () => {
                     <td>
                       {sc.affectsConnection ? (
                         <span
-                          style={{ fontSize: '10px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '2px 6px', borderRadius: '3px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                          style={{ fontSize: '10px', background: 'rgba(245, 158, 11, 0.15)', color: 'var(--text-warning)', padding: '2px 6px', borderRadius: '3px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                           title={sc.disruptionWarning}
                         >
                           <AlertTriangle size={10} /> Disrupts Link
                         </span>
                       ) : (
-                        <span style={{ fontSize: '10px', background: 'rgba(16, 185, 129, 0.12)', color: '#34d399', padding: '2px 6px', borderRadius: '3px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontSize: '10px', background: 'rgba(16, 185, 129, 0.12)', color: 'var(--text-success)', padding: '2px 6px', borderRadius: '3px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                           <ShieldCheck size={10} /> Safe
                         </span>
                       )}
@@ -481,7 +481,7 @@ export const TestDebug: React.FC = () => {
             <div className="card" style={{ marginBottom: 0 }}>
               <div className="card-title">
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Monitor size={15} color="#38bdf8" /> Windows Suite
+                  <Monitor size={15} color="var(--text-info)" /> Windows Suite
                 </span>
                 <span className={`status-pill ${isWin ? 'pass' : 'skipped'}`} style={{ fontSize: '10px' }}>
                   {isWin ? 'Native Live' : `Blocked in ${hostLabel}`}
@@ -499,7 +499,7 @@ export const TestDebug: React.FC = () => {
             <div className="card" style={{ marginBottom: 0 }}>
               <div className="card-title">
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Server size={15} color="#4ade80" /> Linux Suite
+                  <Server size={15} color="var(--text-success)" /> Linux Suite
                 </span>
                 <span className={`status-pill ${isLinux ? 'pass' : 'skipped'}`} style={{ fontSize: '10px' }}>
                   {isLinux ? 'Native Live' : `Blocked in ${hostLabel}`}
@@ -517,7 +517,7 @@ export const TestDebug: React.FC = () => {
             <div className="card" style={{ marginBottom: 0 }}>
               <div className="card-title">
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Cpu size={15} color="#c084fc" /> macOS Suite
+                  <Cpu size={15} color="var(--text-purple)" /> macOS Suite
                 </span>
                 <span className={`status-pill ${isMac ? 'pass' : 'skipped'}`} style={{ fontSize: '10px' }}>
                   {isMac ? 'Native Live' : `Blocked in ${hostLabel}`}
@@ -602,11 +602,11 @@ export const TestDebug: React.FC = () => {
                   <td>{sc.category}</td>
                   <td>
                     {sc.affectsConnection ? (
-                      <span style={{ fontSize: '10px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '2px 5px', borderRadius: '3px' }}>
+                      <span style={{ fontSize: '10px', background: 'rgba(245, 158, 11, 0.15)', color: 'var(--text-warning)', padding: '2px 5px', borderRadius: '3px' }}>
                         ⚠️ Disrupts Link
                       </span>
                     ) : (
-                      <span style={{ fontSize: '10px', background: 'rgba(16, 185, 129, 0.12)', color: '#34d399', padding: '2px 5px', borderRadius: '3px' }}>
+                      <span style={{ fontSize: '10px', background: 'rgba(16, 185, 129, 0.12)', color: 'var(--text-success)', padding: '2px 5px', borderRadius: '3px' }}>
                         🛡️ Safe
                       </span>
                     )}
@@ -671,12 +671,12 @@ export const TestDebug: React.FC = () => {
                 placeholder="Filter logs..."
                 value={logSearch}
                 onChange={e => setLogSearch(e.target.value)}
-                style={{ padding: '5px 10px', fontSize: '11.5px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '4px', color: 'white' }}
+                style={{ padding: '5px 10px', fontSize: '11.5px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-primary)' }}
               />
               <select
                 value={logLevel}
                 onChange={e => setLogLevel(e.target.value)}
-                style={{ padding: '5px 10px', fontSize: '11.5px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '4px', color: 'white' }}
+                style={{ padding: '5px 10px', fontSize: '11.5px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-primary)' }}
               >
                 <option value="">All Levels</option>
                 <option value="INFO">INFO</option>
@@ -688,13 +688,13 @@ export const TestDebug: React.FC = () => {
               {isLogPaused ? 'Resume Stream' : 'Pause Stream'}
             </button>
           </div>
-          <div style={{ maxHeight: '380px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)', borderRadius: '4px', padding: '8px', fontFamily: 'monospace', fontSize: '11px' }}>
+          <div style={{ maxHeight: '380px', overflowY: 'auto', background: 'var(--bg-inset)', borderRadius: '4px', padding: '8px', fontFamily: 'monospace', fontSize: '11px' }}>
             {logs.map((l, idx) => (
               <div key={idx} style={{ padding: '2px 0', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
                 <span style={{ color: 'var(--text-muted)' }}>{l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : ''} </span>
-                <span style={{ color: l.level === 'ERROR' ? '#f87171' : l.level === 'WARN' ? '#fbbf24' : '#38bdf8', fontWeight: 600 }}>[{l.level}] </span>
-                <span style={{ color: '#c084fc' }}>[{l.component}] </span>
-                <span style={{ color: '#e2e8f0' }}>{l.message}</span>
+                <span style={{ color: l.level === 'ERROR' ? 'var(--text-danger)' : l.level === 'WARN' ? 'var(--text-warning)' : 'var(--text-info)', fontWeight: 600 }}>[{l.level}] </span>
+                <span style={{ color: 'var(--text-purple)' }}>[{l.component}] </span>
+                <span style={{ color: 'var(--text-primary)' }}>{l.message}</span>
               </div>
             ))}
           </div>
@@ -716,7 +716,7 @@ export const TestDebug: React.FC = () => {
               Regenerate
             </button>
           </div>
-          <pre style={{ maxHeight: '380px', overflowY: 'auto', background: 'rgba(0,0,0,0.35)', padding: '10px', borderRadius: '4px', fontSize: '11px', color: '#93c5fd' }}>
+          <pre style={{ maxHeight: '380px', overflowY: 'auto', background: 'var(--bg-inset)', padding: '10px', borderRadius: '4px', fontSize: '11px', color: 'var(--text-info-soft)' }}>
             {diagJson || 'Generating bundle...'}
           </pre>
         </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, InterfaceInfo, NetMergeStatus, NetMergeConfig } from '../api/wails';
 import { AdapterQuota } from '../components/AdapterQuota';
 import {
@@ -14,7 +14,7 @@ import {
   ArrowUp,
 } from 'lucide-react';
 
-export const NetMergeView: React.FC = () => {
+export const NetMergeView = ({ active }: { active: boolean }) => {
   const [status, setStatus] = useState<NetMergeStatus | null>(null);
   const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
   const [configDraft, setConfigDraft] = useState<Partial<Pick<NetMergeConfig, 'ipv6Mode' | 'mtu' | 'autoWeight'>>>({});
@@ -40,21 +40,23 @@ export const NetMergeView: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!active) return;
     loadStatus();
     const interval = setInterval(loadStatus, 2000);
     return () => clearInterval(interval);
-  }, []);
+  }, [active]);
 
   // The OS default route is the honest default for Backup mode. It also lets the
   // UI explain why a VPN adapter should not be treated as a physical primary.
   useEffect(() => {
+    if (!active) return;
     const loadIfaces = () => {
       api.getInterfaces().then(setInterfaces).catch(() => {});
     };
     loadIfaces();
     const interval = setInterval(loadIfaces, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [active]);
 
   const showToast = (msg: string) => {
     setFeedback(msg);
@@ -214,7 +216,7 @@ export const NetMergeView: React.FC = () => {
             borderRadius: '8px',
             background: 'rgba(244, 63, 94, 0.14)',
             border: '1px solid rgba(244, 63, 94, 0.35)',
-            color: '#fb7185',
+            color: 'var(--text-danger)',
             fontSize: '12px',
             fontWeight: 600,
           }}
@@ -229,7 +231,7 @@ export const NetMergeView: React.FC = () => {
             borderRadius: '8px',
             background: 'rgba(16, 185, 129, 0.14)',
             border: '1px solid rgba(16, 185, 129, 0.35)',
-            color: '#34d399',
+            color: 'var(--text-success)',
             fontSize: '12px',
             fontWeight: 600,
           }}
@@ -243,8 +245,8 @@ export const NetMergeView: React.FC = () => {
         className="card"
         style={{
           marginBottom: 0,
-          background: '#121215',
-          border: `1px solid ${isRunning ? 'rgba(16, 185, 129, 0.35)' : '#232329'}`,
+          background: 'var(--bg-card)',
+          border: `1px solid ${isRunning ? 'rgba(16, 185, 129, 0.35)' : 'var(--border-color)'}`,
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
@@ -259,29 +261,29 @@ export const NetMergeView: React.FC = () => {
               width: '44px',
               height: '44px',
               borderRadius: '9px',
-              background: isRunning ? 'rgba(16, 185, 129, 0.15)' : '#18181b',
-              border: `1px solid ${isRunning ? 'rgba(16, 185, 129, 0.4)' : '#27272a'}`,
+              background: isRunning ? 'rgba(16, 185, 129, 0.15)' : 'var(--bg-tertiary)',
+              border: `1px solid ${isRunning ? 'rgba(16, 185, 129, 0.4)' : 'var(--border-control)'}`,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
             }}
           >
             {isRunning ? (
-              <CheckCircle2 size={22} color="#10b981" />
+              <CheckCircle2 size={22} color="var(--accent-primary)" />
             ) : (
-              <PauseCircle size={22} color="#a1a1aa" />
+              <PauseCircle size={22} color="var(--text-secondary)" />
             )}
           </div>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '15px', fontWeight: 700, color: '#fafafa' }}>
+              <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>
                 Net-Merge Virtual Adapter
               </span>
               <span className={`status-pill ${isRunning ? 'pass' : 'blocked'}`}>
                 {isRunning ? 'ACTIVE · net-merge' : 'STANDBY · System Default'}
               </span>
             </div>
-            <div style={{ fontSize: '11.5px', color: '#a1a1aa', marginTop: '3px' }}>
+            <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '3px' }}>
               {isRunning
                 ? `Mode: ${status?.mode || 'system-wide'} · Default Adapter: ${status?.defaultAdapter || 'net-merge'} · IPv6: ${status?.v6State || 'auto'} · Uptime: ${status?.uptimeSec || 0}s`
                 : 'Inactive: Default adapter is System Default. NetPilot does nothing to system routes while Net-Merge is off.'}
@@ -325,15 +327,15 @@ export const NetMergeView: React.FC = () => {
           className="card"
           style={{
             marginBottom: 0,
-            border: `1px solid ${routingMode !== 'backup' ? '#38bdf8' : '#232329'}`,
-            background: routingMode !== 'backup' ? 'rgba(56, 189, 248, 0.05)' : '#121215',
+            border: `1px solid ${routingMode !== 'backup' ? 'var(--text-info)' : 'var(--border-color)'}`,
+            background: routingMode !== 'backup' ? 'rgba(56, 189, 248, 0.05)' : 'var(--bg-card)',
             transition: 'all 0.14s ease',
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Zap size={16} color="#38bdf8" />
-              <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#fafafa' }}>
+              <Zap size={16} color="var(--text-info)" />
+              <span style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--text-primary)' }}>
                 Speed Mode (Multi-Link Aggregation)
               </span>
             </div>
@@ -341,10 +343,10 @@ export const NetMergeView: React.FC = () => {
               {routingMode !== 'backup' ? 'Selected' : 'Use Speed'}
             </button>
           </div>
-          <p style={{ fontSize: '11.5px', color: '#a1a1aa', lineHeight: 1.5 }}>
+          <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
             Default behavior of <strong>net-merge</strong>: utilizes all healthy network adapters simultaneously using weighted least-busy-flows scheduling for maximum combined download and upload speed.
           </p>
-          <p style={{ fontSize: '10.5px', color: '#38bdf8', marginTop: '8px', lineHeight: 1.5 }}>
+          <p style={{ fontSize: '10.5px', color: 'var(--text-info)', marginTop: '8px', lineHeight: 1.5 }}>
             Speed Mode has no Primary or Secondary adapter — the merged <strong>net-merge</strong> adapter is the
             default route and every healthy link is used at once.
           </p>
@@ -355,15 +357,15 @@ export const NetMergeView: React.FC = () => {
           className="card"
           style={{
             marginBottom: 0,
-            border: `1px solid ${routingMode === 'backup' ? '#f59e0b' : '#232329'}`,
-            background: routingMode === 'backup' ? 'rgba(245, 158, 11, 0.05)' : '#121215',
+            border: `1px solid ${routingMode === 'backup' ? 'var(--accent-warning)' : 'var(--border-color)'}`,
+            background: routingMode === 'backup' ? 'rgba(245, 158, 11, 0.05)' : 'var(--bg-card)',
             transition: 'all 0.14s ease',
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <ShieldAlert size={16} color="#f59e0b" />
-              <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#fafafa' }}>
+              <ShieldAlert size={16} color="var(--accent-warning)" />
+              <span style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--text-primary)' }}>
                 Backup Mode (Primary → Failover Only)
               </span>
             </div>
@@ -371,17 +373,17 @@ export const NetMergeView: React.FC = () => {
               {routingMode === 'backup' ? 'Selected' : canUseBackup ? 'Use Backup' : 'Requires NetPilot engine'}
             </button>
           </div>
-          <p style={{ fontSize: '11.5px', color: '#a1a1aa', lineHeight: 1.5, marginBottom: '10px' }}>
+          <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '10px' }}>
             Uses the <strong>Primary Adapter</strong> for new flows while it is healthy. New flows fail over to the <strong>Secondary Adapter</strong> when needed. App rules can select their own adapters.
           </p>
 
           {routingMode === 'backup' ? (
             <div
               onClick={e => e.stopPropagation()}
-              style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', paddingTop: '6px', borderTop: '1px solid #232329' }}
+              style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', paddingTop: '6px', borderTop: '1px solid var(--border-color)' }}
             >
               <div>
-                <label style={{ fontSize: '10.5px', color: '#a1a1aa', display: 'block', marginBottom: '3px' }}>
+                <label style={{ fontSize: '10.5px', color: 'var(--text-secondary)', display: 'block', marginBottom: '3px' }}>
                   Primary Adapter {osDefaultName ? `(OS default: ${osDefaultName})` : ''}
                 </label>
                 <select
@@ -402,7 +404,7 @@ export const NetMergeView: React.FC = () => {
                 </select>
               </div>
               <div>
-                <label style={{ fontSize: '10.5px', color: '#a1a1aa', display: 'block', marginBottom: '3px' }}>
+                <label style={{ fontSize: '10.5px', color: 'var(--text-secondary)', display: 'block', marginBottom: '3px' }}>
                   Secondary / Backup Adapter
                 </label>
                 <select
@@ -422,14 +424,14 @@ export const NetMergeView: React.FC = () => {
                   })}
                 </select>
               </div>
-              <div style={{ gridColumn: '1 / -1', fontSize: '10px', color: '#71717a' }}>
+              <div style={{ gridColumn: '1 / -1', fontSize: '10px', color: 'var(--text-muted)' }}>
                 Automatic uses an eligible healthy link. Manual choices apply in Backup mode.
               </div>
             </div>
           ) : (
             <div
               onClick={e => e.stopPropagation()}
-              style={{ paddingTop: '8px', borderTop: '1px solid #232329', fontSize: '10.5px', color: '#71717a' }}
+              style={{ paddingTop: '8px', borderTop: '1px solid var(--border-color)', fontSize: '10.5px', color: 'var(--text-muted)' }}
             >
               Primary/Secondary selectors appear when Backup mode is selected. In Speed mode the merged adapter is the primary link.
             </div>
@@ -441,7 +443,7 @@ export const NetMergeView: React.FC = () => {
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-title">
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Sliders size={14} color="#10b981" />
+            <Sliders size={14} color="var(--accent-primary)" />
             <span>Net-Merge Scheduler Slots & Per-Adapter Speed Caps</span>
           </div>
           <button className="btn btn-secondary btn-sm" onClick={loadStatus}>
@@ -490,21 +492,21 @@ export const NetMergeView: React.FC = () => {
                     <td className="font-mono" style={{ fontSize: '11.5px' }}>
                       {slot.Active || 0} / {slot.Total || 0}
                       {slot.Failed > 0 && (
-                        <span style={{ color: '#fb7185', marginLeft: '6px' }}>
+                        <span style={{ color: 'var(--text-danger)', marginLeft: '6px' }}>
                           ({slot.Failed} err)
                         </span>
                       )}
                     </td>
                     <td className="font-mono" style={{ fontSize: '11.5px' }}>
-                      <div style={{ color: '#10b981', fontWeight: 600 }}>
+                      <div style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>
                         via net-merge: {viaMbps.toFixed(1)} Mbps
                       </div>
-                      <div style={{ fontSize: '10.5px', color: '#a1a1aa', display: 'flex', gap: '8px' }}>
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)', display: 'flex', gap: '8px' }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
-                          <ArrowDown size={10} color="#38bdf8" /> {linkDownMbps.toFixed(1)}M
+                          <ArrowDown size={10} color="var(--text-info)" /> {linkDownMbps.toFixed(1)}M
                         </span>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
-                          <ArrowUp size={10} color="#f59e0b" /> {linkUpMbps.toFixed(1)}M
+                          <ArrowUp size={10} color="var(--accent-warning)" /> {linkUpMbps.toFixed(1)}M
                         </span>
                       </div>
                     </td>
@@ -533,7 +535,7 @@ export const NetMergeView: React.FC = () => {
             </tbody>
           </table>
         ) : (
-          <div style={{ padding: '18px', color: '#a1a1aa', fontSize: '12px', textAlign: 'center' }}>
+          <div style={{ padding: '18px', color: 'var(--text-secondary)', fontSize: '12px', textAlign: 'center' }}>
             Discovering hardware network interfaces...
           </div>
         )}
@@ -547,7 +549,7 @@ export const NetMergeView: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Server size={14} color="#38bdf8" />
+              <Server size={14} color="var(--text-info)" />
               <span>SOCKS5 Multi-Link Proxy (No Admin Required)</span>
             </div>
             <span className={`status-pill ${status?.socksRunning ? 'pass' : 'blocked'}`}>
@@ -555,7 +557,7 @@ export const NetMergeView: React.FC = () => {
             </span>
           </div>
 
-          <p style={{ fontSize: '11.5px', color: '#a1a1aa', marginBottom: '12px' }}>
+          <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
             Run a local SOCKS5 proxy that balances or fails over connections across adapters without modifying the system-wide routing table.
           </p>
 
@@ -583,7 +585,7 @@ export const NetMergeView: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Sliders size={14} color="#f59e0b" />
+              <Sliders size={14} color="var(--accent-warning)" />
               <span>TUN & Scheduler Parameters</span>
             </div>
             <button className="btn btn-danger btn-sm" onClick={handleCleanup} disabled={loading}>
@@ -596,7 +598,7 @@ export const NetMergeView: React.FC = () => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <div className="grid-2" style={{ gap: '8px' }}>
                 <div>
-                  <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '3px' }}>
+                  <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '3px' }}>
                     IPv6 Balancing Policy
                   </label>
                   <select
@@ -611,7 +613,7 @@ export const NetMergeView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label style={{ fontSize: '11px', color: '#a1a1aa', display: 'block', marginBottom: '3px' }}>
+                  <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '3px' }}>
                     Virtual Adapter MTU
                   </label>
                   <input
@@ -627,7 +629,7 @@ export const NetMergeView: React.FC = () => {
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '4px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', cursor: 'pointer', color: '#d4d4d8' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', cursor: 'pointer', color: 'var(--text-strong)' }}>
                   <input
                     type="checkbox"
                     checked={config.autoWeight}

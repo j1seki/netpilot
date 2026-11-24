@@ -1,0 +1,83 @@
+:root {
+  color-scheme: dark;
+
+  --simple-page: #101514;
+  --simple-panel: #161e1c;
+  --simple-border: #2a3732;
+  --simple-hero: #18231e;
+  --simple-hero-border: #354b41;
+  --simple-hero-glow: #264035;
+  --simple-icon-surface: #24372f;
+  --simple-icon-hover: #304a3e;
+  --simple-accent: #b0ecc3;
+  --simple-action: #bceda6;
+  --simple-action-hover: #d1f5c1;
+  --simple-action-ink: #182b21;
+  --simple-download: #66d7cd;
+  --simple-upload: #d3b5ef;
+  --simple-grid: #2a3934;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg-primary: #f1f4f7;
+    --bg-secondary: #f5f7fa;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f4f7fa;
+    --bg-elevated: #e7edf3;
+    --bg-tertiary: #edf2f7;
+    --bg-header: #fafbfd;
+    --bg-inset: #f6f8fb;
+    --bg-row: #eef3f8;
+    --border: #d6dfe8;
+    --border-color: #d6dfe8;
+    --border-subtle: #e1e7ee;
+    --border-control: #c9d4df;
+    --border-highlight: #a9b9c8;
+    --text-primary: #172632;
+    --text-secondary: #455768;
+    --text-muted: #586b7c;
+    --text-strong: #2c4357;
+    --text-info: #0a648e;
+    --text-info-soft: #205e8f;
+    --text-success: #116948;
+    --text-warning: #815107;
+    --text-danger: #a12848;
+    --text-purple: #6a3b99;
+    --accent-primary: #0e7754;
+    --accent-ink: #ffffff;
+    --accent-secondary: #0878a5;
+    --accent-success: #0e7754;
+    --accent-warning: #93600a;
+    --accent-danger: #b32d51;
+    --accent-purple: #7439a9;
+    --surface-info: #e4f1f7;
+    --surface-success: #e1f4e9;
+    --surface-warning: #fff2d8;
+    --surface-danger: #fbe9ef;
+    --border-success: #8cc5a6;
+    --border-warning: #d8b879;
+    --border-danger: #db9eb0;
+    --surface-selected: #e2eff8;
+    --border-selected: #abc9df;
+    --text-selected: #17496a;
+    --chart-grid: rgba(34, 70, 96, .13);
+
+    --simple-page: #eef3ef;
+    --simple-panel: #fbfdfb;
+    --simple-border: #d6e2db;
+    --simple-hero: #e7f1e8;
+    --simple-hero-border: #bfdbca;
+    --simple-hero-glow: #d4eadd;
+    --simple-icon-surface: #e0eee3;
+    --simple-icon-hover: #d2e8d9;
+    --simple-accent: #235e43;
+    --simple-action: #25674e;
+    --simple-action-hover: #194e3a;
+    --simple-action-ink: #ffffff;
+    --simple-download: #087c77;
+    --simple-upload: #744c96;
+    --simple-grid: #d7e5de;
+  }
+}

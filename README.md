@@ -20,6 +20,7 @@ Use Wi-Fi, Ethernet, and phone tethering together, or keep a backup link ready w
 
 ![NetPilot desktop app: live dashboard, process icons, tethering, and TTL preview](docs/netpilot-demo.gif)
 
+- **Simple** shows routing controls, live connection charts, and app rules. Switch to **Advanced** for the full workspace. NetPilot remembers your view and follows your system’s light or dark appearance.
 - **Systems** shows adapter traffic, active processes, and app routing rules. **Metrics** lets you choose units for usage and transfer rates.
 - **Speed** distributes connections across healthy adapters. **Backup** switches to a secondary link when the primary fails.
 - **Mobile** groups Wi-Fi hotspot and USB tether settings with connection profiles, link tests, and **TTL & Hop Limit**. Load a profile to compare it with current settings, edit the draft, then apply or restore previous values.

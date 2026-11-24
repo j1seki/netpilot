@@ -84,7 +84,7 @@ export const TTLView: React.FC = () => {
 
   if (loading && !report) {
     return (
-      <div style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>
+      <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)' }}>
         Probing platform TTL and Hop Limit status...
       </div>
     );
@@ -106,14 +106,14 @@ export const TTLView: React.FC = () => {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <h2 style={{ fontSize: '15px', fontWeight: 700, color: 'white' }}>
+              <h2 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>
                 Packet TTL &amp; Hop Limit Manager
               </h2>
               {report && <span className={`status-pill ${report.capabilities.supported ? 'pass' : 'warn'}`}>
                 {report.capabilities.platform.toUpperCase()} · {report.capabilities.supported ? 'CONFIGURABLE' : 'INSPECT ONLY'}
               </span>}
             </div>
-            <p style={{ fontSize: '11.5px', color: '#94a3b8', marginTop: '2px' }}>
+            <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '2px' }}>
               Controls outbound IPv4 Time-To-Live and IPv6 Hop Limit packet headers. Features automatic original capture, read-back verification, and single-click safe rollback.
             </p>
           </div>
@@ -153,7 +153,7 @@ export const TTLView: React.FC = () => {
           gap: '8px',
           background: report.elevated ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)',
           border: `1px solid ${report.elevated ? 'rgba(16, 185, 129, 0.28)' : 'rgba(245, 158, 11, 0.3)'}`,
-          color: report.elevated ? '#34d399' : '#fbbf24',
+          color: report.elevated ? 'var(--text-success)' : 'var(--text-warning)',
         }}>
           <ShieldCheck size={14} style={{ marginTop: '1px', flexShrink: 0 }} />
           <span>
@@ -171,14 +171,14 @@ export const TTLView: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Sliders size={14} color="#38bdf8" /> Configure Packet Headers
+              <Sliders size={14} color="var(--text-info)" /> Configure Packet Headers
             </span>
-            <span style={{ fontSize: '10.5px', color: '#64748b' }}>Range: 1 – 255</span>
+            <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>Range: 1 – 255</span>
           </div>
 
           {/* Quick Presets */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '11px', color: '#94a3b8', marginRight: '4px' }}>Presets:</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginRight: '4px' }}>Presets:</span>
             <button
               onClick={() => { setIpv4Val(64); setIpv6Val(64); }}
               style={{
@@ -186,8 +186,8 @@ export const TTLView: React.FC = () => {
                 padding: '3px 8px',
                 borderRadius: '4px',
                 background: ipv4Val === 64 ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                border: `1px solid ${ipv4Val === 64 ? '#38bdf8' : 'rgba(255, 255, 255, 0.1)'}`,
-                color: ipv4Val === 64 ? '#38bdf8' : '#cbd5e1',
+                border: `1px solid ${ipv4Val === 64 ? 'var(--text-info)' : 'rgba(255, 255, 255, 0.1)'}`,
+                color: ipv4Val === 64 ? 'var(--text-info)' : 'var(--text-strong)',
                 cursor: 'pointer',
               }}
             >
@@ -201,8 +201,8 @@ export const TTLView: React.FC = () => {
                 padding: '3px 8px',
                 borderRadius: '4px',
                 background: ipv4Val === 128 ? 'rgba(250, 204, 21, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                border: `1px solid ${ipv4Val === 128 ? '#facc15' : 'rgba(255, 255, 255, 0.1)'}`,
-                color: ipv4Val === 128 ? '#facc15' : '#cbd5e1',
+                border: `1px solid ${ipv4Val === 128 ? 'var(--text-warning)' : 'rgba(255, 255, 255, 0.1)'}`,
+                color: ipv4Val === 128 ? 'var(--text-warning)' : 'var(--text-strong)',
                 cursor: 'pointer',
               }}
             >
@@ -226,7 +226,7 @@ export const TTLView: React.FC = () => {
 
           {/* Scope Selector */}
           <div style={{ marginTop: '12px' }}>
-            <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '3px' }}>
+            <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '3px' }}>
               Target Scope &amp; Interface Policy
             </label>
             <select
@@ -259,7 +259,7 @@ export const TTLView: React.FC = () => {
           </div>
 
           {errorMsg && (
-            <div style={{ marginTop: '10px', padding: '6px 10px', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', fontSize: '11px' }}>
+            <div style={{ marginTop: '10px', padding: '6px 10px', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.15)', color: 'var(--text-danger)', fontSize: '11px' }}>
               {errorMsg}
             </div>
           )}
@@ -270,7 +270,7 @@ export const TTLView: React.FC = () => {
               padding: '7px 10px',
               borderRadius: '4px',
               background: outcome.dryRun ? 'rgba(56, 189, 248, 0.13)' : (outcome.failed ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)'),
-              color: outcome.dryRun ? '#7dd3fc' : (outcome.failed ? '#f87171' : '#34d399'),
+              color: outcome.dryRun ? 'var(--text-info-soft)' : (outcome.failed ? 'var(--text-danger)' : 'var(--text-success)'),
               fontSize: '11px',
             }}>
               <div style={{ fontWeight: 600 }}>
@@ -324,20 +324,20 @@ export const TTLView: React.FC = () => {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-title">
             <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <ShieldCheck size={14} color="#10b981" /> Safety Architecture
+              <ShieldCheck size={14} color="var(--accent-primary)" /> Safety Architecture
             </span>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11.5px', color: '#cbd5e1' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11.5px', color: 'var(--text-strong)' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
-              <span style={{ color: '#10b981' }}>✓</span>
+              <span style={{ color: 'var(--accent-primary)' }}>✓</span>
               <span><strong>Captured Originals:</strong> Before first write, initial values are backed up to disk so restore never relies on hardcoded guesses.</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
-              <span style={{ color: '#10b981' }}>✓</span>
+              <span style={{ color: 'var(--accent-primary)' }}>✓</span>
               <span><strong>Read-Back Verification:</strong> Re-reads the setting immediately after applying to confirm it took effect.</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
-              <span style={{ color: '#10b981' }}>✓</span>
+              <span style={{ color: 'var(--accent-primary)' }}>✓</span>
               <span><strong>Rollback:</strong> If a write fails, NetPilot tries to restore the settings already changed.</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
@@ -351,9 +351,9 @@ export const TTLView: React.FC = () => {
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-title">
           <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Zap size={14} color="#38bdf8" /> Inspected Kernel Settings ({report?.settings.length || 0})
+            <Zap size={14} color="var(--text-info)" /> Inspected Kernel Settings ({report?.settings.length || 0})
           </span>
-          <span style={{ fontSize: '10.5px', color: '#64748b' }}>
+          <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
             Live Platform Source: {report?.capabilities.platform}
           </span>
         </div>
@@ -376,17 +376,17 @@ export const TTLView: React.FC = () => {
                   {s.name || s.id}
                 </td>
                 <td>
-                  <span className="font-mono" style={{ fontSize: '10.5px', color: '#38bdf8' }}>
+                  <span className="font-mono" style={{ fontSize: '10.5px', color: 'var(--text-info)' }}>
                     {s.family.toUpperCase()}
                   </span>
                 </td>
-                <td style={{ color: '#94a3b8', fontSize: '11px' }}>
+                <td style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>
                   {s.scope}
                 </td>
-                <td className="font-mono" style={{ fontSize: '12px', fontWeight: 700, color: s.value ? '#22d3ee' : '#64748b' }}>
+                <td className="font-mono" style={{ fontSize: '12px', fontWeight: 700, color: s.value ? 'var(--text-info)' : 'var(--text-muted)' }}>
                   {s.value ?? 'Unset'}
                 </td>
-                <td className="font-mono" style={{ fontSize: '10.5px', color: '#64748b' }}>
+                <td className="font-mono" style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
                   {s.valueOrigin || 'default'}
                 </td>
                 <td>
