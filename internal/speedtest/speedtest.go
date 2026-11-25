@@ -166,6 +166,13 @@ func run(parent context.Context, name string, dial dialFunc, opts Options) Resul
 	}
 	res.DownMbps = mbps(downloaded.Load(), downElapsed)
 
+	// Use a separate connection pool for uploads. A stale download connection
+	// can fail as a POST starts, and the transport cannot safely replay its body.
+	transport.CloseIdleConnections()
+	uploadTransport := transport.Clone()
+	defer uploadTransport.CloseIdleConnections()
+	uploadClient := &http.Client{Transport: uploadTransport}
+
 	upCtx, upCancel := context.WithTimeout(parent, opts.Duration)
 	defer upCancel()
 	var up sum
@@ -175,7 +182,7 @@ func run(parent context.Context, name string, dial dialFunc, opts Options) Resul
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			up.n.Add(uploadStream(upCtx, client, opts.UpURL, &upBudget))
+			up.n.Add(uploadStream(upCtx, uploadClient, opts.UpURL, &upBudget))
 		}()
 	}
 	wg.Wait()
@@ -183,6 +190,10 @@ func run(parent context.Context, name string, dial dialFunc, opts Options) Resul
 
 	if res.IdleMs <= 0 || res.LoadedMs <= 0 {
 		res.Error = "No bufferbloat grade: idle or loaded latency was not measured"
+		return res
+	}
+	if res.UpMbps <= 0 {
+		res.Error = "Upload throughput was not measured"
 		return res
 	}
 	res.BufferbloatMs = res.LoadedMs - res.IdleMs

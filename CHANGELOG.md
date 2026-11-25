@@ -3,6 +3,12 @@
 What changed in each release. Each version's section becomes its GitHub release notes, so add the
 entry here before pushing a version tag.
 
+## [0.4.5-beta.3] - 2026-11-25
+
+- Simple and Advanced share the same styling and routing controls in both system themes.
+- Simple has a live download and upload line chart, compact rate tiles, and progress feedback when Net-Merge starts or stops. Panel and chart animations follow the system’s reduced-motion setting.
+- Speed tests start the upload phase on a fresh connection and flag missing upload measurements.
+
 ## [0.4.5-beta.2] - 2026-11-24
 
 - Simple view brings routing controls, animated traffic charts, and application rules together. Add a rule from a running app or enter its name or executable path.

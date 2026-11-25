@@ -80,6 +80,23 @@ func TestUnreachableAdapterGetsNoBufferbloatGrade(t *testing.T) {
 	}
 }
 
+func TestMissingUploadIsReported(t *testing.T) {
+	srv := benchmarkServer(t)
+	upload := benchmarkServer(t)
+	upload.Close()
+	res := RunAdapter(context.Background(), Adapter{Name: "test"}, Options{
+		Duration: time.Second,
+		Streams:  1,
+		DownURL:  srv.URL + "/down",
+		UpURL:    upload.URL + "/up",
+		PingURL:  srv.URL + "/down",
+		MaxBytes: 1 << 20,
+	})
+	if res.DownMbps <= 0 || res.UpMbps != 0 || res.Grade != "" || res.Error != "Upload throughput was not measured" {
+		t.Fatalf("unexpected result with an unreachable upload endpoint: %+v", res)
+	}
+}
+
 func TestConcurrentDownloadStreamsShareByteBudget(t *testing.T) {
 	const budgetBytes = int64(64 << 10)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
