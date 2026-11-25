@@ -166,8 +166,8 @@ export const App: React.FC = () => {
 
   const viewSwitch = (
     <div className="view-switch" role="group" aria-label="Workspace view">
-      <button type="button" aria-pressed={view === 'simple'} onClick={() => changeView('simple')}>Simple</button>
-      <button type="button" aria-pressed={view === 'advanced'} onClick={() => changeView('advanced')}>Advanced</button>
+      <button type="button" className="app-nav-link" aria-pressed={view === 'simple'} onClick={() => changeView('simple')}>Simple</button>
+      <button type="button" className="app-nav-link" aria-pressed={view === 'advanced'} onClick={() => changeView('advanced')}>Advanced</button>
     </div>
   );
 
@@ -194,14 +194,7 @@ export const App: React.FC = () => {
   return (
     <div className="app-shell">
       <NotificationBanner />
-      {view === 'simple' && <header className="simple-header">
-        <div className="simple-header-brand">
-          <span className="simple-brand-mark" aria-hidden="true"><GitMerge size={20} /></span>
-          <span>{branding?.name || 'NetPilot'}</span>
-        </div>
-        {viewSwitch}
-      </header>}
-      {view === 'advanced' && <header className="app-header" style={{
+      <header className="app-header" style={{
         backgroundColor: 'var(--bg-header)',
         borderBottom: '1px solid var(--border-color)',
         display: 'flex',
@@ -302,7 +295,7 @@ export const App: React.FC = () => {
         </div>
 
         {/* Navigation */}
-        <nav className="app-nav" aria-label="Main navigation">
+        {view === 'advanced' && <nav className="app-nav" aria-label="Main navigation">
           {navItems.map(item => {
             const active = currentTab === item.id;
             return (
@@ -318,9 +311,9 @@ export const App: React.FC = () => {
               </button>
             );
           })}
-        </nav>
+        </nav>}
         {viewSwitch}
-      </header>}
+      </header>
 
       {view === 'simple' && <SimpleView
         interfaces={interfaces}
@@ -331,11 +324,7 @@ export const App: React.FC = () => {
         refreshStatus={refreshStatus}
         openAdvanced={openAdvanced}
       />}
-      {advancedMounted && <main className="app-content" hidden={view !== 'advanced'} style={{
-        flex: 1,
-        overflowY: 'auto',
-        backgroundColor: 'var(--bg-primary)',
-      }}>
+      {advancedMounted && <main className="app-content" hidden={view !== 'advanced'}>
         <div style={{ display: currentTab === 'dashboard' ? 'block' : 'none' }}>
           <DashboardView active={view === 'advanced' && currentTab === 'dashboard'} />
         </div>

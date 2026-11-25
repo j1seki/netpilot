@@ -1,15 +1,13 @@
 import { useEffect, useState } from 'react';
 import { api, InterfaceInfo, NetMergeStatus, NetMergeConfig } from '../api/wails';
 import { AdapterQuota } from '../components/AdapterQuota';
+import { NetMergeControl } from '../components/NetMergeControl';
 import {
-  Power,
   RefreshCw,
   ShieldAlert,
   Sliders,
   Server,
   Zap,
-  CheckCircle2,
-  PauseCircle,
   ArrowDown,
   ArrowUp,
 } from 'lucide-react';
@@ -240,77 +238,18 @@ export const NetMergeView = ({ active }: { active: boolean }) => {
         </div>
       )}
 
-      {/* Top Master Banner */}
-      <div
-        className="card"
-        style={{
-          marginBottom: 0,
-          background: 'var(--bg-card)',
-          border: `1px solid ${isRunning ? 'rgba(16, 185, 129, 0.35)' : 'var(--border-color)'}`,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '16px 20px',
-          flexWrap: 'wrap',
-          gap: '14px',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '9px',
-              background: isRunning ? 'rgba(16, 185, 129, 0.15)' : 'var(--bg-tertiary)',
-              border: `1px solid ${isRunning ? 'rgba(16, 185, 129, 0.4)' : 'var(--border-control)'}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            {isRunning ? (
-              <CheckCircle2 size={22} color="var(--accent-primary)" />
-            ) : (
-              <PauseCircle size={22} color="var(--text-secondary)" />
-            )}
-          </div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                Net-Merge Virtual Adapter
-              </span>
-              <span className={`status-pill ${isRunning ? 'pass' : 'blocked'}`}>
-                {isRunning ? 'ACTIVE · net-merge' : 'STANDBY · System Default'}
-              </span>
-            </div>
-            <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '3px' }}>
-              {isRunning
-                ? `Mode: ${status?.mode || 'system-wide'} · Default Adapter: ${status?.defaultAdapter || 'net-merge'} · IPv6: ${status?.v6State || 'auto'} · Uptime: ${status?.uptimeSec || 0}s`
-                : 'Inactive: Default adapter is System Default. NetPilot does nothing to system routes while Net-Merge is off.'}
-            </div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button
-            className="btn btn-secondary"
-            onClick={handleToggleAutostart}
-            disabled={loading}
-            title={status?.autostart ? 'Disable start at sign-in' : 'Enable start at sign-in'}
-          >
-            <span>Autostart: {status?.autostart ? 'ON' : 'OFF'}</span>
-          </button>
-
-          <button
-            className={`btn ${isRunning ? 'btn-danger' : 'btn-emerald'}`}
-            onClick={handleToggleSystemWide}
-            disabled={loading}
-          >
-            <Power size={14} />
-            <span>{loading ? (isRunning ? 'Stopping...' : 'Starting...') : (isRunning ? 'Stop Net-Merge' : 'Start Net-Merge')}</span>
-          </button>
-        </div>
-      </div>
+      <NetMergeControl
+        running={isRunning}
+        busy={loading}
+        onToggle={handleToggleSystemWide}
+        summary={isRunning
+          ? `Mode: ${status?.mode || 'system-wide'} · Default Adapter: ${status?.defaultAdapter || 'net-merge'} · IPv6: ${status?.v6State || 'auto'} · Uptime: ${status?.uptimeSec || 0}s`
+          : 'Inactive: Default adapter is System Default. NetPilot does nothing to system routes while Net-Merge is off.'}
+        actions={<button type="button" className="btn btn-secondary" onClick={handleToggleAutostart} disabled={loading}
+          title={status?.autostart ? 'Disable start at sign-in' : 'Enable start at sign-in'}>
+          Autostart: {status?.autostart ? 'ON' : 'OFF'}
+        </button>}
+      />
 
       {status && <div className="card" style={{ marginBottom: 0 }}>
         <strong>{isRunning ? `Running mode · ${status.routingMode === 'backup' ? 'Backup' : 'Speed'}` : 'System tunnel is in standby'}</strong>
